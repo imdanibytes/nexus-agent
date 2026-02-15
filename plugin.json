@@ -1,0 +1,62 @@
+{
+  "id": "com.nexus.agent",
+  "name": "Nexus Agent",
+  "version": "0.1.0",
+  "description": "AI chat with tool calling, elicitations, and rich UI surfaces",
+  "author": "imdanibytes",
+  "license": "MIT",
+  "homepage": "https://github.com/imdanibytes/nexus-agent",
+  "image": "nexus-plugin-agent:latest",
+  "ui": {
+    "port": 80,
+    "path": "/"
+  },
+  "permissions": [
+    "system:info",
+    "mcp:call"
+  ],
+  "health": {
+    "endpoint": "/health",
+    "interval_secs": 30
+  },
+  "mcp": null,
+  "env": {},
+  "min_nexus_version": "0.6.2",
+  "settings": [
+    {
+      "key": "llm_endpoint",
+      "type": "string",
+      "label": "LLM Endpoint",
+      "default": "http://host.docker.internal:11434",
+      "description": "Anthropic-compatible API URL (Ollama, vLLM, Anthropic, etc.)"
+    },
+    {
+      "key": "llm_api_key",
+      "type": "string",
+      "label": "API Key",
+      "default": "",
+      "description": "API key (leave empty for Ollama)"
+    },
+    {
+      "key": "llm_model",
+      "type": "string",
+      "label": "Model",
+      "default": "qwen3:32b",
+      "description": "Model name"
+    },
+    {
+      "key": "system_prompt",
+      "type": "string",
+      "label": "System Prompt",
+      "default": "You are a helpful assistant with access to tools from the Nexus platform.",
+      "description": "System prompt sent to the LLM"
+    },
+    {
+      "key": "max_tool_rounds",
+      "type": "number",
+      "label": "Max Tool Rounds",
+      "default": 10,
+      "description": "Maximum number of tool call rounds per turn"
+    }
+  ]
+}

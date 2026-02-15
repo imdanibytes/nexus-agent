@@ -1,0 +1,12 @@
+{
+  "name": "nexus-agent",
+  "private": true,
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev:server": "pnpm --filter server dev",
+    "dev:ui": "pnpm --filter ui dev"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  }
+}

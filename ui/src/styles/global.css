@@ -1,0 +1,96 @@
+@import "tailwindcss";
+
+@theme {
+  --color-nx-bg: var(--nx-bg, #0a0a0a);
+  --color-nx-text: var(--nx-text, #e4e4e7);
+  --color-nx-surface: var(--nx-surface, #18181b);
+  --color-nx-raised: var(--nx-raised, #27272a);
+  --color-nx-accent: var(--nx-accent, #8b5cf6);
+  --color-nx-border: var(--nx-border, #3f3f46);
+  --color-nx-muted: var(--nx-muted, #71717a);
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--color-nx-bg);
+  color: var(--color-nx-text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  overflow: hidden;
+  height: 100vh;
+}
+
+#root {
+  height: 100vh;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-nx-border);
+  border-radius: 3px;
+}
+
+/* Markdown content styles */
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3 {
+  margin-top: 1em;
+  margin-bottom: 0.5em;
+  font-weight: 600;
+}
+.markdown-content h1 { font-size: 1.5em; }
+.markdown-content h2 { font-size: 1.25em; }
+.markdown-content h3 { font-size: 1.1em; }
+.markdown-content p { margin: 0.5em 0; }
+.markdown-content ul, .markdown-content ol {
+  margin: 0.5em 0;
+  padding-left: 1.5em;
+}
+.markdown-content li { margin: 0.25em 0; }
+.markdown-content code {
+  background: var(--color-nx-raised);
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+.markdown-content pre {
+  background: var(--color-nx-raised);
+  padding: 1em;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin: 0.5em 0;
+}
+.markdown-content pre code {
+  background: none;
+  padding: 0;
+}
+.markdown-content a {
+  color: var(--color-nx-accent);
+  text-decoration: underline;
+}
+.markdown-content blockquote {
+  border-left: 3px solid var(--color-nx-border);
+  padding-left: 1em;
+  margin: 0.5em 0;
+  color: var(--color-nx-muted);
+}
+.markdown-content table {
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  width: 100%;
+}
+.markdown-content th, .markdown-content td {
+  border: 1px solid var(--color-nx-border);
+  padding: 0.4em 0.8em;
+  text-align: left;
+}
+.markdown-content th {
+  background: var(--color-nx-raised);
+  font-weight: 600;
+}
