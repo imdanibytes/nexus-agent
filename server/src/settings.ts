@@ -6,7 +6,7 @@ const NEXUS_HOST_URL = process.env.NEXUS_HOST_URL || "http://host.docker.interna
 const DEFAULTS: AgentSettings = {
   llm_endpoint: "http://host.docker.internal:11434",
   llm_api_key: "",
-  llm_model: "qwen3:32b",
+  llm_model: "qwen3:30b",
   system_prompt: "You are a helpful assistant with access to tools from the Nexus platform.",
   max_tool_rounds: 10,
 };

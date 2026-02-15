@@ -33,6 +33,7 @@ export async function runAgentTurn(
   sse: SseWriter
 ): Promise<void> {
   const settings = await getSettings();
+  console.log(`[agent] endpoint=${settings.llm_endpoint} model=${settings.llm_model}`);
 
   // Load or create conversation
   let conv = getConversation(conversationId);
@@ -80,6 +81,7 @@ export async function runAgentTurn(
     sse.writeEvent("turn_start", { round });
 
     try {
+      console.log(`[agent] round=${round} calling LLM...`);
       const stream = client.messages.stream({
         model: settings.llm_model,
         max_tokens: 8192,

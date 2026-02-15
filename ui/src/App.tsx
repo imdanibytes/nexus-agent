@@ -1,12 +1,10 @@
 import { PanelLeftOpen } from "lucide-react";
 import { Sidebar } from "./components/Sidebar.js";
 import { ChatArea } from "./components/ChatArea.js";
-import { EmptyState } from "./components/EmptyState.js";
 import { useChatStore } from "./stores/chatStore.js";
 
 export function App() {
-  const { activeId, sidebarOpen, messages, toggleSidebar } = useChatStore();
-  const hasContent = activeId !== null || messages.length > 0;
+  const { sidebarOpen, toggleSidebar } = useChatStore();
 
   return (
     <div className="flex h-full">
@@ -21,7 +19,7 @@ export function App() {
         </button>
       )}
 
-      {hasContent ? <ChatArea /> : <EmptyState />}
+      <ChatArea />
     </div>
   );
 }

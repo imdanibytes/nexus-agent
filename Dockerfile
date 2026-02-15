@@ -13,13 +13,14 @@ COPY tsconfig.base.json ./
 COPY server/ ./server/
 COPY ui/ ./ui/
 RUN pnpm -r build
+RUN pnpm --filter server deploy --legacy /app/deployed
 
 # Stage 3: Runtime
 FROM node:20-alpine
 WORKDIR /app
-COPY --from=build /app/server/dist/ ./dist/
-COPY --from=build /app/server/node_modules/ ./node_modules/
-COPY --from=build /app/server/package.json ./
+COPY --from=build /app/deployed/dist/ ./dist/
+COPY --from=build /app/deployed/node_modules/ ./node_modules/
+COPY --from=build /app/deployed/package.json ./
 COPY --from=build /app/ui/dist/ ./public/
 RUN mkdir -p /data/conversations
 EXPOSE 80

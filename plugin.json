@@ -13,7 +13,8 @@
   },
   "permissions": [
     "system:info",
-    "mcp:call"
+    "mcp:call",
+    "network:local"
   ],
   "health": {
     "endpoint": "/health",
@@ -41,7 +42,7 @@
       "key": "llm_model",
       "type": "string",
       "label": "Model",
-      "default": "qwen3:32b",
+      "default": "qwen3:30b",
       "description": "Model name"
     },
     {
