@@ -1,5 +1,7 @@
 import { useState, useRef, useCallback, type KeyboardEvent } from "react";
-import { Send } from "lucide-react";
+import { ArrowUp } from "lucide-react";
+import { ProfileSwitcher } from "./ProfileSwitcher.js";
+import { Button } from "@/components/ui/button";
 
 interface Props {
   onSend: (message: string) => void;
@@ -38,29 +40,41 @@ export function ChatInput({ onSend, disabled }: Props) {
     }
   }, []);
 
+  const canSend = value.trim().length > 0 && !disabled;
+
   return (
-    <div className="border-t border-nx-border bg-nx-surface p-4">
-      <div className="flex items-end gap-2 max-w-3xl mx-auto">
-        <textarea
-          ref={textareaRef}
-          value={value}
-          onChange={(e) => {
-            setValue(e.target.value);
-            handleInput();
-          }}
-          onKeyDown={handleKeyDown}
-          placeholder="Send a message..."
-          disabled={disabled}
-          rows={1}
-          className="flex-1 resize-none bg-nx-raised border border-nx-border rounded-xl px-4 py-2.5 text-sm text-nx-text placeholder:text-nx-muted focus:outline-none focus:border-nx-accent transition-colors disabled:opacity-50"
-        />
-        <button
-          onClick={handleSend}
-          disabled={disabled || !value.trim()}
-          className="flex-shrink-0 w-10 h-10 rounded-xl bg-nx-accent text-white flex items-center justify-center hover:bg-nx-accent/80 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-        >
-          <Send size={16} />
-        </button>
+    <div className="px-4 pb-4 pt-2">
+      <div className="max-w-3xl mx-auto">
+        <div className="flex items-end gap-2 rounded-2xl border border-border bg-card px-3 py-2 focus-within:border-primary/40 transition-colors">
+          <ProfileSwitcher />
+
+          <textarea
+            ref={textareaRef}
+            value={value}
+            onChange={(e) => {
+              setValue(e.target.value);
+              handleInput();
+            }}
+            onKeyDown={handleKeyDown}
+            placeholder="Send a message..."
+            disabled={disabled}
+            rows={1}
+            className="flex-1 min-w-0 resize-none bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none py-1.5 max-h-[200px]"
+          />
+
+          <Button
+            size="icon"
+            onClick={handleSend}
+            disabled={!canSend}
+            className="flex-shrink-0 h-8 w-8 rounded-lg"
+          >
+            <ArrowUp size={15} />
+          </Button>
+        </div>
+
+        <p className="text-[10px] text-muted-foreground/50 text-center mt-2">
+          Responses may be inaccurate. Verify important information.
+        </p>
       </div>
     </div>
   );

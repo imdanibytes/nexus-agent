@@ -1,25 +1,46 @@
-import { PanelLeftOpen } from "lucide-react";
+import { useRef, useState, useEffect } from "react";
 import { Sidebar } from "./components/Sidebar.js";
 import { ChatArea } from "./components/ChatArea.js";
+import { SettingsPanel } from "./components/SettingsPanel.js";
 import { useChatStore } from "./stores/chatStore.js";
 
+function useIsCompact(ref: React.RefObject<HTMLElement | null>, breakpoint = 640) {
+  const [compact, setCompact] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      setCompact(entry.contentRect.width < breakpoint);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref, breakpoint]);
+  return compact;
+}
+
 export function App() {
-  const { sidebarOpen, toggleSidebar } = useChatStore();
+  const { chatOpen, settingsOpen } = useChatStore();
+  const containerRef = useRef<HTMLDivElement>(null);
+  const compact = useIsCompact(containerRef);
+
+  if (compact) {
+    return (
+      <div ref={containerRef} className="flex h-full">
+        {settingsOpen ? (
+          <SettingsPanel compact />
+        ) : chatOpen ? (
+          <ChatArea compact />
+        ) : (
+          <Sidebar compact />
+        )}
+      </div>
+    );
+  }
 
   return (
-    <div className="flex h-full">
+    <div ref={containerRef} className="flex h-full">
       <Sidebar />
-
-      {!sidebarOpen && (
-        <button
-          onClick={toggleSidebar}
-          className="absolute top-3 left-3 z-10 p-1.5 rounded-lg hover:bg-nx-surface transition-colors text-nx-muted"
-        >
-          <PanelLeftOpen size={16} />
-        </button>
-      )}
-
-      <ChatArea />
+      {settingsOpen ? <SettingsPanel /> : <ChatArea />}
     </div>
   );
 }

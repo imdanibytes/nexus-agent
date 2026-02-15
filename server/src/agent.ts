@@ -7,6 +7,7 @@ import {
   getConversation,
   saveConversation,
 } from "./storage.js";
+import { getProfile, getActiveProfileId } from "./profiles.js";
 import type { Conversation, Message, SseWriter, ToolCallInfo, UiSurfaceInfo } from "./types.js";
 
 // Pending UI surface responses — keyed by tool_use_id
@@ -30,10 +31,22 @@ export function resolveUiResponse(
 export async function runAgentTurn(
   conversationId: string,
   userMessage: string,
-  sse: SseWriter
+  sse: SseWriter,
+  profileId?: string
 ): Promise<void> {
   const settings = await getSettings();
-  console.log(`[agent] endpoint=${settings.llm_endpoint} model=${settings.llm_model}`);
+
+  // Resolve effective profile: explicit > active > none
+  const effectiveProfileId = profileId || getActiveProfileId();
+  const profile = effectiveProfileId ? getProfile(effectiveProfileId) : null;
+
+  const effectiveModel = profile?.model || settings.llm_model;
+  const effectivePrompt = profile?.systemPrompt || settings.system_prompt;
+
+  console.log(
+    `[agent] endpoint=${settings.llm_endpoint} model=${effectiveModel}` +
+      (profile ? ` profile="${profile.name}"` : "")
+  );
 
   // Load or create conversation
   let conv = getConversation(conversationId);
@@ -78,14 +91,17 @@ export async function runAgentTurn(
 
   while (round < maxRounds) {
     round++;
-    sse.writeEvent("turn_start", { round });
+    sse.writeEvent("turn_start", {
+      round,
+      ...(profile ? { profileId: profile.id, profileName: profile.name } : {}),
+    });
 
     try {
       console.log(`[agent] round=${round} calling LLM...`);
       const stream = client.messages.stream({
-        model: settings.llm_model,
+        model: effectiveModel,
         max_tokens: 8192,
-        system: settings.system_prompt,
+        system: effectivePrompt,
         messages: apiMessages,
         tools: allTools.length > 0 ? allTools : undefined,
       });
@@ -244,6 +260,7 @@ export async function runAgentTurn(
     timestamp: Date.now(),
     toolCalls: assistantToolCalls.length > 0 ? assistantToolCalls : undefined,
     uiSurfaces: assistantUiSurfaces.length > 0 ? assistantUiSurfaces : undefined,
+    ...(profile ? { profileId: profile.id, profileName: profile.name } : {}),
   };
   conv.messages.push(assistantMsg);
   conv.updatedAt = Date.now();
@@ -252,7 +269,7 @@ export async function runAgentTurn(
   if (conv.messages.length === 2 && conv.title === "New conversation") {
     try {
       const titleConv = await client.messages.create({
-        model: settings.llm_model,
+        model: effectiveModel,
         max_tokens: 50,
         system: "Generate a brief title (3-6 words) for this conversation. Respond with just the title, no quotes or punctuation.",
         messages: [{ role: "user", content: userMessage }],

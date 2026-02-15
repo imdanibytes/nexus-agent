@@ -20,12 +20,13 @@ export interface SseEvent {
 
 export async function* streamChat(
   conversationId: string | null,
-  message: string
+  message: string,
+  profileId?: string | null
 ): AsyncGenerator<SseEvent> {
   const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ conversationId, message }),
+    body: JSON.stringify({ conversationId, message, profileId: profileId || undefined }),
   });
 
   if (!res.ok || !res.body) {
@@ -97,6 +98,38 @@ export interface Message {
   timestamp: number;
   toolCalls?: ToolCallInfo[];
   uiSurfaces?: UiSurfaceInfo[];
+  profileId?: string;
+  profileName?: string;
+}
+
+export interface AgentProfile {
+  id: string;
+  name: string;
+  model: string;
+  systemPrompt: string;
+  avatar?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ModelInfo {
+  id: string;
+  name: string;
+  provider: string;
+}
+
+export interface EndpointStatus {
+  reachable: boolean;
+  provider: string;
+  error?: string;
+  models: ModelInfo[];
+}
+
+export interface AgentSettingsPublic {
+  llm_endpoint: string;
+  llm_model: string;
+  system_prompt: string;
+  max_tool_rounds: number;
 }
 
 export interface ToolCallInfo {
@@ -140,5 +173,85 @@ export async function renameConversation(id: string, title: string): Promise<voi
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title }),
+  });
+}
+
+// --- Profiles ---
+
+export async function fetchProfiles(): Promise<AgentProfile[]> {
+  const res = await fetch("/api/profiles");
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function createProfile(data: {
+  name: string;
+  model: string;
+  systemPrompt: string;
+  avatar?: string;
+}): Promise<AgentProfile> {
+  const res = await fetch("/api/profiles", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+export async function updateProfile(
+  id: string,
+  data: Partial<Pick<AgentProfile, "name" | "model" | "systemPrompt" | "avatar">>
+): Promise<AgentProfile> {
+  const res = await fetch(`/api/profiles/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+export async function deleteProfile(id: string): Promise<void> {
+  await fetch(`/api/profiles/${id}`, { method: "DELETE" });
+}
+
+export async function getActiveProfile(): Promise<{ profileId: string | null }> {
+  const res = await fetch("/api/profiles/active");
+  return res.json();
+}
+
+export async function setActiveProfile(profileId: string | null): Promise<void> {
+  await fetch("/api/profiles/active", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ profileId }),
+  });
+}
+
+// --- Discovery ---
+
+export async function discoverModels(
+  endpoint?: string,
+  apiKey?: string
+): Promise<EndpointStatus> {
+  const res = await fetch("/api/discover", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ endpoint, apiKey }),
+  });
+  return res.json();
+}
+
+// --- Settings ---
+
+export async function fetchSettings(): Promise<AgentSettingsPublic> {
+  const res = await fetch("/api/settings");
+  return res.json();
+}
+
+export async function saveSettings(updates: Partial<AgentSettingsPublic>): Promise<void> {
+  await fetch("/api/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
   });
 }

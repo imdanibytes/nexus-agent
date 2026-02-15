@@ -17,6 +17,7 @@ export function useStreamingChat() {
       if (state.isStreaming) return;
 
       const conversationId = state.activeId;
+      const profileId = state.activeProfileId;
 
       // Add user message to UI immediately
       const userMsg: Message = {
@@ -32,7 +33,7 @@ export function useStreamingChat() {
         let assistantText = "";
         const toolCalls: ToolCallInfo[] = [];
 
-        for await (const event of streamChat(conversationId, message)) {
+        for await (const event of streamChat(conversationId, message, profileId)) {
           const data = event.data as Record<string, unknown>;
 
           switch (event.event) {

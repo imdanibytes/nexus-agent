@@ -1,6 +1,8 @@
 import { useState, useMemo } from "react";
 import { SchemaField } from "./SchemaField.js";
 import { Send, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 
 interface Props {
   toolUseId: string;
@@ -42,10 +44,12 @@ export function ElicitForm({ toolUseId, input, onRespond }: Props) {
   };
 
   return (
-    <div className="rounded-xl border border-nx-border bg-nx-surface p-4 max-w-lg">
+    <div className="rounded-xl border border-border bg-card p-4 max-w-lg animate-slide-up">
       {message && (
-        <p className="text-sm mb-4">{message}</p>
+        <p className="text-sm mb-3 leading-relaxed">{message}</p>
       )}
+
+      {message && Object.keys(properties).length > 0 && <Separator className="my-3" />}
 
       <div className="space-y-4">
         {Object.entries(properties).map(([key, prop]) => (
@@ -60,23 +64,15 @@ export function ElicitForm({ toolUseId, input, onRespond }: Props) {
         ))}
       </div>
 
-      <div className="flex gap-2 mt-4">
-        <button
-          onClick={handleSubmit}
-          disabled={submitted}
-          className="flex items-center gap-1.5 px-4 py-2 text-sm bg-nx-accent text-white rounded-lg hover:bg-nx-accent/80 transition-colors disabled:opacity-50"
-        >
-          <Send size={14} />
+      <div className="flex gap-2 mt-4 pt-3 border-t border-border">
+        <Button onClick={handleSubmit} disabled={submitted} size="sm" className="gap-1.5">
+          <Send size={13} />
           Submit
-        </button>
-        <button
-          onClick={handleDecline}
-          disabled={submitted}
-          className="flex items-center gap-1.5 px-4 py-2 text-sm bg-nx-raised border border-nx-border text-nx-text rounded-lg hover:bg-nx-surface transition-colors disabled:opacity-50"
-        >
-          <X size={14} />
+        </Button>
+        <Button onClick={handleDecline} disabled={submitted} variant="outline" size="sm" className="gap-1.5">
+          <X size={13} />
           Skip
-        </button>
+        </Button>
       </div>
     </div>
   );

@@ -1,30 +1,104 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Nexus theme tokens come from the host at /api/v1/theme.css.
+ * Fallbacks here match the Nexus default dark theme.
+ */
 
 @theme {
-  --color-nx-bg: var(--nx-bg, #0a0a0a);
-  --color-nx-text: var(--nx-text, #e4e4e7);
-  --color-nx-surface: var(--nx-surface, #18181b);
-  --color-nx-raised: var(--nx-raised, #27272a);
-  --color-nx-accent: var(--nx-accent, #8b5cf6);
-  --color-nx-border: var(--nx-border, #3f3f46);
-  --color-nx-muted: var(--nx-muted, #71717a);
+  --color-nx-bg: var(--color-nx-deep, #0C0E12);
+  --color-nx-base: var(--color-nx-base, #12141A);
+  --color-nx-text: var(--color-nx-text, #E8ECF2);
+  --color-nx-surface: var(--color-nx-surface, #1A1D25);
+  --color-nx-raised: var(--color-nx-raised, #222631);
+  --color-nx-accent: var(--color-nx-accent, #2DD4A8);
+  --color-nx-border: var(--color-nx-border, #2A2E3A);
+  --color-nx-muted: var(--color-nx-text-muted, #848d9f);
+
+  --animate-fade-in: fade-in 0.2s ease-out;
+  --animate-slide-up: slide-up 0.2s ease-out;
+  --animate-dot-pulse: dot-pulse 1.4s ease-in-out infinite;
+}
+
+/* shadcn theme — always dark, mapped to Nexus design tokens */
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+  --radius-4xl: calc(var(--radius) + 16px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+}
+
+:root {
+  --radius: var(--radius-button, 8px);
+
+  --background: var(--color-nx-deep, #0C0E12);
+  --foreground: var(--color-nx-text, #E8ECF2);
+  --card: var(--color-nx-surface, #1A1D25);
+  --card-foreground: var(--color-nx-text, #E8ECF2);
+  --popover: var(--color-nx-surface, #1A1D25);
+  --popover-foreground: var(--color-nx-text, #E8ECF2);
+  --primary: var(--color-nx-accent, #2DD4A8);
+  --primary-foreground: #0C0E12;
+  --secondary: var(--color-nx-raised, #222631);
+  --secondary-foreground: var(--color-nx-text, #E8ECF2);
+  --muted: var(--color-nx-raised, #222631);
+  --muted-foreground: var(--color-nx-text-muted, #848d9f);
+  --accent: var(--color-nx-overlay, #2A2E3A);
+  --accent-foreground: var(--color-nx-text, #E8ECF2);
+  --destructive: var(--color-nx-error, #F87171);
+  --border: var(--color-nx-border, #2A2E3A);
+  --input: var(--color-nx-border, #2A2E3A);
+  --ring: var(--color-nx-accent, #2DD4A8);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
 }
 
 body {
   margin: 0;
   padding: 0;
-  background: var(--color-nx-bg);
-  color: var(--color-nx-text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
   overflow: hidden;
   height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 #root {
   height: 100vh;
 }
 
-/* Scrollbar styling */
+/* Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
 }
@@ -32,65 +106,118 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--color-nx-border);
+  background: var(--color-nx-wash, #323744);
   border-radius: 3px;
 }
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted-foreground);
+}
 
-/* Markdown content styles */
+/* Animations */
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes dot-pulse {
+  0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+  40% { opacity: 1; transform: scale(1); }
+}
+
+/* Markdown content */
+.markdown-content {
+  line-height: 1.65;
+}
 .markdown-content h1,
 .markdown-content h2,
 .markdown-content h3 {
-  margin-top: 1em;
+  margin-top: 1.25em;
   margin-bottom: 0.5em;
   font-weight: 600;
+  line-height: 1.3;
 }
-.markdown-content h1 { font-size: 1.5em; }
-.markdown-content h2 { font-size: 1.25em; }
-.markdown-content h3 { font-size: 1.1em; }
-.markdown-content p { margin: 0.5em 0; }
-.markdown-content ul, .markdown-content ol {
+.markdown-content h1 { font-size: 1.375em; }
+.markdown-content h2 { font-size: 1.2em; }
+.markdown-content h3 { font-size: 1.05em; }
+.markdown-content p {
+  margin: 0.5em 0;
+}
+.markdown-content ul,
+.markdown-content ol {
   margin: 0.5em 0;
   padding-left: 1.5em;
 }
-.markdown-content li { margin: 0.25em 0; }
+.markdown-content li {
+  margin: 0.25em 0;
+}
+.markdown-content li > p {
+  margin: 0.25em 0;
+}
 .markdown-content code {
-  background: var(--color-nx-raised);
+  background: var(--secondary);
   padding: 0.15em 0.4em;
-  border-radius: 4px;
-  font-size: 0.9em;
+  border-radius: 5px;
+  font-size: 0.875em;
+  font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
 }
 .markdown-content pre {
-  background: var(--color-nx-raised);
+  background: var(--secondary);
   padding: 1em;
   border-radius: 8px;
   overflow-x: auto;
-  margin: 0.5em 0;
+  margin: 0.75em 0;
+  border: 1px solid var(--border);
 }
 .markdown-content pre code {
   background: none;
   padding: 0;
+  border-radius: 0;
+  font-size: 0.8125em;
 }
 .markdown-content a {
-  color: var(--color-nx-accent);
+  color: var(--primary);
   text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.markdown-content a:hover {
+  opacity: 0.8;
 }
 .markdown-content blockquote {
-  border-left: 3px solid var(--color-nx-border);
+  border-left: 3px solid var(--border);
   padding-left: 1em;
-  margin: 0.5em 0;
-  color: var(--color-nx-muted);
+  margin: 0.75em 0;
+  color: var(--muted-foreground);
+}
+.markdown-content hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1.5em 0;
+}
+.markdown-content .table-wrap {
+  overflow-x: auto;
+  margin: 0.75em 0;
+  border-radius: 8px;
+  border: 1px solid var(--border);
 }
 .markdown-content table {
   border-collapse: collapse;
-  margin: 0.5em 0;
   width: 100%;
 }
-.markdown-content th, .markdown-content td {
-  border: 1px solid var(--color-nx-border);
-  padding: 0.4em 0.8em;
+.markdown-content th,
+.markdown-content td {
+  border: 1px solid var(--border);
+  padding: 0.5em 0.75em;
   text-align: left;
+  font-size: 0.875em;
 }
 .markdown-content th {
-  background: var(--color-nx-raised);
+  background: var(--secondary);
   font-weight: 600;
+}
+.markdown-content img {
+  max-width: 100%;
+  border-radius: 8px;
 }

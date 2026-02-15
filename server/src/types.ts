@@ -6,6 +6,16 @@ export interface AgentSettings {
   max_tool_rounds: number;
 }
 
+export interface AgentProfile {
+  id: string;
+  name: string;
+  model: string;
+  systemPrompt: string;
+  avatar?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface ConversationMeta {
   id: string;
   title: string;
@@ -21,6 +31,8 @@ export interface Message {
   timestamp: number;
   toolCalls?: ToolCallInfo[];
   uiSurfaces?: UiSurfaceInfo[];
+  profileId?: string;
+  profileName?: string;
 }
 
 export interface ToolCallInfo {

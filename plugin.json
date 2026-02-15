@@ -6,7 +6,7 @@
   "author": "imdanibytes",
   "license": "MIT",
   "homepage": "https://github.com/imdanibytes/nexus-agent",
-  "image": "nexus-plugin-agent:latest",
+  "image": "ghcr.io/imdanibytes/nexus-plugin-agent:0.1.0",
   "ui": {
     "port": 80,
     "path": "/"

@@ -1,4 +1,13 @@
-import { useState } from "react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 
 interface SchemaProperty {
   type?: string;
@@ -24,89 +33,102 @@ interface Props {
 export function SchemaField({ name, schema, value, onChange, required }: Props) {
   const label = schema.title || name;
 
-  // oneOf with const/title → select or radio
+  // oneOf with const/title → radio group
   if (schema.oneOf && schema.oneOf.length > 0) {
     return (
-      <div className="space-y-2">
-        <label className="block text-sm font-medium">{label}{required && " *"}</label>
+      <fieldset className="space-y-2.5">
+        <Label className="text-xs">
+          {label}
+          {required && <span className="text-destructive ml-0.5">*</span>}
+        </Label>
         {schema.description && (
-          <p className="text-xs text-nx-muted">{schema.description}</p>
+          <p className="text-[11px] text-muted-foreground">{schema.description}</p>
         )}
-        <div className="space-y-1">
+        <div className="space-y-1.5">
           {schema.oneOf.map((opt) => (
-            <label key={opt.const} className="flex items-center gap-2 text-sm cursor-pointer">
+            <label
+              key={opt.const}
+              className="flex items-center gap-2.5 px-3 py-2 rounded-lg border border-border hover:bg-accent/50 cursor-pointer transition-colors text-sm has-[:checked]:bg-primary/5 has-[:checked]:border-primary/20"
+            >
               <input
                 type="radio"
                 name={name}
                 value={opt.const}
                 checked={value === opt.const}
                 onChange={() => onChange(opt.const)}
-                className="accent-nx-accent"
+                className="accent-[var(--primary)]"
               />
               {opt.title}
             </label>
           ))}
         </div>
-      </div>
+      </fieldset>
     );
   }
 
   // enum → select
   if (schema.enum && schema.enum.length > 0) {
     return (
-      <div className="space-y-1">
-        <label className="block text-sm font-medium">{label}{required && " *"}</label>
+      <div className="space-y-1.5">
+        <Label className="text-xs">
+          {label}
+          {required && <span className="text-destructive ml-0.5">*</span>}
+        </Label>
         {schema.description && (
-          <p className="text-xs text-nx-muted">{schema.description}</p>
+          <p className="text-[11px] text-muted-foreground">{schema.description}</p>
         )}
-        <select
-          value={(value as string) || ""}
-          onChange={(e) => onChange(e.target.value)}
-          className="w-full bg-nx-raised border border-nx-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-nx-accent"
-        >
-          <option value="">Select...</option>
-          {schema.enum.map((opt) => (
-            <option key={opt} value={opt}>{opt}</option>
-          ))}
-        </select>
+        <Select value={(value as string) || ""} onValueChange={onChange}>
+          <SelectTrigger className="text-sm">
+            <SelectValue placeholder="Select..." />
+          </SelectTrigger>
+          <SelectContent>
+            {schema.enum.map((opt) => (
+              <SelectItem key={opt} value={opt}>
+                {opt}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
     );
   }
 
-  // boolean → checkbox
+  // boolean → switch
   if (schema.type === "boolean") {
     return (
-      <label className="flex items-center gap-2 cursor-pointer">
-        <input
-          type="checkbox"
+      <div className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2.5">
+        <div className="space-y-0.5">
+          <Label className="text-xs font-medium">{label}</Label>
+          {schema.description && (
+            <p className="text-[11px] text-muted-foreground">{schema.description}</p>
+          )}
+        </div>
+        <Switch
           checked={Boolean(value)}
-          onChange={(e) => onChange(e.target.checked)}
-          className="accent-nx-accent"
+          onCheckedChange={onChange}
         />
-        <span className="text-sm font-medium">{label}</span>
-        {schema.description && (
-          <span className="text-xs text-nx-muted">— {schema.description}</span>
-        )}
-      </label>
+      </div>
     );
   }
 
   // number/integer
   if (schema.type === "number" || schema.type === "integer") {
     return (
-      <div className="space-y-1">
-        <label className="block text-sm font-medium">{label}{required && " *"}</label>
+      <div className="space-y-1.5">
+        <Label className="text-xs">
+          {label}
+          {required && <span className="text-destructive ml-0.5">*</span>}
+        </Label>
         {schema.description && (
-          <p className="text-xs text-nx-muted">{schema.description}</p>
+          <p className="text-[11px] text-muted-foreground">{schema.description}</p>
         )}
-        <input
+        <Input
           type="number"
           value={(value as number) ?? (schema.default as number) ?? ""}
           onChange={(e) => onChange(e.target.value ? Number(e.target.value) : undefined)}
           min={schema.minimum}
           max={schema.maximum}
           step={schema.type === "integer" ? 1 : undefined}
-          className="w-full bg-nx-raised border border-nx-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-nx-accent"
         />
       </div>
     );
@@ -114,17 +136,19 @@ export function SchemaField({ name, schema, value, onChange, required }: Props) 
 
   // string (default)
   return (
-    <div className="space-y-1">
-      <label className="block text-sm font-medium">{label}{required && " *"}</label>
+    <div className="space-y-1.5">
+      <Label className="text-xs">
+        {label}
+        {required && <span className="text-destructive ml-0.5">*</span>}
+      </Label>
       {schema.description && (
-        <p className="text-xs text-nx-muted">{schema.description}</p>
+        <p className="text-[11px] text-muted-foreground">{schema.description}</p>
       )}
-      <input
+      <Input
         type={schema.format === "email" ? "email" : schema.format === "uri" ? "url" : "text"}
         value={(value as string) || ""}
         onChange={(e) => onChange(e.target.value)}
         placeholder={schema.placeholder}
-        className="w-full bg-nx-raised border border-nx-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-nx-accent"
       />
     </div>
   );

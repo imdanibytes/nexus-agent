@@ -13,6 +13,17 @@ import {
   deleteConversation,
   updateConversationTitle,
 } from "./storage.js";
+import {
+  listProfiles,
+  getProfile,
+  createProfile,
+  updateProfile,
+  deleteProfile as removeProfile,
+  getActiveProfileId,
+  setActiveProfileId,
+} from "./profiles.js";
+import { probeEndpoint } from "./discovery.js";
+import { getSettings, updateSettings } from "./settings.js";
 import type { Conversation } from "./types.js";
 
 const PORT = 80;
@@ -82,16 +93,17 @@ const server = http.createServer(async (req, res) => {
     // Chat — start agent turn (SSE stream)
     if (method === "POST" && url === "/api/chat") {
       const body = JSON.parse(await readBody(req));
-      const { conversationId, message } = body as {
+      const { conversationId, message, profileId } = body as {
         conversationId?: string;
         message: string;
+        profileId?: string;
       };
 
       const convId = conversationId || uuidv4();
       const sse = createSseWriter(res);
 
       // Run agent loop (async — streams SSE events as it goes)
-      runAgentTurn(convId, message, sse).catch((err) => {
+      runAgentTurn(convId, message, sse, profileId).catch((err) => {
         console.error("Agent turn error:", err);
         try {
           sse.writeEvent("error", {
@@ -120,6 +132,120 @@ const server = http.createServer(async (req, res) => {
       } else {
         json(res, 404, { error: "No pending UI surface with that ID" });
       }
+      return;
+    }
+
+    // --- Profile routes (order matters: /active before /:id) ---
+
+    // List profiles
+    if (method === "GET" && url === "/api/profiles") {
+      json(res, 200, listProfiles());
+      return;
+    }
+
+    // Create profile
+    if (method === "POST" && url === "/api/profiles") {
+      const body = JSON.parse(await readBody(req));
+      const { name, model, systemPrompt, avatar } = body as {
+        name: string;
+        model: string;
+        systemPrompt: string;
+        avatar?: string;
+      };
+      if (!name || !model) {
+        json(res, 400, { error: "name and model are required" });
+        return;
+      }
+      const profile = createProfile({ name, model, systemPrompt: systemPrompt || "", avatar });
+      json(res, 201, profile);
+      return;
+    }
+
+    // Get active profile ID
+    if (method === "GET" && url === "/api/profiles/active") {
+      json(res, 200, { profileId: getActiveProfileId() });
+      return;
+    }
+
+    // Set active profile ID
+    if (method === "PUT" && url === "/api/profiles/active") {
+      const body = JSON.parse(await readBody(req));
+      const { profileId } = body as { profileId: string | null };
+      setActiveProfileId(profileId);
+      json(res, 200, { profileId });
+      return;
+    }
+
+    // Single profile routes
+    const profileMatch = url.match(/^\/api\/profiles\/([a-f0-9-]+)$/);
+    if (profileMatch) {
+      const id = profileMatch[1];
+
+      if (method === "GET") {
+        const profile = getProfile(id);
+        if (!profile) {
+          json(res, 404, { error: "Profile not found" });
+          return;
+        }
+        json(res, 200, profile);
+        return;
+      }
+
+      if (method === "PUT") {
+        const body = JSON.parse(await readBody(req));
+        const updated = updateProfile(id, body);
+        if (!updated) {
+          json(res, 404, { error: "Profile not found" });
+          return;
+        }
+        json(res, 200, updated);
+        return;
+      }
+
+      if (method === "DELETE") {
+        const deleted = removeProfile(id);
+        json(res, deleted ? 200 : 404, { ok: deleted });
+        return;
+      }
+    }
+
+    // --- Discovery ---
+
+    if (method === "POST" && url === "/api/discover") {
+      const body = JSON.parse(await readBody(req));
+      let { endpoint, apiKey } = body as { endpoint?: string; apiKey?: string };
+
+      // If no endpoint provided, use current settings
+      if (!endpoint) {
+        const settings = await getSettings();
+        endpoint = settings.llm_endpoint;
+        if (!apiKey) apiKey = settings.llm_api_key;
+      }
+
+      const status = await probeEndpoint(endpoint, apiKey);
+      json(res, 200, status);
+      return;
+    }
+
+    // --- Settings (read-only, for frontend) ---
+
+    if (method === "GET" && url === "/api/settings") {
+      const settings = await getSettings();
+      // Don't expose the API key to the frontend
+      json(res, 200, {
+        llm_endpoint: settings.llm_endpoint,
+        llm_model: settings.llm_model,
+        system_prompt: settings.system_prompt,
+        max_tool_rounds: settings.max_tool_rounds,
+      });
+      return;
+    }
+
+    // Update settings
+    if (method === "PUT" && url === "/api/settings") {
+      const body = JSON.parse(await readBody(req));
+      await updateSettings(body);
+      json(res, 200, { ok: true });
       return;
     }
 

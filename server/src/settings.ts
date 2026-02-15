@@ -30,3 +30,19 @@ export async function getSettings(): Promise<AgentSettings> {
     return DEFAULTS;
   }
 }
+
+export async function updateSettings(
+  updates: Partial<Omit<AgentSettings, "max_tool_rounds">>
+): Promise<void> {
+  const token = await getAccessToken();
+  const current = await getSettings();
+  const merged = { ...current, ...updates };
+  await fetch(`${NEXUS_HOST_URL}/api/v1/settings`, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(merged),
+  });
+}

@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { ConversationMeta, Message, ToolCallInfo, UiSurfaceInfo } from "../api/client.js";
+import type { ConversationMeta, Message, ToolCallInfo, UiSurfaceInfo, AgentProfile } from "../api/client.js";
 
 export interface UiSurfaceData {
   toolUseId: string;
@@ -17,7 +17,10 @@ interface ChatState {
   currentToolCalls: ToolCallInfo[];
   currentUiSurfaces: UiSurfaceInfo[];
   pendingUiSurface: UiSurfaceData | null;
-  sidebarOpen: boolean;
+  chatOpen: boolean;
+  profiles: AgentProfile[];
+  activeProfileId: string | null;
+  settingsOpen: boolean;
 
   setConversations: (conversations: ConversationMeta[]) => void;
   setActiveId: (id: string | null) => void;
@@ -31,7 +34,10 @@ interface ChatState {
   finishStreaming: (finalMessage?: Message) => void;
   addUserMessage: (message: Message) => void;
   updateTitle: (id: string, title: string) => void;
-  toggleSidebar: () => void;
+  setChatOpen: (open: boolean) => void;
+  setProfiles: (profiles: AgentProfile[]) => void;
+  setActiveProfileId: (id: string | null) => void;
+  setSettingsOpen: (open: boolean) => void;
 }
 
 export const useChatStore = create<ChatState>((set) => ({
@@ -43,7 +49,10 @@ export const useChatStore = create<ChatState>((set) => ({
   currentToolCalls: [],
   currentUiSurfaces: [],
   pendingUiSurface: null,
-  sidebarOpen: true,
+  chatOpen: false,
+  profiles: [],
+  activeProfileId: null,
+  settingsOpen: false,
 
   setConversations: (conversations) => set({ conversations }),
   setActiveId: (activeId) => set({ activeId }),
@@ -113,5 +122,8 @@ export const useChatStore = create<ChatState>((set) => ({
       ),
     })),
 
-  toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
+  setChatOpen: (chatOpen) => set({ chatOpen }),
+  setProfiles: (profiles) => set({ profiles }),
+  setActiveProfileId: (activeProfileId) => set({ activeProfileId }),
+  setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
 }));
