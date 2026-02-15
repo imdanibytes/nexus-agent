@@ -1,3 +1,8 @@
+import {
+  BedrockClient,
+  ListFoundationModelsCommand,
+} from "@aws-sdk/client-bedrock";
+
 export interface ModelInfo {
   id: string;
   name: string;
@@ -104,13 +109,13 @@ export async function probeEndpoint(
     // Fall through
   }
 
-  // Check if endpoint is reachable at all
+  // HEAD-only reachability is not enough — we need a working model API
   try {
     await fetch(endpoint, { method: "HEAD", signal: AbortSignal.timeout(3000) });
     return {
-      reachable: true,
+      reachable: false,
       provider: "unknown",
-      error: "Endpoint reachable but no model listing API found",
+      error: "Server is reachable but no model listing API responded. Check the endpoint URL or API key.",
       models: [],
     };
   } catch (err) {
@@ -118,6 +123,111 @@ export async function probeEndpoint(
       reachable: false,
       provider: "unknown",
       error: err instanceof Error ? err.message : "Connection failed",
+      models: [],
+    };
+  }
+}
+
+/** Probe a Provider by resolving its endpoint/key and calling probeEndpoint */
+export async function probeProvider(
+  provider: import("./types.js").Provider,
+): Promise<EndpointStatus> {
+  switch (provider.type) {
+    case "ollama":
+      return probeEndpoint(provider.endpoint!);
+    case "anthropic":
+      return probeAnthropic(provider);
+    case "openai-compatible":
+      return probeEndpoint(provider.endpoint!, provider.apiKey);
+    case "bedrock":
+      return probeBedrock(provider);
+    default:
+      return {
+        reachable: false,
+        provider: "unknown",
+        error: `Unknown provider type: ${provider.type}`,
+        models: [],
+      };
+  }
+}
+
+async function probeAnthropic(
+  provider: import("./types.js").Provider,
+): Promise<EndpointStatus> {
+  const baseUrl = provider.endpoint || "https://api.anthropic.com";
+  try {
+    const res = await fetch(`${baseUrl}/v1/models`, {
+      headers: {
+        "x-api-key": provider.apiKey || "",
+        "anthropic-version": "2023-06-01",
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      return {
+        reachable: false,
+        provider: "anthropic",
+        error: `API returned ${res.status}: ${text.slice(0, 200)}`,
+        models: [],
+      };
+    }
+
+    const data = (await res.json()) as {
+      data?: { id: string; display_name?: string; type?: string }[];
+    };
+
+    const models: ModelInfo[] = (data.data ?? []).map((m) => ({
+      id: m.id,
+      name: m.display_name || m.id,
+      provider: "anthropic",
+    }));
+
+    return { reachable: true, provider: "anthropic", models };
+  } catch (err) {
+    return {
+      reachable: false,
+      provider: "anthropic",
+      error: err instanceof Error ? err.message : "Connection failed",
+      models: [],
+    };
+  }
+}
+
+async function probeBedrock(
+  provider: import("./types.js").Provider,
+): Promise<EndpointStatus> {
+  try {
+    const client = new BedrockClient({
+      region: provider.awsRegion || "us-east-1",
+      ...(provider.awsAccessKeyId && provider.awsSecretAccessKey
+        ? {
+            credentials: {
+              accessKeyId: provider.awsAccessKeyId,
+              secretAccessKey: provider.awsSecretAccessKey,
+              ...(provider.awsSessionToken ? { sessionToken: provider.awsSessionToken } : {}),
+            },
+          }
+        : {}),
+    });
+
+    const res = await client.send(
+      new ListFoundationModelsCommand({ byInferenceType: "ON_DEMAND" }),
+    );
+
+    const models: ModelInfo[] = (res.modelSummaries ?? []).map((m) => ({
+      id: m.modelId!,
+      name: m.modelName || m.modelId!,
+      provider: m.providerName || "bedrock",
+    }));
+
+    return { reachable: true, provider: "bedrock", models };
+  } catch (err) {
+    return {
+      reachable: false,
+      provider: "bedrock",
+      error: err instanceof Error ? err.message : "Bedrock connection failed",
       models: [],
     };
   }

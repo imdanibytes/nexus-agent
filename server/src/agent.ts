@@ -1,54 +1,235 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { v4 as uuidv4 } from "uuid";
 import { getSettings } from "./settings.js";
-import { getMcpTools, callMcpTool } from "./tools.js";
-import { getUiTools, isUiTool, isInteractiveUiTool } from "./ui-tools.js";
+import { getConversation, saveConversation } from "./storage.js";
+import { getAgent, getActiveAgentId } from "./agents.js";
+import { getProvider } from "./providers.js";
+import { getToolSettings } from "./tool-settings.js";
+import { createLlmClient } from "./client-factory.js";
+import { ToolExecutor } from "./tools/executor.js";
+import type { Agent, Provider, ToolFilter } from "./types.js";
+import { setTitleTool } from "./tools/handlers/local.js";
+import { fetchMcpToolHandlers } from "./tools/handlers/remote.js";
 import {
-  getConversation,
-  saveConversation,
-} from "./storage.js";
-import { getProfile, getActiveProfileId } from "./profiles.js";
-import type { Conversation, Message, SseWriter, ToolCallInfo, UiSurfaceInfo } from "./types.js";
+  FrontendToolBridge,
+  createClipboardTools,
+} from "./tools/handlers/frontend.js";
+import { SystemMessageBuilder } from "./system-message/builder.js";
+import { corePromptProvider } from "./system-message/providers/core-prompt.js";
+import { datetimeProvider } from "./system-message/providers/datetime.js";
+import { conversationContextProvider } from "./system-message/providers/conversation-context.js";
+import { SpanCollector } from "./timing.js";
+import type {
+  Conversation,
+  Message,
+  MessagePart,
+  SseWriter,
+  UiSurfaceInfo,
+} from "./types.js";
+import type { ToolContext } from "./tools/types.js";
 
-// Pending UI surface responses — keyed by tool_use_id
-const pendingResponses = new Map<
-  string,
-  { resolve: (value: { action: string; content: unknown }) => void }
->();
+/** Wire format from the frontend — matches active branch messages */
+interface WireMessage {
+  role: string;
+  content: string;
+  toolCalls?: {
+    id: string;
+    name: string;
+    args: Record<string, unknown>;
+    result?: string;
+    isError?: boolean;
+  }[];
+}
 
-export function resolveUiResponse(
+// Shared frontend bridge — lives for the process lifetime
+const frontendBridge = new FrontendToolBridge();
+
+export function resolveFrontendToolResult(
   toolUseId: string,
-  action: string,
-  content: unknown
+  content: string,
+  isError: boolean,
 ): boolean {
-  const pending = pendingResponses.get(toolUseId);
-  if (!pending) return false;
-  pending.resolve({ action, content });
-  pendingResponses.delete(toolUseId);
-  return true;
+  return frontendBridge.resolve(toolUseId, content, isError);
+}
+
+// System message builder — register providers once
+const systemMessageBuilder = new SystemMessageBuilder();
+systemMessageBuilder.register(corePromptProvider);
+systemMessageBuilder.register(conversationContextProvider);
+systemMessageBuilder.register(datetimeProvider);
+
+/**
+ * Convert frontend wire messages to Anthropic API format.
+ * The frontend sends the active branch — we just translate the format.
+ */
+function buildApiMessages(
+  wireMessages: WireMessage[],
+  mapName: (name: string) => string = (n) => n,
+): Anthropic.MessageParam[] {
+  const result: Anthropic.MessageParam[] = [];
+
+  for (const msg of wireMessages) {
+    if (msg.role === "user") {
+      result.push({ role: "user", content: msg.content });
+    } else if (msg.role === "assistant") {
+      const blocks: Anthropic.ContentBlockParam[] = [];
+
+      if (msg.content) {
+        blocks.push({ type: "text", text: msg.content });
+      }
+
+      if (msg.toolCalls) {
+        for (const tc of msg.toolCalls) {
+          blocks.push({
+            type: "tool_use",
+            id: tc.id,
+            name: mapName(tc.name),
+            input: tc.args,
+          });
+        }
+      }
+
+      if (blocks.length > 0) {
+        result.push({ role: "assistant", content: blocks });
+      }
+
+      // Tool results go as a user message (Anthropic API requirement)
+      if (msg.toolCalls) {
+        const toolResults: Anthropic.ToolResultBlockParam[] = msg.toolCalls
+          .filter((tc) => tc.result !== undefined)
+          .map((tc) => ({
+            type: "tool_result" as const,
+            tool_use_id: tc.id,
+            content: tc.result || "",
+            is_error: tc.isError,
+          }));
+        if (toolResults.length > 0) {
+          result.push({ role: "user", content: toolResults });
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+/** Match a tool name against a glob pattern (supports * wildcard) */
+function matchGlob(pattern: string, name: string): boolean {
+  const regex = new RegExp(
+    "^" + pattern.replace(/\*/g, ".*").replace(/\?/g, ".") + "$",
+  );
+  return regex.test(name);
+}
+
+/** Apply tool filters (global + agent-level) to a list of tool definitions */
+function applyToolFilters(
+  defs: import("./tools/types.js").ToolDefinition[],
+  globalFilter?: ToolFilter,
+  agentFilter?: ToolFilter,
+): import("./tools/types.js").ToolDefinition[] {
+  let result = defs;
+
+  if (globalFilter) {
+    if (globalFilter.mode === "allow") {
+      result = result.filter((d) =>
+        globalFilter.tools.some((t) => matchGlob(t, d.name)),
+      );
+    } else {
+      result = result.filter(
+        (d) => !globalFilter.tools.some((t) => matchGlob(t, d.name)),
+      );
+    }
+  }
+
+  if (agentFilter) {
+    if (agentFilter.mode === "allow") {
+      result = result.filter((d) =>
+        agentFilter.tools.some((t) => matchGlob(t, d.name)),
+      );
+    } else {
+      result = result.filter(
+        (d) => !agentFilter.tools.some((t) => matchGlob(t, d.name)),
+      );
+    }
+  }
+
+  return result;
 }
 
 export async function runAgentTurn(
   conversationId: string,
-  userMessage: string,
+  wireMessages: WireMessage[],
   sse: SseWriter,
-  profileId?: string
+  agentId?: string,
 ): Promise<void> {
+  const timing = new SpanCollector();
+  const turnSpan = timing.span("turn");
+
+  // --- Setup phase ---
+  const setupSpan = turnSpan.span("setup");
+
+  const settingsSpan = setupSpan.span("fetch_settings");
   const settings = await getSettings();
+  const toolSettings = await getToolSettings();
+  settingsSpan.end();
 
-  // Resolve effective profile: explicit > active > none
-  const effectiveProfileId = profileId || getActiveProfileId();
-  const profile = effectiveProfileId ? getProfile(effectiveProfileId) : null;
+  // Resolve effective agent: explicit > active > none
+  const effectiveAgentId = agentId || getActiveAgentId();
+  const agent: Agent | null = effectiveAgentId
+    ? getAgent(effectiveAgentId)
+    : null;
 
-  const effectiveModel = profile?.model || settings.llm_model;
-  const effectivePrompt = profile?.systemPrompt || settings.system_prompt;
+  // Resolve provider from agent, or fall back to legacy settings
+  let client: Anthropic;
+  let effectiveModel: string;
+  let effectiveMaxTokens = 8192;
+  let effectiveTemperature: number | undefined;
+  let effectiveTopP: number | undefined;
+
+
+  if (agent) {
+    const provider = await getProvider(agent.providerId);
+    if (provider) {
+      client = await createLlmClient(provider);
+
+    } else {
+      // Provider was deleted — fall back to legacy
+      client = new Anthropic({
+        apiKey: settings.llm_api_key || "ollama",
+        baseURL: settings.llm_endpoint,
+      });
+    }
+    effectiveModel = agent.model;
+    if (agent.maxTokens) effectiveMaxTokens = agent.maxTokens;
+    if (agent.temperature !== undefined) effectiveTemperature = agent.temperature;
+    if (agent.topP !== undefined) effectiveTopP = agent.topP;
+  } else {
+    // Legacy fallback — no agent active
+    client = new Anthropic({
+      apiKey: settings.llm_api_key || "ollama",
+      baseURL: settings.llm_endpoint,
+    });
+    effectiveModel = settings.llm_model;
+  }
 
   console.log(
-    `[agent] endpoint=${settings.llm_endpoint} model=${effectiveModel}` +
-      (profile ? ` profile="${profile.name}"` : "")
+    `[agent] model=${effectiveModel}` +
+      (agent ? ` agent="${agent.name}"` : "") +
+      ` messages=${wireMessages.length}`,
   );
 
-  // Load or create conversation
+  // Build tool executor
+  const toolSetupSpan = setupSpan.span("build_tool_executor");
+  const executor = new ToolExecutor();
+  executor.register(setTitleTool);
+  executor.registerAll(createClipboardTools(frontendBridge));
+
+  const mcpFetchSpan = toolSetupSpan.span("fetch_mcp_tools");
+  executor.registerAll(await fetchMcpToolHandlers());
+  mcpFetchSpan.end();
+  toolSetupSpan.end();
+
+  // Get or create conversation for context
   let conv = getConversation(conversationId);
   if (!conv) {
     conv = {
@@ -60,53 +241,106 @@ export async function runAgentTurn(
     };
   }
 
-  // Add user message
-  const userMsg: Message = {
-    id: uuidv4(),
-    role: "user",
-    content: userMessage,
-    timestamp: Date.now(),
+  setupSpan.end();
+
+  // Abort controller for frontend tool bridge timeout cleanup
+  const abortController = new AbortController();
+
+  // Build tool context
+  const toolCtx: ToolContext = {
+    conversationId,
+    sse,
+    conversation: conv,
+    saveConversation,
+    signal: abortController.signal,
   };
-  conv.messages.push(userMsg);
 
-  // Create Anthropic client
-  const client = new Anthropic({
-    apiKey: settings.llm_api_key || "ollama",
-    baseURL: settings.llm_endpoint,
-  });
+  // Map tool definitions to Anthropic format, applying filters
+  const allToolDefs = executor.definitions();
+  const toolDefs = applyToolFilters(
+    allToolDefs,
+    toolSettings.globalToolFilter,
+    agent?.toolFilter,
+  );
 
-  // Collect tools
-  const mcpTools = await getMcpTools();
-  const uiTools = getUiTools();
-  const allTools = [...mcpTools, ...uiTools];
+  // LLM APIs require tool names to match ^[a-zA-Z0-9_-]+$ — no dots.
+  // MCP tools use dot-namespaced names, so sanitize with a bidirectional map.
+  const toWireName = new Map<string, string>(); // original → sanitized
+  const toOrigName = new Map<string, string>(); // sanitized → original
 
-  // Build messages for the API
-  const apiMessages = buildApiMessages(conv.messages);
+  for (const d of toolDefs) {
+    if (d.name.includes(".")) {
+      const sanitized = d.name.replace(/\./g, "__");
+      toWireName.set(d.name, sanitized);
+      toOrigName.set(sanitized, d.name);
+    }
+  }
+
+  const wireName = (name: string) => toWireName.get(name) ?? name;
+  const origName = (name: string) => toOrigName.get(name) ?? name;
+
+  const anthropicTools: Anthropic.Tool[] = toolDefs.map((d) => ({
+    name: wireName(d.name),
+    description: d.description,
+    input_schema: d.input_schema as Anthropic.Tool["input_schema"],
+  }));
+
+  // Build API messages from frontend-provided history (active branch)
+  // Must come after wireName is defined so Bedrock tool names get sanitized in history.
+  const apiMessages = buildApiMessages(wireMessages, wireName);
 
   let round = 0;
   const maxRounds = settings.max_tool_rounds;
-  let assistantText = "";
-  const assistantToolCalls: ToolCallInfo[] = [];
+  const assistantParts: MessagePart[] = [];
   const assistantUiSurfaces: UiSurfaceInfo[] = [];
 
   while (round < maxRounds) {
     round++;
+    const roundStartIdx = assistantParts.length;
+    const roundSpan = turnSpan.span(`round:${round}`, { round });
+
+    // Build system message fresh each round
+    const smSpan = roundSpan.span("system_message");
+    const systemMessage = await systemMessageBuilder.build(
+      {
+        conversationId,
+        conversation: conv,
+        toolNames: toolDefs.map((d) => wireName(d.name)),
+        settings,
+        profile: agent
+          ? { id: agent.id, name: agent.name, model: agent.model, systemPrompt: agent.systemPrompt, createdAt: agent.createdAt, updatedAt: agent.updatedAt }
+          : null,
+      },
+      smSpan,
+    );
+    smSpan.end();
+
     sse.writeEvent("turn_start", {
       round,
-      ...(profile ? { profileId: profile.id, profileName: profile.name } : {}),
+      ...(agent
+        ? { agentId: agent.id, agentName: agent.name }
+        : {}),
     });
 
     try {
       console.log(`[agent] round=${round} calling LLM...`);
+      const llmSpan = roundSpan.span("llm_call", {
+        model: effectiveModel,
+        round,
+      });
+
       const stream = client.messages.stream({
         model: effectiveModel,
-        max_tokens: 8192,
-        system: effectivePrompt,
+        max_tokens: effectiveMaxTokens,
+        system: systemMessage,
         messages: apiMessages,
-        tools: allTools.length > 0 ? allTools : undefined,
+        tools: anthropicTools.length > 0 ? anthropicTools : undefined,
+        ...(effectiveTemperature !== undefined ? { temperature: effectiveTemperature } : {}),
+        ...(effectiveTopP !== undefined ? { top_p: effectiveTopP } : {}),
       });
 
       let stopReason: string | null = null;
+      let firstTokenMarked = false;
       const toolUseBlocks: {
         id: string;
         name: string;
@@ -118,21 +352,42 @@ export async function runAgentTurn(
         if (event.type === "content_block_start") {
           const block = event.content_block;
           if (block.type === "text") {
+            assistantParts.push({ type: "text", text: "" });
             sse.writeEvent("text_start", {});
           } else if (block.type === "tool_use") {
-            toolUseBlocks.push({ id: block.id, name: block.name, partialJson: "" });
-            sse.writeEvent("tool_start", { id: block.id, name: block.name });
+            const realName = origName(block.name);
+            toolUseBlocks.push({
+              id: block.id,
+              name: realName,
+              partialJson: "",
+            });
+            sse.writeEvent("tool_start", {
+              id: block.id,
+              name: realName,
+            });
           }
         } else if (event.type === "content_block_delta") {
           const delta = event.delta;
           if (delta.type === "text_delta") {
-            assistantText += delta.text;
+            if (!firstTokenMarked) {
+              llmSpan.mark("first_token");
+              firstTokenMarked = true;
+            }
+            // Append to the most recent text part
+            for (let i = assistantParts.length - 1; i >= 0; i--) {
+              if (assistantParts[i].type === "text") {
+                (assistantParts[i] as { type: "text"; text: string }).text += delta.text;
+                break;
+              }
+            }
             sse.writeEvent("text_delta", { text: delta.text });
           } else if (delta.type === "input_json_delta") {
             const current = toolUseBlocks[toolUseBlocks.length - 1];
             if (current) {
               current.partialJson += delta.partial_json;
-              sse.writeEvent("tool_input_delta", { partial_json: delta.partial_json });
+              sse.writeEvent("tool_input_delta", {
+                partial_json: delta.partial_json,
+              });
             }
           }
         } else if (event.type === "message_delta") {
@@ -140,193 +395,162 @@ export async function runAgentTurn(
         }
       }
 
+      llmSpan.end();
+
       // Process tool calls if stop_reason is tool_use
       if (stopReason === "tool_use" && toolUseBlocks.length > 0) {
-        // Build assistant message with tool_use blocks for the API
+        // Build assistant content blocks for Anthropic API from parts added this round
         const assistantContentBlocks: Anthropic.ContentBlockParam[] = [];
-        if (assistantText) {
-          assistantContentBlocks.push({ type: "text", text: assistantText });
+        for (let i = roundStartIdx; i < assistantParts.length; i++) {
+          const part = assistantParts[i];
+          if (part.type === "text" && part.text) {
+            assistantContentBlocks.push({ type: "text", text: part.text });
+          }
         }
 
-        const toolResultBlocks: Anthropic.ToolResultBlockParam[] = [];
-
-        for (const toolBlock of toolUseBlocks) {
-          let parsedArgs: Record<string, unknown> = {};
+        // Parse args and build tool_use content blocks
+        const parsed = toolUseBlocks.map((block) => {
+          let args: Record<string, unknown> = {};
           try {
-            parsedArgs = JSON.parse(toolBlock.partialJson || "{}");
+            args = JSON.parse(block.partialJson || "{}");
           } catch {
-            parsedArgs = {};
+            args = {};
           }
 
           assistantContentBlocks.push({
             type: "tool_use",
-            id: toolBlock.id,
-            name: toolBlock.name,
-            input: parsedArgs,
+            id: block.id,
+            name: wireName(block.name),
+            input: args,
           });
 
-          if (isUiTool(toolBlock.name)) {
-            // UI tool — emit to frontend
-            sse.writeEvent("ui_surface", {
-              tool_use_id: toolBlock.id,
-              name: toolBlock.name,
-              input: parsedArgs,
+          return { ...block, args };
+        });
+
+        // Execute all tools in parallel
+        const toolExecSpan = roundSpan.span("tool_execution", {
+          count: parsed.length,
+        });
+
+        const results = await Promise.all(
+          parsed.map((block) => {
+            const toolSpan = toolExecSpan.span(`tool:${block.name}`, {
+              toolName: block.name,
+              toolUseId: block.id,
             });
+            return executor
+              .execute(block.name, block.id, block.args, toolCtx)
+              .finally(() => toolSpan.end());
+          }),
+        );
 
-            let resultContent: string;
+        toolExecSpan.end();
 
-            if (isInteractiveUiTool(toolBlock.name, parsedArgs)) {
-              // Wait for frontend response
-              const response = await new Promise<{ action: string; content: unknown }>(
-                (resolve) => {
-                  pendingResponses.set(toolBlock.id, { resolve });
-                }
-              );
+        // Build tool result blocks for next round and track tool-call parts
+        const toolResultBlocks: Anthropic.ToolResultBlockParam[] = [];
+        for (let i = 0; i < results.length; i++) {
+          const result = results[i];
+          const block = parsed[i];
 
-              resultContent = JSON.stringify(response);
-              assistantUiSurfaces.push({
-                toolUseId: toolBlock.id,
-                name: toolBlock.name,
-                input: parsedArgs,
-                response: response,
-              });
-            } else {
-              // Non-interactive — auto-resolve
-              resultContent = "Displayed to user";
-              assistantUiSurfaces.push({
-                toolUseId: toolBlock.id,
-                name: toolBlock.name,
-                input: parsedArgs,
-              });
-            }
-
-            toolResultBlocks.push({
-              type: "tool_result",
-              tool_use_id: toolBlock.id,
-              content: resultContent,
-            });
-          } else {
-            // MCP tool — execute server-side
-            sse.writeEvent("tool_executing", { id: toolBlock.id, name: toolBlock.name });
-            const result = await callMcpTool(toolBlock.name, parsedArgs);
-
-            sse.writeEvent("tool_result", {
-              id: toolBlock.id,
-              name: toolBlock.name,
-              content: result.content,
-              is_error: result.isError,
-            });
-
-            assistantToolCalls.push({
-              id: toolBlock.id,
-              name: toolBlock.name,
-              args: parsedArgs,
+          // Track non-local tool calls as ordered parts
+          if (!block.name.startsWith("_nexus_")) {
+            assistantParts.push({
+              type: "tool-call",
+              id: block.id,
+              name: block.name,
+              args: block.args,
               result: result.content,
-              isError: result.isError,
-            });
-
-            toolResultBlocks.push({
-              type: "tool_result",
-              tool_use_id: toolBlock.id,
-              content: result.content,
-              is_error: result.isError,
+              isError: result.is_error,
             });
           }
+
+          toolResultBlocks.push({
+            type: "tool_result",
+            tool_use_id: result.tool_use_id,
+            content: result.content,
+            is_error: result.is_error,
+          });
         }
 
-        // Append assistant + tool_result messages for next round
-        apiMessages.push({ role: "assistant", content: assistantContentBlocks });
+        // Append for next round
+        apiMessages.push({
+          role: "assistant",
+          content: assistantContentBlocks,
+        });
         apiMessages.push({ role: "user", content: toolResultBlocks });
 
-        // Reset text for next round (tool calls may produce more text)
-        assistantText = "";
+        roundSpan.end();
         continue;
       }
 
-      // End of turn (end_turn or max_tokens)
+      // End of turn — no more tool calls
+      roundSpan.end();
       break;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       sse.writeEvent("error", { message });
+      roundSpan.end();
       break;
     }
   }
 
-  // Build final assistant message
+  // Clean up abort controller
+  abortController.abort();
+
+  // Save conversation for persistence (page reload recovery)
+  const storedMessages: Message[] = wireMessages.map((wm) => {
+    if (wm.role === "user") {
+      return {
+        id: uuidv4(),
+        role: "user" as const,
+        parts: [{ type: "text" as const, text: wm.content }],
+        timestamp: Date.now(),
+      };
+    }
+    // Assistant: reconstruct parts from wire format (text + tool calls)
+    const parts: MessagePart[] = [];
+    if (wm.content) {
+      parts.push({ type: "text", text: wm.content });
+    }
+    if (wm.toolCalls) {
+      for (const tc of wm.toolCalls) {
+        parts.push({ type: "tool-call", id: tc.id, name: tc.name, args: tc.args, result: tc.result, isError: tc.isError });
+      }
+    }
+    return {
+      id: uuidv4(),
+      role: "assistant" as const,
+      parts,
+      timestamp: Date.now(),
+    };
+  });
+
+  // Finalize timing before saving
+  turnSpan.end();
+  const timingSpans = timing.toJSON();
+
   const assistantMsg: Message = {
     id: uuidv4(),
     role: "assistant",
-    content: assistantText,
+    parts: assistantParts,
     timestamp: Date.now(),
-    toolCalls: assistantToolCalls.length > 0 ? assistantToolCalls : undefined,
-    uiSurfaces: assistantUiSurfaces.length > 0 ? assistantUiSurfaces : undefined,
-    ...(profile ? { profileId: profile.id, profileName: profile.name } : {}),
+    uiSurfaces:
+      assistantUiSurfaces.length > 0 ? assistantUiSurfaces : undefined,
+    timingSpans,
+    ...(agent
+      ? { profileId: agent.id, profileName: agent.name }
+      : {}),
   };
-  conv.messages.push(assistantMsg);
+  storedMessages.push(assistantMsg);
+
+  conv.messages = storedMessages;
   conv.updatedAt = Date.now();
 
-  // Auto-generate title after first exchange
-  if (conv.messages.length === 2 && conv.title === "New conversation") {
-    try {
-      const titleConv = await client.messages.create({
-        model: effectiveModel,
-        max_tokens: 50,
-        system: "Generate a brief title (3-6 words) for this conversation. Respond with just the title, no quotes or punctuation.",
-        messages: [{ role: "user", content: userMessage }],
-      });
-      const titleBlock = titleConv.content[0];
-      if (titleBlock.type === "text" && titleBlock.text.trim()) {
-        conv.title = titleBlock.text.trim().slice(0, 100);
-        sse.writeEvent("title_update", { title: conv.title });
-      }
-    } catch {
-      // Title generation is best-effort
-    }
-  }
-
   saveConversation(conv);
-  sse.writeEvent("turn_end", { stop_reason: "end_turn" });
+
+  // Emit timing data to frontend
+  sse.writeEvent("timing", { spans: timingSpans });
+
+  sse.writeEvent("turn_end", { stop_reason: "end_turn", conversationId });
   sse.close();
-}
-
-function buildApiMessages(
-  messages: Message[]
-): Anthropic.MessageParam[] {
-  const result: Anthropic.MessageParam[] = [];
-  for (const msg of messages) {
-    if (msg.role === "user") {
-      result.push({ role: "user", content: msg.content });
-    } else {
-      // For assistant messages, reconstruct content blocks
-      const blocks: Anthropic.ContentBlockParam[] = [];
-      if (msg.content) {
-        blocks.push({ type: "text", text: msg.content });
-      }
-      if (msg.toolCalls) {
-        for (const tc of msg.toolCalls) {
-          blocks.push({
-            type: "tool_use",
-            id: tc.id,
-            name: tc.name,
-            input: tc.args,
-          });
-        }
-      }
-      if (blocks.length > 0) {
-        result.push({ role: "assistant", content: blocks });
-      }
-
-      // Add tool results as user messages
-      if (msg.toolCalls) {
-        const toolResults: Anthropic.ToolResultBlockParam[] = msg.toolCalls.map((tc) => ({
-          type: "tool_result" as const,
-          tool_use_id: tc.id,
-          content: tc.result || "",
-          is_error: tc.isError,
-        }));
-        result.push({ role: "user", content: toolResults });
-      }
-    }
-  }
-  return result;
 }

@@ -18,15 +18,27 @@ export interface SseEvent {
   data: unknown;
 }
 
+export interface WireMessage {
+  role: "user" | "assistant";
+  content: string;
+  toolCalls?: {
+    id: string;
+    name: string;
+    args: Record<string, unknown>;
+    result?: string;
+    isError?: boolean;
+  }[];
+}
+
 export async function* streamChat(
   conversationId: string | null,
-  message: string,
-  profileId?: string | null
+  messages: WireMessage[],
+  agentId?: string | null
 ): AsyncGenerator<SseEvent> {
   const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ conversationId, message, profileId: profileId || undefined }),
+    body: JSON.stringify({ conversationId, messages, agentId: agentId || undefined }),
   });
 
   if (!res.ok || !res.body) {
@@ -63,17 +75,7 @@ export async function* streamChat(
   }
 }
 
-export async function respondToUiSurface(
-  toolUseId: string,
-  action: string,
-  content: unknown
-): Promise<void> {
-  await fetch("/api/chat/respond", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tool_use_id: toolUseId, action, content }),
-  });
-}
+// ── Types ──
 
 export interface ConversationMeta {
   id: string;
@@ -83,33 +85,41 @@ export interface ConversationMeta {
   messageCount: number;
 }
 
+export interface RepositoryMessage {
+  message: unknown;
+  parentId: string | null;
+}
+
 export interface ConversationFull {
   id: string;
   title: string;
   createdAt: number;
   updatedAt: number;
   messages: Message[];
+  repository?: {
+    messages: RepositoryMessage[];
+  };
 }
+
+export type MessagePart =
+  | { type: "text"; text: string }
+  | { type: "tool-call"; id: string; name: string; args: Record<string, unknown>; result?: string; isError?: boolean };
 
 export interface Message {
   id: string;
   role: "user" | "assistant";
-  content: string;
+  parts: MessagePart[];
   timestamp: number;
-  toolCalls?: ToolCallInfo[];
   uiSurfaces?: UiSurfaceInfo[];
   profileId?: string;
   profileName?: string;
 }
 
-export interface AgentProfile {
-  id: string;
+export interface UiSurfaceInfo {
+  toolUseId: string;
   name: string;
-  model: string;
-  systemPrompt: string;
-  avatar?: string;
-  createdAt: number;
-  updatedAt: number;
+  input: Record<string, unknown>;
+  response?: unknown;
 }
 
 export interface ModelInfo {
@@ -132,20 +142,77 @@ export interface AgentSettingsPublic {
   max_tool_rounds: number;
 }
 
-export interface ToolCallInfo {
+// ── Provider types ──
+
+export type ProviderType = "ollama" | "anthropic" | "bedrock" | "openai-compatible";
+
+export interface ProviderPublic {
   id: string;
   name: string;
-  args: Record<string, unknown>;
-  result?: string;
-  isError?: boolean;
+  type: ProviderType;
+  endpoint?: string;
+  awsRegion?: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
-export interface UiSurfaceInfo {
-  toolUseId: string;
+export interface ProviderCreateData {
   name: string;
-  input: Record<string, unknown>;
-  response?: unknown;
+  type: ProviderType;
+  endpoint?: string;
+  apiKey?: string;
+  awsRegion?: string;
+  awsAccessKeyId?: string;
+  awsSecretAccessKey?: string;
+  awsSessionToken?: string;
 }
+
+// ── Agent types ──
+
+export interface ToolFilter {
+  mode: "allow" | "deny";
+  tools: string[];
+}
+
+export interface Agent {
+  id: string;
+  name: string;
+  providerId: string;
+  model: string;
+  systemPrompt: string;
+  temperature?: number;
+  maxTokens?: number;
+  topP?: number;
+  toolFilter?: ToolFilter;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** @deprecated Use Agent instead */
+export interface AgentProfile {
+  id: string;
+  name: string;
+  model: string;
+  systemPrompt: string;
+  avatar?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+// ── Tool settings types ──
+
+export interface ToolSettings {
+  hiddenToolPatterns: string[];
+  globalToolFilter?: ToolFilter;
+}
+
+export interface AvailableTool {
+  name: string;
+  description: string;
+  source: string;
+}
+
+// ── Conversations ──
 
 export async function fetchConversations(): Promise<ConversationMeta[]> {
   const res = await fetch("/api/conversations");
@@ -168,6 +235,18 @@ export async function deleteConversation(id: string): Promise<void> {
   await fetch(`/api/conversations/${id}`, { method: "DELETE" });
 }
 
+export async function appendRepositoryMessage(
+  convId: string,
+  message: unknown,
+  parentId: string | null,
+): Promise<void> {
+  await fetch(`/api/conversations/${convId}/messages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, parentId }),
+  });
+}
+
 export async function renameConversation(id: string, title: string): Promise<void> {
   await fetch(`/api/conversations/${id}`, {
     method: "PATCH",
@@ -176,21 +255,16 @@ export async function renameConversation(id: string, title: string): Promise<voi
   });
 }
 
-// --- Profiles ---
+// ── Providers ──
 
-export async function fetchProfiles(): Promise<AgentProfile[]> {
-  const res = await fetch("/api/profiles");
+export async function fetchProviders(): Promise<ProviderPublic[]> {
+  const res = await fetch("/api/providers");
   if (!res.ok) return [];
   return res.json();
 }
 
-export async function createProfile(data: {
-  name: string;
-  model: string;
-  systemPrompt: string;
-  avatar?: string;
-}): Promise<AgentProfile> {
-  const res = await fetch("/api/profiles", {
+export async function createProviderApi(data: ProviderCreateData): Promise<ProviderPublic> {
+  const res = await fetch("/api/providers", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
@@ -198,11 +272,11 @@ export async function createProfile(data: {
   return res.json();
 }
 
-export async function updateProfile(
+export async function updateProviderApi(
   id: string,
-  data: Partial<Pick<AgentProfile, "name" | "model" | "systemPrompt" | "avatar">>
-): Promise<AgentProfile> {
-  const res = await fetch(`/api/profiles/${id}`, {
+  data: Partial<ProviderCreateData>,
+): Promise<ProviderPublic> {
+  const res = await fetch(`/api/providers/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
@@ -210,24 +284,113 @@ export async function updateProfile(
   return res.json();
 }
 
-export async function deleteProfile(id: string): Promise<void> {
-  await fetch(`/api/profiles/${id}`, { method: "DELETE" });
+export async function deleteProviderApi(id: string): Promise<void> {
+  await fetch(`/api/providers/${id}`, { method: "DELETE" });
 }
 
-export async function getActiveProfile(): Promise<{ profileId: string | null }> {
-  const res = await fetch("/api/profiles/active");
+export async function probeProviderApi(id: string): Promise<EndpointStatus> {
+  const res = await fetch(`/api/providers/${id}/probe`, { method: "POST" });
   return res.json();
 }
 
-export async function setActiveProfile(profileId: string | null): Promise<void> {
-  await fetch("/api/profiles/active", {
+export async function probeProviderDataApi(data: ProviderCreateData): Promise<EndpointStatus> {
+  const res = await fetch("/api/providers/probe", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+// ── Agents ──
+
+export async function fetchAgents(): Promise<Agent[]> {
+  const res = await fetch("/api/agents");
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function createAgentApi(data: {
+  name: string;
+  providerId: string;
+  model: string;
+  systemPrompt: string;
+  temperature?: number;
+  maxTokens?: number;
+  topP?: number;
+  toolFilter?: ToolFilter;
+}): Promise<Agent> {
+  const res = await fetch("/api/agents", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+export async function updateAgentApi(
+  id: string,
+  data: Partial<{
+    name: string;
+    providerId: string;
+    model: string;
+    systemPrompt: string;
+    temperature: number;
+    maxTokens: number;
+    topP: number;
+    toolFilter: ToolFilter;
+  }>,
+): Promise<Agent> {
+  const res = await fetch(`/api/agents/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ profileId }),
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+export async function deleteAgentApi(id: string): Promise<void> {
+  await fetch(`/api/agents/${id}`, { method: "DELETE" });
+}
+
+export async function getActiveAgent(): Promise<{ agentId: string | null }> {
+  const res = await fetch("/api/agents/active");
+  return res.json();
+}
+
+export async function setActiveAgent(agentId: string | null): Promise<void> {
+  await fetch("/api/agents/active", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agentId }),
   });
 }
 
-// --- Discovery ---
+// ── Tool settings ──
+
+export async function fetchToolSettings(): Promise<ToolSettings> {
+  const res = await fetch("/api/tool-settings");
+  return res.json();
+}
+
+export async function updateToolSettingsApi(
+  updates: Partial<ToolSettings>,
+): Promise<ToolSettings> {
+  const res = await fetch("/api/tool-settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
+  });
+  return res.json();
+}
+
+export async function fetchAvailableTools(): Promise<AvailableTool[]> {
+  const res = await fetch("/api/tools");
+  if (!res.ok) return [];
+  return res.json();
+}
+
+// ── Discovery (legacy) ──
 
 export async function discoverModels(
   endpoint?: string,
@@ -241,7 +404,7 @@ export async function discoverModels(
   return res.json();
 }
 
-// --- Settings ---
+// ── Settings (legacy) ──
 
 export async function fetchSettings(): Promise<AgentSettingsPublic> {
   const res = await fetch("/api/settings");
@@ -253,5 +416,19 @@ export async function saveSettings(updates: Partial<AgentSettingsPublic>): Promi
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(updates),
+  });
+}
+
+// ── Tool Result ──
+
+export async function postToolResult(
+  toolUseId: string,
+  content: string,
+  isError: boolean,
+): Promise<void> {
+  await fetch("/api/tool-result", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tool_use_id: toolUseId, content, is_error: isError }),
   });
 }

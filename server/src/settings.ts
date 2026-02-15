@@ -32,7 +32,7 @@ export async function getSettings(): Promise<AgentSettings> {
 }
 
 export async function updateSettings(
-  updates: Partial<Omit<AgentSettings, "max_tool_rounds">>
+  updates: Partial<AgentSettings>,
 ): Promise<void> {
   const token = await getAccessToken();
   const current = await getSettings();

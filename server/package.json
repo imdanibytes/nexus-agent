@@ -7,7 +7,10 @@
     "dev": "tsc --watch"
   },
   "dependencies": {
+    "@anthropic-ai/bedrock-sdk": "^0.26.3",
     "@anthropic-ai/sdk": "^0.39.0",
+    "@aws-sdk/client-bedrock": "^3.990.0",
+    "@aws-sdk/credential-providers": "^3.990.0",
     "uuid": "^11.1.0"
   },
   "devDependencies": {

@@ -22,7 +22,7 @@ COPY --from=build /app/deployed/dist/ ./dist/
 COPY --from=build /app/deployed/node_modules/ ./node_modules/
 COPY --from=build /app/deployed/package.json ./
 COPY --from=build /app/ui/dist/ ./public/
-RUN mkdir -p /data/conversations /data/profiles
+RUN mkdir -p /data/conversations /data/profiles /data/agents /data/providers
 EXPOSE 80
 VOLUME ["/data"]
 CMD ["node", "dist/index.js"]

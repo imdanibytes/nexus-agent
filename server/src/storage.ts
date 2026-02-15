@@ -1,6 +1,30 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Conversation, ConversationMeta } from "./types.js";
+import type { Conversation, ConversationMeta, Message, MessagePart } from "./types.js";
+
+/** Migrate a message from old format (content + toolCalls) to new (parts). */
+function migrateMessage(raw: any): Message {
+  if (raw.parts) return raw as Message;
+  const parts: MessagePart[] = [];
+  if (raw.toolCalls) {
+    for (const tc of raw.toolCalls) {
+      parts.push({ type: "tool-call", id: tc.id, name: tc.name, args: tc.args, result: tc.result, isError: tc.isError });
+    }
+  }
+  if (raw.content) {
+    parts.push({ type: "text", text: raw.content });
+  }
+  return {
+    id: raw.id,
+    role: raw.role,
+    parts,
+    timestamp: raw.timestamp,
+    uiSurfaces: raw.uiSurfaces,
+    profileId: raw.profileId,
+    profileName: raw.profileName,
+    timingSpans: raw.timingSpans,
+  };
+}
 
 const DATA_DIR = "/data/conversations";
 const INDEX_PATH = path.join(DATA_DIR, "index.json");
@@ -36,7 +60,9 @@ export function getConversation(id: string): Conversation | null {
   const filePath = path.join(DATA_DIR, `conv_${id}.json`);
   if (!fs.existsSync(filePath)) return null;
   try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const conv = JSON.parse(fs.readFileSync(filePath, "utf8")) as Conversation;
+    conv.messages = conv.messages.map(migrateMessage);
+    return conv;
   } catch {
     return null;
   }
@@ -85,6 +111,20 @@ export function updateConversationTitle(id: string, title: string): boolean {
   const conv = getConversation(id);
   if (!conv) return false;
   conv.title = title;
+  conv.updatedAt = Date.now();
+  saveConversation(conv);
+  return true;
+}
+
+export function appendRepositoryMessage(
+  convId: string,
+  message: unknown,
+  parentId: string | null,
+): boolean {
+  const conv = getConversation(convId);
+  if (!conv) return false;
+  if (!conv.repository) conv.repository = { messages: [] };
+  conv.repository.messages.push({ message, parentId });
   conv.updatedAt = Date.now();
   saveConversation(conv);
   return true;

@@ -56,7 +56,7 @@
 :root {
   --radius: var(--radius-button, 8px);
 
-  --background: var(--color-nx-deep, #0C0E12);
+  --background: var(--color-nx-base, #12141A);
   --foreground: var(--color-nx-text, #E8ECF2);
   --card: var(--color-nx-surface, #1A1D25);
   --card-foreground: var(--color-nx-text, #E8ECF2);
@@ -74,6 +74,7 @@
   --border: var(--color-nx-border, #2A2E3A);
   --input: var(--color-nx-border, #2A2E3A);
   --ring: var(--color-nx-accent, #2DD4A8);
+  --shadow-dropdown: 0 4px 16px rgba(0, 0, 0, 0.4);
 }
 
 @layer base {

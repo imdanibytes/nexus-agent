@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { v4 as uuidv4 } from "uuid";
 import { getAccessToken } from "./auth.js";
-import { runAgentTurn, resolveUiResponse } from "./agent.js";
+import { runAgentTurn, resolveFrontendToolResult } from "./agent.js";
 import { createSseWriter } from "./streaming.js";
 import {
   listConversations,
@@ -12,18 +12,36 @@ import {
   saveConversation,
   deleteConversation,
   updateConversationTitle,
+  appendRepositoryMessage,
 } from "./storage.js";
 import {
-  listProfiles,
-  getProfile,
-  createProfile,
-  updateProfile,
-  deleteProfile as removeProfile,
-  getActiveProfileId,
-  setActiveProfileId,
-} from "./profiles.js";
-import { probeEndpoint } from "./discovery.js";
+  listAgents,
+  getAgent,
+  createAgent,
+  updateAgent,
+  deleteAgent as removeAgent,
+  getActiveAgentId,
+  setActiveAgentId,
+} from "./agents.js";
+import {
+  listProviders,
+  getProvider,
+  getProviderPublic,
+  createProvider,
+  updateProvider,
+  deleteProvider as removeProvider,
+} from "./providers.js";
+import { getToolSettings, updateToolSettings } from "./tool-settings.js";
+import { addToolEventClient, startToolEventListener } from "./tool-events.js";
+import { probeEndpoint, probeProvider } from "./discovery.js";
 import { getSettings, updateSettings } from "./settings.js";
+import { ToolExecutor } from "./tools/executor.js";
+import { setTitleTool } from "./tools/handlers/local.js";
+import { fetchMcpToolHandlers } from "./tools/handlers/remote.js";
+import {
+  FrontendToolBridge,
+  createClipboardTools,
+} from "./tools/handlers/frontend.js";
 import type { Conversation } from "./types.js";
 
 const PORT = 80;
@@ -93,17 +111,18 @@ const server = http.createServer(async (req, res) => {
     // Chat — start agent turn (SSE stream)
     if (method === "POST" && url === "/api/chat") {
       const body = JSON.parse(await readBody(req));
-      const { conversationId, message, profileId } = body as {
+      const { conversationId, messages, agentId, profileId } = body as {
         conversationId?: string;
-        message: string;
-        profileId?: string;
+        messages: { role: string; content: string; toolCalls?: any[] }[];
+        agentId?: string;
+        profileId?: string; // backward compat
       };
 
       const convId = conversationId || uuidv4();
       const sse = createSseWriter(res);
 
       // Run agent loop (async — streams SSE events as it goes)
-      runAgentTurn(convId, message, sse, profileId).catch((err) => {
+      runAgentTurn(convId, messages, sse, agentId || profileId).catch((err) => {
         console.error("Agent turn error:", err);
         try {
           sse.writeEvent("error", {
@@ -117,85 +136,118 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // Chat respond — user responds to elicitation/A2UI
+    // Chat respond — user responds to elicitation/A2UI (legacy)
     if (method === "POST" && url === "/api/chat/respond") {
       const body = JSON.parse(await readBody(req));
-      const { tool_use_id, action, content } = body as {
+      const { tool_use_id, content } = body as {
         tool_use_id: string;
-        action: string;
         content: unknown;
       };
 
-      const resolved = resolveUiResponse(tool_use_id, action, content);
+      const resolved = resolveFrontendToolResult(
+        tool_use_id,
+        typeof content === "string" ? content : JSON.stringify(content),
+        false,
+      );
       if (resolved) {
         json(res, 200, { ok: true });
       } else {
-        json(res, 404, { error: "No pending UI surface with that ID" });
+        json(res, 404, { error: "No pending tool request with that ID" });
       }
       return;
     }
 
-    // --- Profile routes (order matters: /active before /:id) ---
+    // Tool result — frontend returns execution result for a tool_request
+    if (method === "POST" && url === "/api/tool-result") {
+      const body = JSON.parse(await readBody(req));
+      const { tool_use_id, content, is_error } = body as {
+        tool_use_id: string;
+        content: string;
+        is_error: boolean;
+      };
 
-    // List profiles
-    if (method === "GET" && url === "/api/profiles") {
-      json(res, 200, listProfiles());
+      const resolved = resolveFrontendToolResult(tool_use_id, content, is_error ?? false);
+      if (resolved) {
+        json(res, 200, { ok: true });
+      } else {
+        json(res, 404, { error: "No pending tool request with that ID" });
+      }
       return;
     }
 
-    // Create profile
-    if (method === "POST" && url === "/api/profiles") {
+    // --- Provider routes ---
+
+    if (method === "GET" && url === "/api/providers") {
+      json(res, 200, await listProviders());
+      return;
+    }
+
+    if (method === "POST" && url === "/api/providers") {
       const body = JSON.parse(await readBody(req));
-      const { name, model, systemPrompt, avatar } = body as {
-        name: string;
-        model: string;
-        systemPrompt: string;
-        avatar?: string;
-      };
-      if (!name || !model) {
-        json(res, 400, { error: "name and model are required" });
+      if (!body.name || !body.type) {
+        json(res, 400, { error: "name and type are required" });
         return;
       }
-      const profile = createProfile({ name, model, systemPrompt: systemPrompt || "", avatar });
-      json(res, 201, profile);
+      const provider = await createProvider(body);
+      json(res, 201, provider);
       return;
     }
 
-    // Get active profile ID
-    if (method === "GET" && url === "/api/profiles/active") {
-      json(res, 200, { profileId: getActiveProfileId() });
-      return;
-    }
-
-    // Set active profile ID
-    if (method === "PUT" && url === "/api/profiles/active") {
+    // Probe provider data — optionally merges stored secrets when `id` is provided
+    if (method === "POST" && url === "/api/providers/probe") {
       const body = JSON.parse(await readBody(req));
-      const { profileId } = body as { profileId: string | null };
-      setActiveProfileId(profileId);
-      json(res, 200, { profileId });
+      if (!body.type) {
+        json(res, 400, { error: "type is required" });
+        return;
+      }
+      // If editing an existing provider, fill in missing secrets from storage
+      if (body.id) {
+        const stored = await getProvider(body.id);
+        if (stored) {
+          if (!body.apiKey && stored.apiKey) body.apiKey = stored.apiKey;
+          if (!body.awsAccessKeyId && stored.awsAccessKeyId) body.awsAccessKeyId = stored.awsAccessKeyId;
+          if (!body.awsSecretAccessKey && stored.awsSecretAccessKey) body.awsSecretAccessKey = stored.awsSecretAccessKey;
+          if (!body.awsSessionToken && stored.awsSessionToken) body.awsSessionToken = stored.awsSessionToken;
+        }
+      }
+      const status = await probeProvider(body as import("./types.js").Provider);
+      json(res, 200, status);
       return;
     }
 
-    // Single profile routes
-    const profileMatch = url.match(/^\/api\/profiles\/([a-f0-9-]+)$/);
-    if (profileMatch) {
-      const id = profileMatch[1];
+    // Probe saved provider by ID
+    const probeMatch = url.match(/^\/api\/providers\/([a-f0-9-]+)\/probe$/);
+    if (method === "POST" && probeMatch) {
+      const provider = await getProvider(probeMatch[1]);
+      if (!provider) {
+        json(res, 404, { error: "Provider not found" });
+        return;
+      }
+      const status = await probeProvider(provider);
+      json(res, 200, status);
+      return;
+    }
+
+    // Single provider routes
+    const providerMatch = url.match(/^\/api\/providers\/([a-f0-9-]+)$/);
+    if (providerMatch) {
+      const id = providerMatch[1];
 
       if (method === "GET") {
-        const profile = getProfile(id);
-        if (!profile) {
-          json(res, 404, { error: "Profile not found" });
+        const provider = await getProviderPublic(id);
+        if (!provider) {
+          json(res, 404, { error: "Provider not found" });
           return;
         }
-        json(res, 200, profile);
+        json(res, 200, provider);
         return;
       }
 
       if (method === "PUT") {
         const body = JSON.parse(await readBody(req));
-        const updated = updateProfile(id, body);
+        const updated = await updateProvider(id, body);
         if (!updated) {
-          json(res, 404, { error: "Profile not found" });
+          json(res, 404, { error: "Provider not found" });
           return;
         }
         json(res, 200, updated);
@@ -203,10 +255,110 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (method === "DELETE") {
-        const deleted = removeProfile(id);
+        const deleted = await removeProvider(id);
         json(res, deleted ? 200 : 404, { ok: deleted });
         return;
       }
+    }
+
+    // --- Agent routes ---
+
+    if (method === "GET" && url === "/api/agents") {
+      json(res, 200, listAgents());
+      return;
+    }
+
+    if (method === "POST" && url === "/api/agents") {
+      const body = JSON.parse(await readBody(req));
+      if (!body.name || !body.providerId || !body.model) {
+        json(res, 400, { error: "name, providerId, and model are required" });
+        return;
+      }
+      const agent = createAgent(body);
+      json(res, 201, agent);
+      return;
+    }
+
+    if (method === "GET" && url === "/api/agents/active") {
+      json(res, 200, { agentId: getActiveAgentId() });
+      return;
+    }
+
+    if (method === "PUT" && url === "/api/agents/active") {
+      const body = JSON.parse(await readBody(req));
+      const { agentId } = body as { agentId: string | null };
+      setActiveAgentId(agentId);
+      json(res, 200, { agentId });
+      return;
+    }
+
+    const agentMatch = url.match(/^\/api\/agents\/([a-f0-9-]+)$/);
+    if (agentMatch) {
+      const id = agentMatch[1];
+
+      if (method === "GET") {
+        const agent = getAgent(id);
+        if (!agent) {
+          json(res, 404, { error: "Agent not found" });
+          return;
+        }
+        json(res, 200, agent);
+        return;
+      }
+
+      if (method === "PUT") {
+        const body = JSON.parse(await readBody(req));
+        const updated = updateAgent(id, body);
+        if (!updated) {
+          json(res, 404, { error: "Agent not found" });
+          return;
+        }
+        json(res, 200, updated);
+        return;
+      }
+
+      if (method === "DELETE") {
+        const deleted = removeAgent(id);
+        json(res, deleted ? 200 : 404, { ok: deleted });
+        return;
+      }
+    }
+
+    // --- Tool settings ---
+
+    if (method === "GET" && url === "/api/tool-settings") {
+      json(res, 200, await getToolSettings());
+      return;
+    }
+
+    if (method === "PUT" && url === "/api/tool-settings") {
+      const body = JSON.parse(await readBody(req));
+      const updated = await updateToolSettings(body);
+      json(res, 200, updated);
+      return;
+    }
+
+    // --- Available tools list ---
+
+    if (method === "GET" && url === "/api/tools") {
+      const executor = new ToolExecutor();
+      executor.register(setTitleTool);
+      executor.registerAll(createClipboardTools(new FrontendToolBridge()));
+      executor.registerAll(await fetchMcpToolHandlers());
+      const tools = executor.definitions().map((d) => ({
+        name: d.name,
+        description: d.description,
+        source: d.name.startsWith("_nexus_") ? "built-in" : "mcp",
+      }));
+      json(res, 200, tools);
+      return;
+    }
+
+    // --- Tool event stream (SSE) ---
+
+    if (method === "GET" && url === "/api/tool-events") {
+      addToolEventClient(res);
+      return;
     }
 
     // --- Discovery ---
@@ -215,7 +367,6 @@ const server = http.createServer(async (req, res) => {
       const body = JSON.parse(await readBody(req));
       let { endpoint, apiKey } = body as { endpoint?: string; apiKey?: string };
 
-      // If no endpoint provided, use current settings
       if (!endpoint) {
         const settings = await getSettings();
         endpoint = settings.llm_endpoint;
@@ -227,11 +378,10 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // --- Settings (read-only, for frontend) ---
+    // --- Settings (legacy, for backward compat) ---
 
     if (method === "GET" && url === "/api/settings") {
       const settings = await getSettings();
-      // Don't expose the API key to the frontend
       json(res, 200, {
         llm_endpoint: settings.llm_endpoint,
         llm_model: settings.llm_model,
@@ -241,7 +391,6 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // Update settings
     if (method === "PUT" && url === "/api/settings") {
       const body = JSON.parse(await readBody(req));
       await updateSettings(body);
@@ -266,6 +415,17 @@ const server = http.createServer(async (req, res) => {
       };
       saveConversation(conv);
       json(res, 201, { id: conv.id, title: conv.title });
+      return;
+    }
+
+    // Append message to conversation repository (tree-structured persistence)
+    const convMsgMatch = url.match(/^\/api\/conversations\/([a-f0-9-]+)\/messages$/);
+    if (method === "POST" && convMsgMatch) {
+      const id = convMsgMatch[1];
+      const body = JSON.parse(await readBody(req));
+      const { message, parentId } = body as { message: unknown; parentId: string | null };
+      const ok = appendRepositoryMessage(id, message, parentId);
+      json(res, ok ? 200 : 404, { ok });
       return;
     }
 
@@ -340,4 +500,5 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`Nexus Agent server running on port ${PORT}`);
+  startToolEventListener();
 });

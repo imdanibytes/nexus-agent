@@ -6,6 +6,52 @@ export interface AgentSettings {
   max_tool_rounds: number;
 }
 
+export type ProviderType = "ollama" | "anthropic" | "bedrock" | "openai-compatible";
+
+export interface Provider {
+  id: string;
+  name: string;
+  type: ProviderType;
+  endpoint?: string;
+  apiKey?: string;
+  // Bedrock-specific
+  awsRegion?: string;
+  awsAccessKeyId?: string;
+  awsSecretAccessKey?: string;
+  awsSessionToken?: string;
+  // State
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** Provider without secrets — safe for frontend consumption */
+export type ProviderPublic = Omit<Provider, "apiKey" | "awsAccessKeyId" | "awsSecretAccessKey" | "awsSessionToken">;
+
+export interface ToolFilter {
+  mode: "allow" | "deny";
+  tools: string[];
+}
+
+export interface Agent {
+  id: string;
+  name: string;
+  providerId: string;
+  model: string;
+  systemPrompt: string;
+  temperature?: number;
+  maxTokens?: number;
+  topP?: number;
+  toolFilter?: ToolFilter;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ToolSettings {
+  hiddenToolPatterns: string[];
+  globalToolFilter?: ToolFilter;
+}
+
+/** @deprecated Use Agent instead */
 export interface AgentProfile {
   id: string;
   name: string;
@@ -24,23 +70,19 @@ export interface ConversationMeta {
   messageCount: number;
 }
 
+export type MessagePart =
+  | { type: "text"; text: string }
+  | { type: "tool-call"; id: string; name: string; args: Record<string, unknown>; result?: string; isError?: boolean };
+
 export interface Message {
   id: string;
   role: "user" | "assistant";
-  content: string;
+  parts: MessagePart[];
   timestamp: number;
-  toolCalls?: ToolCallInfo[];
   uiSurfaces?: UiSurfaceInfo[];
   profileId?: string;
   profileName?: string;
-}
-
-export interface ToolCallInfo {
-  id: string;
-  name: string;
-  args: Record<string, unknown>;
-  result?: string;
-  isError?: boolean;
+  timingSpans?: import("./timing.js").Span[];
 }
 
 export interface UiSurfaceInfo {
@@ -50,12 +92,21 @@ export interface UiSurfaceInfo {
   response?: unknown;
 }
 
+export interface RepositoryMessage {
+  message: unknown;
+  parentId: string | null;
+}
+
 export interface Conversation {
   id: string;
   title: string;
   createdAt: number;
   updatedAt: number;
   messages: Message[];
+  /** Tree-structured message repository for branch persistence */
+  repository?: {
+    messages: RepositoryMessage[];
+  };
 }
 
 export interface McpTool {
