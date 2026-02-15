@@ -13,11 +13,6 @@ export async function getConfig(): Promise<Config> {
   return cachedConfig;
 }
 
-export interface SseEvent {
-  event: string;
-  data: unknown;
-}
-
 export interface WireMessage {
   role: "user" | "assistant";
   content: string;
@@ -28,51 +23,6 @@ export interface WireMessage {
     result?: string;
     isError?: boolean;
   }[];
-}
-
-export async function* streamChat(
-  conversationId: string | null,
-  messages: WireMessage[],
-  agentId?: string | null
-): AsyncGenerator<SseEvent> {
-  const res = await fetch("/api/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ conversationId, messages, agentId: agentId || undefined }),
-  });
-
-  if (!res.ok || !res.body) {
-    throw new Error(`Chat request failed: ${res.status}`);
-  }
-
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-
-    let currentEvent = "";
-
-    for (const line of lines) {
-      if (line.startsWith("event: ")) {
-        currentEvent = line.slice(7).trim();
-      } else if (line.startsWith("data: ")) {
-        const data = line.slice(6);
-        try {
-          yield { event: currentEvent || "message", data: JSON.parse(data) };
-        } catch {
-          yield { event: currentEvent || "message", data };
-        }
-        currentEvent = "";
-      }
-    }
-  }
 }
 
 // ── Types ──
@@ -419,16 +369,3 @@ export async function saveSettings(updates: Partial<AgentSettingsPublic>): Promi
   });
 }
 
-// ── Tool Result ──
-
-export async function postToolResult(
-  toolUseId: string,
-  content: string,
-  isError: boolean,
-): Promise<void> {
-  await fetch("/api/tool-result", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tool_use_id: toolUseId, content, is_error: isError }),
-  });
-}

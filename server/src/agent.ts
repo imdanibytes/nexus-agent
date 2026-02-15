@@ -1,5 +1,4 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { v4 as uuidv4 } from "uuid";
 import { getSettings } from "./settings.js";
 import { getConversation, saveConversation } from "./storage.js";
 import { getAgent, getActiveAgentId } from "./agents.js";
@@ -21,15 +20,13 @@ import { conversationContextProvider } from "./system-message/providers/conversa
 import { SpanCollector } from "./timing.js";
 import type {
   Conversation,
-  Message,
   MessagePart,
   SseWriter,
-  UiSurfaceInfo,
 } from "./types.js";
 import type { ToolContext } from "./tools/types.js";
 
 /** Wire format from the frontend — matches active branch messages */
-interface WireMessage {
+export interface WireMessage {
   role: string;
   content: string;
   toolCalls?: {
@@ -40,6 +37,9 @@ interface WireMessage {
     isError?: boolean;
   }[];
 }
+
+// Active turns — prevents concurrent turns on the same conversation
+const activeTurns = new Set<string>();
 
 // Shared frontend bridge — lives for the process lifetime
 const frontendBridge = new FrontendToolBridge();
@@ -161,6 +161,28 @@ export async function runAgentTurn(
   wireMessages: WireMessage[],
   sse: SseWriter,
   agentId?: string,
+  externalAbort?: AbortSignal,
+): Promise<void> {
+  if (activeTurns.has(conversationId)) {
+    throw new Error(
+      `Conversation ${conversationId} already has an active turn in progress`,
+    );
+  }
+  activeTurns.add(conversationId);
+
+  try {
+    await _runAgentTurnInner(conversationId, wireMessages, sse, agentId, externalAbort);
+  } finally {
+    activeTurns.delete(conversationId);
+  }
+}
+
+async function _runAgentTurnInner(
+  conversationId: string,
+  wireMessages: WireMessage[],
+  sse: SseWriter,
+  agentId?: string,
+  externalAbort?: AbortSignal,
 ): Promise<void> {
   const timing = new SpanCollector();
   const turnSpan = timing.span("turn");
@@ -243,8 +265,15 @@ export async function runAgentTurn(
 
   setupSpan.end();
 
-  // Abort controller for frontend tool bridge timeout cleanup
+  // Abort controller for frontend tool bridge timeout cleanup + external abort
   const abortController = new AbortController();
+  if (externalAbort) {
+    if (externalAbort.aborted) {
+      abortController.abort();
+    } else {
+      externalAbort.addEventListener("abort", () => abortController.abort(), { once: true });
+    }
+  }
 
   // Build tool context
   const toolCtx: ToolContext = {
@@ -292,9 +321,10 @@ export async function runAgentTurn(
   let round = 0;
   const maxRounds = settings.max_tool_rounds;
   const assistantParts: MessagePart[] = [];
-  const assistantUiSurfaces: UiSurfaceInfo[] = [];
 
   while (round < maxRounds) {
+    if (abortController.signal.aborted) break;
+
     round++;
     const roundStartIdx = assistantParts.length;
     const roundSpan = turnSpan.span(`round:${round}`, { round });
@@ -497,60 +527,20 @@ export async function runAgentTurn(
   // Clean up abort controller
   abortController.abort();
 
-  // Save conversation for persistence (page reload recovery)
-  const storedMessages: Message[] = wireMessages.map((wm) => {
-    if (wm.role === "user") {
-      return {
-        id: uuidv4(),
-        role: "user" as const,
-        parts: [{ type: "text" as const, text: wm.content }],
-        timestamp: Date.now(),
-      };
-    }
-    // Assistant: reconstruct parts from wire format (text + tool calls)
-    const parts: MessagePart[] = [];
-    if (wm.content) {
-      parts.push({ type: "text", text: wm.content });
-    }
-    if (wm.toolCalls) {
-      for (const tc of wm.toolCalls) {
-        parts.push({ type: "tool-call", id: tc.id, name: tc.name, args: tc.args, result: tc.result, isError: tc.isError });
-      }
-    }
-    return {
-      id: uuidv4(),
-      role: "assistant" as const,
-      parts,
-      timestamp: Date.now(),
-    };
-  });
-
-  // Finalize timing before saving
+  // Finalize timing
   turnSpan.end();
   const timingSpans = timing.toJSON();
 
-  const assistantMsg: Message = {
-    id: uuidv4(),
-    role: "assistant",
-    parts: assistantParts,
-    timestamp: Date.now(),
-    uiSurfaces:
-      assistantUiSurfaces.length > 0 ? assistantUiSurfaces : undefined,
-    timingSpans,
-    ...(agent
-      ? { profileId: agent.id, profileName: agent.name }
-      : {}),
-  };
-  storedMessages.push(assistantMsg);
-
-  conv.messages = storedMessages;
-  conv.updatedAt = Date.now();
-
-  saveConversation(conv);
+  // Update conversation metadata only — message persistence is handled by
+  // the frontend's repository (tree-structured append via historyAdapter).
+  const freshConv = getConversation(conversationId) || conv;
+  freshConv.updatedAt = Date.now();
+  saveConversation(freshConv);
 
   // Emit timing data to frontend
   sse.writeEvent("timing", { spans: timingSpans });
 
-  sse.writeEvent("turn_end", { stop_reason: "end_turn", conversationId });
+  const stopReason = abortController.signal.aborted ? "abort" : "end_turn";
+  sse.writeEvent("turn_end", { stop_reason: stopReason, conversationId });
   sse.close();
 }

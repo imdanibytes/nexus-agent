@@ -6,9 +6,12 @@ import type {
 } from "@assistant-ui/react";
 import type { ThreadAssistantMessagePart } from "@assistant-ui/react";
 import type { WireMessage } from "@/api/client.js";
-import { streamChat, postToolResult, fetchToolSettings } from "@/api/client.js";
+import { fetchToolSettings } from "@/api/client.js";
 import { useChatStore } from "@/stores/chatStore.js";
 import { threadState } from "./thread-list-adapter.js";
+import { wsClient } from "./ws-client.js";
+import { turnRouter } from "./turn-router.js";
+import type { WsMessage } from "./ws-client.js";
 
 /** Cache tool settings for hidden patterns (refreshed per adapter creation) */
 let cachedHiddenPatterns: string[] = ["_nexus_*"];
@@ -65,18 +68,42 @@ export function createNexusAdapter(
   onTitleUpdate: (id: string, title: string) => void,
 ): ChatModelAdapter {
   return {
-    async *run({ messages, abortSignal }: ChatModelRunOptions): AsyncGenerator<ChatModelRunResult, void> {
-      const agentId = useChatStore.getState().activeAgentId;
-      const conversationId = threadState.activeConversationId;
+    async *run({ messages, abortSignal, runConfig }: ChatModelRunOptions): AsyncGenerator<ChatModelRunResult, void> {
+      const mcpConvId = (runConfig?.custom as Record<string, unknown> | undefined)?.mcpConversationId as string | undefined;
+      const conversationId = mcpConvId || threadState.activeConversationId;
 
       // Refresh hidden patterns
       fetchToolSettings()
         .then((s) => { cachedHiddenPatterns = s.hiddenToolPatterns; })
         .catch(() => {});
 
-      // Send the full active-branch history to the server
-      const wireMessages = toWireMessages(messages);
+      // For user-initiated turns, send the start_turn message over WebSocket
+      if (!mcpConvId) {
+        const agentId = useChatStore.getState().activeAgentId;
+        const wireMessages = toWireMessages(messages);
 
+        wsClient.send({
+          type: "start_turn",
+          conversationId: conversationId || undefined,
+          data: {
+            messages: wireMessages,
+            agentId: agentId || undefined,
+          } as unknown as Record<string, unknown>,
+        });
+      }
+
+      // Both user and MCP turns consume from the same TurnRouter stream.
+      // For MCP turns, events are already being routed there by App.tsx.
+      // For user turns, the server will start sending turn events after start_turn.
+      if (!conversationId) {
+        yield {
+          content: [{ type: "text" as const, text: "No active conversation." }],
+          status: { type: "incomplete" as const, reason: "error" as const, error: "No conversation ID" as any },
+        };
+        return;
+      }
+
+      const stream = turnRouter.createTurnStream(conversationId);
       const parts: ThreadAssistantMessagePart[] = [];
 
       function buildContent(): ThreadAssistantMessagePart[] {
@@ -88,13 +115,27 @@ export function createNexusAdapter(
         });
       }
 
+      // Handle abort
+      const onAbort = () => {
+        wsClient.send({
+          type: "abort_turn",
+          conversationId,
+        });
+        turnRouter.abort(conversationId);
+      };
+      if (abortSignal.aborted) {
+        onAbort();
+        return;
+      }
+      abortSignal.addEventListener("abort", onAbort, { once: true });
+
       try {
-        for await (const event of streamChat(conversationId, wireMessages, agentId)) {
+        for await (const msg of stream) {
           if (abortSignal.aborted) break;
 
-          const data = event.data as Record<string, unknown>;
+          const data = msg.data || {};
 
-          switch (event.event) {
+          switch (msg.type) {
             case "text_start": {
               parts.push({ type: "text" as const, text: "" });
               break;
@@ -102,7 +143,6 @@ export function createNexusAdapter(
 
             case "text_delta": {
               const chunk = (data.text as string) || "";
-              // Append to the most recent text part, or create one if none exists
               let found = false;
               for (let i = parts.length - 1; i >= 0; i--) {
                 if (parts[i].type === "text") {
@@ -131,7 +171,6 @@ export function createNexusAdapter(
             }
 
             case "tool_input_delta": {
-              // Update the most recent tool-call's argsText with streaming JSON
               for (let i = parts.length - 1; i >= 0; i--) {
                 const p = parts[i];
                 if (p.type === "tool-call") {
@@ -182,7 +221,6 @@ export function createNexusAdapter(
               const toolName = data.name as string;
               const input = (data.input ?? {}) as Record<string, unknown>;
 
-              // Show the tool call in the UI
               parts.push({
                 type: "tool-call" as const,
                 toolCallId: toolUseId,
@@ -192,10 +230,22 @@ export function createNexusAdapter(
               });
               yield { content: buildContent() };
 
-              // Execute locally and POST result back
+              // Execute locally and send result back over WebSocket
               executeFrontendTool(toolName, input)
-                .then(({ content: result, isError }) => postToolResult(toolUseId, result, isError))
-                .catch((err) => postToolResult(toolUseId, String(err), true));
+                .then(({ content: result, isError }) => {
+                  wsClient.send({
+                    type: "tool_result",
+                    conversationId,
+                    data: { toolUseId, content: result, isError },
+                  });
+                })
+                .catch((err) => {
+                  wsClient.send({
+                    type: "tool_result",
+                    conversationId,
+                    data: { toolUseId, content: String(err), isError: true },
+                  });
+                });
               break;
             }
 
@@ -219,11 +269,12 @@ export function createNexusAdapter(
             }
 
             case "turn_end": {
-              // Update the active conversation ID if the server assigned one
               const returnedId = data.conversationId as string | undefined;
               if (returnedId) {
                 threadState.activeConversationId = returnedId;
               }
+              // Turn is done — the stream will end via turnRouter
+              turnRouter.endTurn(conversationId);
               break;
             }
 
@@ -255,6 +306,8 @@ export function createNexusAdapter(
             error: String(err) as any,
           },
         };
+      } finally {
+        abortSignal.removeEventListener("abort", onAbort);
       }
     },
   };

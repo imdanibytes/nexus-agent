@@ -4,8 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { v4 as uuidv4 } from "uuid";
 import { getAccessToken } from "./auth.js";
-import { runAgentTurn, resolveFrontendToolResult } from "./agent.js";
-import { createSseWriter } from "./streaming.js";
+import { resolveFrontendToolResult } from "./agent.js";
 import {
   listConversations,
   getConversation,
@@ -32,7 +31,8 @@ import {
   deleteProvider as removeProvider,
 } from "./providers.js";
 import { getToolSettings, updateToolSettings } from "./tool-settings.js";
-import { addToolEventClient, startToolEventListener } from "./tool-events.js";
+import { startToolEventListener } from "./tool-events.js";
+import { attach as attachWebSocket } from "./ws-handler.js";
 import { probeEndpoint, probeProvider } from "./discovery.js";
 import { getSettings, updateSettings } from "./settings.js";
 import { ToolExecutor } from "./tools/executor.js";
@@ -42,6 +42,7 @@ import {
   FrontendToolBridge,
   createClipboardTools,
 } from "./tools/handlers/frontend.js";
+import { handleMcpCall } from "./mcp-handler.js";
 import type { Conversation } from "./types.js";
 
 const PORT = 80;
@@ -101,6 +102,14 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // MCP tool call handler — Nexus dispatches here
+    if (method === "POST" && url === "/mcp/call") {
+      const body = JSON.parse(await readBody(req));
+      const result = await handleMcpCall(body);
+      json(res, 200, result);
+      return;
+    }
+
     // Config endpoint — frontend gets token + apiUrl
     if (url === "/api/config") {
       const token = await getAccessToken();
@@ -108,35 +117,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // Chat — start agent turn (SSE stream)
-    if (method === "POST" && url === "/api/chat") {
-      const body = JSON.parse(await readBody(req));
-      const { conversationId, messages, agentId, profileId } = body as {
-        conversationId?: string;
-        messages: { role: string; content: string; toolCalls?: any[] }[];
-        agentId?: string;
-        profileId?: string; // backward compat
-      };
-
-      const convId = conversationId || uuidv4();
-      const sse = createSseWriter(res);
-
-      // Run agent loop (async — streams SSE events as it goes)
-      runAgentTurn(convId, messages, sse, agentId || profileId).catch((err) => {
-        console.error("Agent turn error:", err);
-        try {
-          sse.writeEvent("error", {
-            message: err instanceof Error ? err.message : String(err),
-          });
-          sse.close();
-        } catch {
-          // Response may already be closed
-        }
-      });
-      return;
-    }
-
-    // Chat respond — user responds to elicitation/A2UI (legacy)
+    // Legacy chat respond (backward compat — will be removed)
     if (method === "POST" && url === "/api/chat/respond") {
       const body = JSON.parse(await readBody(req));
       const { tool_use_id, content } = body as {
@@ -149,24 +130,6 @@ const server = http.createServer(async (req, res) => {
         typeof content === "string" ? content : JSON.stringify(content),
         false,
       );
-      if (resolved) {
-        json(res, 200, { ok: true });
-      } else {
-        json(res, 404, { error: "No pending tool request with that ID" });
-      }
-      return;
-    }
-
-    // Tool result — frontend returns execution result for a tool_request
-    if (method === "POST" && url === "/api/tool-result") {
-      const body = JSON.parse(await readBody(req));
-      const { tool_use_id, content, is_error } = body as {
-        tool_use_id: string;
-        content: string;
-        is_error: boolean;
-      };
-
-      const resolved = resolveFrontendToolResult(tool_use_id, content, is_error ?? false);
       if (resolved) {
         json(res, 200, { ok: true });
       } else {
@@ -354,13 +317,6 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // --- Tool event stream (SSE) ---
-
-    if (method === "GET" && url === "/api/tool-events") {
-      addToolEventClient(res);
-      return;
-    }
-
     // --- Discovery ---
 
     if (method === "POST" && url === "/api/discover") {
@@ -497,6 +453,8 @@ const server = http.createServer(async (req, res) => {
     });
   }
 });
+
+attachWebSocket(server);
 
 server.listen(PORT, () => {
   console.log(`Nexus Agent server running on port ${PORT}`);

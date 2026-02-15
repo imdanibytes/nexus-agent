@@ -20,7 +20,86 @@
     "endpoint": "/health",
     "interval_secs": 30
   },
-  "mcp": null,
+  "mcp": {
+    "tools": [
+      {
+        "name": "list_agents",
+        "description": "List all configured agents. Returns each agent's id, name, and model.",
+        "permissions": [],
+        "input_schema": {
+          "type": "object",
+          "properties": {}
+        },
+        "requires_approval": false
+      },
+      {
+        "name": "get_agent",
+        "description": "Get full details of a specific agent including its system prompt, provider, and model configuration.",
+        "permissions": [],
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "agent_id": {
+              "type": "string",
+              "description": "The agent ID to retrieve"
+            }
+          },
+          "required": ["agent_id"]
+        },
+        "requires_approval": true
+      },
+      {
+        "name": "list_conversations",
+        "description": "List all conversations. Returns each conversation's id, title, message count, and timestamps.",
+        "permissions": [],
+        "input_schema": {
+          "type": "object",
+          "properties": {}
+        },
+        "requires_approval": true
+      },
+      {
+        "name": "get_conversation",
+        "description": "Get the full message history of a conversation including text content and tool call summaries.",
+        "permissions": [],
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "conversation_id": {
+              "type": "string",
+              "description": "The conversation ID to retrieve"
+            }
+          },
+          "required": ["conversation_id"]
+        },
+        "requires_approval": true
+      },
+      {
+        "name": "send_message",
+        "description": "Send a message to an agent and receive the full response. Creates a new conversation if conversation_id is omitted. The agent will execute tool calls as needed before responding.",
+        "permissions": [],
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string",
+              "description": "The message to send to the agent"
+            },
+            "conversation_id": {
+              "type": "string",
+              "description": "Existing conversation ID to continue. Omit to start a new conversation."
+            },
+            "agent_id": {
+              "type": "string",
+              "description": "Agent ID to use. Omit to use the active agent or conversation default."
+            }
+          },
+          "required": ["message"]
+        },
+        "requires_approval": true
+      }
+    ]
+  },
   "env": {},
   "min_nexus_version": "0.6.2",
   "settings": [

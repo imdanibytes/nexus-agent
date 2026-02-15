@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
   AssistantRuntimeProvider,
   useLocalRuntime,
@@ -6,13 +6,17 @@ import {
   ExportedMessageRepository,
   useThreadListItem,
   useThreadListItemRuntime,
+  type AssistantRuntime,
 } from "@assistant-ui/react";
 import { ThreadList } from "./components/assistant-ui/thread-list.js";
 import { Thread } from "./components/assistant-ui/thread.js";
 import { SettingsPage } from "./components/settings/SettingsPage.js";
 import { useChatStore } from "./stores/chatStore.js";
+import { useMcpTurnStore } from "./stores/mcpTurnStore.js";
 import { createNexusAdapter } from "./runtime/adapter.js";
 import { NexusThreadListAdapter, threadState } from "./runtime/thread-list-adapter.js";
+import { wsClient } from "./runtime/ws-client.js";
+import { turnRouter } from "./runtime/turn-router.js";
 import {
   fetchAgents,
   fetchProviders,
@@ -81,14 +85,35 @@ function useNexusLocalRuntime() {
     [remoteId],
   );
 
-  return useLocalRuntime(adapter, {
+  const localRuntime = useLocalRuntime(adapter, {
     adapters: { history: historyAdapter },
   });
+
+  // Store-driven MCP append: when this thread matches the pending MCP turn,
+  // append the user message. This effect runs AFTER React renders, so the
+  // thread runtime is fully initialized — no timing hacks needed.
+  const pendingConvId = useMcpTurnStore((s) => s.pendingConvId);
+  const pendingUserMessage = useMcpTurnStore((s) => s.pendingUserMessage);
+
+  useEffect(() => {
+    if (!pendingConvId || !pendingUserMessage || pendingConvId !== remoteId) return;
+
+    localRuntime.thread.append({
+      role: "user",
+      content: [{ type: "text", text: pendingUserMessage }],
+      metadata: { custom: { mcpSource: true } },
+      runConfig: { custom: { mcpConversationId: pendingConvId } },
+    });
+    useMcpTurnStore.getState().clearPendingTurn();
+  }, [pendingConvId, pendingUserMessage, remoteId, localRuntime]);
+
+  return localRuntime;
 }
 
 function NexusApp() {
   const threadListAdapter = useMemo(() => new NexusThreadListAdapter(), []);
   const { setAgents, setActiveAgentId, setProviders, setAvailableTools } = useChatStore();
+  const runtimeRef = useRef<AssistantRuntime | null>(null);
 
   // Load agents, providers, and tools on startup
   useEffect(() => {
@@ -98,19 +123,62 @@ function NexusApp() {
     getActiveAgent().then((r) => setActiveAgentId(r.agentId));
   }, [setAgents, setActiveAgentId, setProviders, setAvailableTools]);
 
-  // Subscribe to MCP tool list changes — refetch when tools change
+  // Connect the unified WebSocket client and route events
   useEffect(() => {
-    const es = new EventSource("/api/tool-events");
-    es.addEventListener("tools_changed", () => {
+    wsClient.connect();
+
+    // Non-turn events
+    const unsubTools = wsClient.on("tools_changed", () => {
       fetchAvailableTools().then(setAvailableTools);
     });
-    return () => es.close();
+
+    const unsubMcpPending = wsClient.on("mcp_turn_pending", (msg) => {
+      const d = msg.data!;
+      const convId = d.conversationId as string;
+      const userMessage = d.userMessage as string;
+      useMcpTurnStore.getState().setPendingTurn(convId, userMessage);
+    });
+
+    // Route ALL turn-scoped events to the TurnRouter
+    const turnEvents = [
+      "turn_start", "text_start", "text_delta",
+      "tool_start", "tool_input_delta", "tool_result",
+      "tool_request", "ui_surface", "title_update",
+      "timing", "turn_end", "error",
+    ];
+
+    const unsubTurn = turnEvents.map((type) =>
+      wsClient.on(type, (msg) => turnRouter.route(msg)),
+    );
+
+    return () => {
+      unsubTools();
+      unsubMcpPending();
+      unsubTurn.forEach((unsub) => unsub());
+      wsClient.disconnect();
+    };
   }, [setAvailableTools]);
 
   const runtime = useRemoteThreadListRuntime({
     runtimeHook: useNexusLocalRuntime,
     adapter: threadListAdapter,
   });
+  runtimeRef.current = runtime;
+
+  // Store-driven thread switching: when an MCP turn targets a different
+  // conversation, switch to it. The useNexusLocalRuntime effect handles
+  // appending once the thread is active.
+  const pendingConvId = useMcpTurnStore((s) => s.pendingConvId);
+
+  useEffect(() => {
+    if (!pendingConvId) return;
+    const rt = runtimeRef.current;
+    if (!rt) return;
+
+    if (threadState.activeConversationId !== pendingConvId) {
+      rt.threads.switchToThread(pendingConvId);
+    }
+  }, [pendingConvId]);
 
   const { settingsOpen, setSettingsOpen } = useChatStore();
 

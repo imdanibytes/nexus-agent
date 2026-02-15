@@ -1,36 +1,9 @@
-import type { ServerResponse } from "node:http";
 import { getAccessToken } from "./auth.js";
 import { invalidateMcpToolCache } from "./tools/handlers/remote.js";
+import { broadcast } from "./ws-handler.js";
 
 const NEXUS_HOST_URL =
   process.env.NEXUS_HOST_URL || "http://host.docker.internal:9600";
-
-// ── Frontend SSE subscribers ──
-
-const clients = new Set<ServerResponse>();
-
-export function addToolEventClient(res: ServerResponse): void {
-  res.writeHead(200, {
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache",
-    Connection: "keep-alive",
-    "Access-Control-Allow-Origin": "*",
-  });
-  res.write("event: connected\ndata: {}\n\n");
-  clients.add(res);
-  res.on("close", () => clients.delete(res));
-}
-
-function broadcast(event: string, data: unknown): void {
-  const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-  for (const client of clients) {
-    try {
-      client.write(payload);
-    } catch {
-      clients.delete(client);
-    }
-  }
-}
 
 // ── Nexus Host API SSE subscription ──
 
@@ -49,7 +22,6 @@ async function subscribe(): Promise<void> {
     });
 
     if (!res.ok || !res.body) {
-      // Only log non-auth errors — 401/403 are expected during startup
       if (res.status !== 401 && res.status !== 403) {
         console.error(`MCP events: HTTP ${res.status}`);
       }
@@ -57,7 +29,7 @@ async function subscribe(): Promise<void> {
     }
 
     connected = true;
-    backoffMs = 5_000; // reset on successful connection
+    backoffMs = 5_000;
     console.log("Subscribed to Nexus MCP tool events");
 
     const reader = res.body.getReader();
@@ -80,7 +52,7 @@ async function subscribe(): Promise<void> {
           } else if (line.startsWith("data: ")) {
             if (currentEvent === "tools_changed") {
               invalidateMcpToolCache();
-              broadcast("tools_changed", {});
+              broadcast("tools_changed");
             }
             currentEvent = "";
           }
@@ -108,6 +80,5 @@ function scheduleReconnect(): void {
 
 /** Start listening for MCP tool changes from the Nexus Host API. */
 export function startToolEventListener(): void {
-  // Delay initial subscribe to give the plugin auth flow time to complete
   setTimeout(subscribe, 3_000);
 }

@@ -19,3 +19,21 @@ export function createSseWriter(res: ServerResponse): SseWriter {
     },
   };
 }
+
+export interface CollectedEvent {
+  event: string;
+  data: unknown;
+}
+
+export type CollectingSseWriter = SseWriter & { events: CollectedEvent[] };
+
+export function createCollectingSseWriter(): CollectingSseWriter {
+  const events: CollectedEvent[] = [];
+  return {
+    events,
+    writeEvent(event: string, data: unknown) {
+      events.push({ event, data });
+    },
+    close() {},
+  };
+}
