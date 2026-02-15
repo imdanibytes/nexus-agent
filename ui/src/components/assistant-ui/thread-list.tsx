@@ -13,6 +13,7 @@ import {
   TrashIcon,
 } from "lucide-react";
 import type { FC } from "react";
+import { useChatStore } from "@/stores/chatStore.js";
 
 export const ThreadList: FC = () => {
   return (
@@ -34,6 +35,7 @@ const ThreadListNew: FC = () => {
       <Button
         variant="outline"
         className="aui-thread-list-new h-9 justify-start gap-2 rounded-lg px-3 text-sm hover:bg-muted data-active:bg-muted"
+        onClick={() => useChatStore.getState().setSettingsOpen(false)}
       >
         <PlusIcon className="size-4" />
         New Thread
@@ -62,7 +64,7 @@ const ThreadListSkeleton: FC = () => {
 const ThreadListItem: FC = () => {
   return (
     <ThreadListItemPrimitive.Root className="aui-thread-list-item group flex h-9 items-center gap-2 rounded-lg transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none data-active:bg-muted">
-      <ThreadListItemPrimitive.Trigger className="aui-thread-list-item-trigger flex h-full min-w-0 flex-1 items-center truncate px-3 text-start text-sm">
+      <ThreadListItemPrimitive.Trigger onClick={() => useChatStore.getState().setSettingsOpen(false)} className="aui-thread-list-item-trigger flex h-full min-w-0 flex-1 items-center truncate px-3 text-start text-sm">
         <ThreadListItemPrimitive.Title fallback="New Chat" />
       </ThreadListItemPrimitive.Trigger>
       <ThreadListItemMore />
