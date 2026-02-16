@@ -41,6 +41,9 @@ export function AgentEditor({ agent, providers, onSave, onCancel, onDelete }: Pr
   const [providerId, setProviderId] = useState(agent?.providerId || providers[0]?.id || "");
   const [model, setModel] = useState(agent?.model || "");
   const [systemPrompt, setSystemPrompt] = useState(agent?.systemPrompt || "");
+  const [samplingMode, setSamplingMode] = useState<"temperature" | "top_p">(
+    agent?.topP !== undefined && agent?.temperature === undefined ? "top_p" : "temperature",
+  );
   const [temperature, setTemperature] = useState(agent?.temperature ?? 1);
   const [maxTokens, setMaxTokens] = useState(agent?.maxTokens ?? 8192);
   const [topP, setTopP] = useState(agent?.topP ?? 1);
@@ -80,9 +83,10 @@ export function AgentEditor({ agent, providers, onSave, onCancel, onDelete }: Pr
         providerId,
         model: model.trim(),
         systemPrompt: systemPrompt.trim(),
-        temperature,
+        ...(samplingMode === "temperature"
+          ? { temperature, topP: null }
+          : { temperature: null, topP }),
         maxTokens,
-        topP,
         toolFilter,
       };
 
@@ -221,21 +225,53 @@ export function AgentEditor({ agent, providers, onSave, onCancel, onDelete }: Pr
         </h4>
 
         <div className="space-y-1.5">
-          <div className="flex items-center justify-between">
-            <Label htmlFor="agent-temp" className="text-xs">Temperature</Label>
-            <span className="text-xs text-muted-foreground font-mono">{temperature.toFixed(1)}</span>
-          </div>
-          <input
-            id="agent-temp"
-            type="range"
-            min="0"
-            max="2"
-            step="0.1"
-            value={temperature}
-            onChange={(e) => setTemperature(parseFloat(e.target.value))}
-            className="w-full accent-primary"
-          />
+          <Label className="text-xs">Sampling Method</Label>
+          <Select value={samplingMode} onValueChange={(v) => setSamplingMode(v as "temperature" | "top_p")}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="temperature">Temperature</SelectItem>
+              <SelectItem value="top_p">Top P</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
+
+        {samplingMode === "temperature" ? (
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="agent-temp" className="text-xs">Temperature</Label>
+              <span className="text-xs text-muted-foreground font-mono">{temperature.toFixed(1)}</span>
+            </div>
+            <input
+              id="agent-temp"
+              type="range"
+              min="0"
+              max="2"
+              step="0.1"
+              value={temperature}
+              onChange={(e) => setTemperature(parseFloat(e.target.value))}
+              className="w-full accent-primary"
+            />
+          </div>
+        ) : (
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="agent-top-p" className="text-xs">Top P</Label>
+              <span className="text-xs text-muted-foreground font-mono">{topP.toFixed(2)}</span>
+            </div>
+            <input
+              id="agent-top-p"
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value={topP}
+              onChange={(e) => setTopP(parseFloat(e.target.value))}
+              className="w-full accent-primary"
+            />
+          </div>
+        )}
 
         <div className="space-y-1.5">
           <Label htmlFor="agent-max-tokens" className="text-xs">Max Tokens</Label>
@@ -246,23 +282,6 @@ export function AgentEditor({ agent, providers, onSave, onCancel, onDelete }: Pr
             onChange={(e) => setMaxTokens(parseInt(e.target.value) || 8192)}
             min={1}
             className="font-mono text-xs"
-          />
-        </div>
-
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between">
-            <Label htmlFor="agent-top-p" className="text-xs">Top P</Label>
-            <span className="text-xs text-muted-foreground font-mono">{topP.toFixed(2)}</span>
-          </div>
-          <input
-            id="agent-top-p"
-            type="range"
-            min="0"
-            max="1"
-            step="0.01"
-            value={topP}
-            onChange={(e) => setTopP(parseFloat(e.target.value))}
-            className="w-full accent-primary"
           />
         </div>
       </div>
