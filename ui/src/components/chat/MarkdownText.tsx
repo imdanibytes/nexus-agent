@@ -1,13 +1,34 @@
-import { memo, useState, type FC } from "react";
+import { memo, useCallback, type FC } from "react";
 import { Streamdown, type Components } from "streamdown";
-import { CheckIcon, CopyIcon } from "lucide-react";
-import { TooltipIconButton } from "@/components/chat/tooltip-icon-button.js";
-import { cn } from "@imdanibytes/nexus-ui";
+import { createMathPlugin } from "@streamdown/math";
+import { createCodePlugin } from "@streamdown/code";
+import remarkGfm from "remark-gfm";
+import { remarkHighlight, remarkSubSuperscript, remarkAbbreviations } from "@/lib/remark-plugins.js";
+import "katex/dist/katex.min.css";
+import {
+  cn,
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@imdanibytes/nexus-ui";
 
 interface MarkdownTextProps {
   text: string;
   isStreaming?: boolean;
 }
+
+// Stable plugin instances — created once, not per render
+const streamdownPlugins = {
+  math: createMathPlugin({ singleDollarTextMath: true }),
+  code: createCodePlugin({ themes: ["github-dark", "github-dark"] }),
+};
+
+const streamdownRemarkPlugins: import("streamdown").StreamdownProps["remarkPlugins"] = [
+  [remarkGfm, { singleTilde: false }],
+  remarkHighlight,
+  remarkSubSuperscript,
+  remarkAbbreviations,
+];
 
 const MarkdownTextImpl: FC<MarkdownTextProps> = ({ text, isStreaming }) => {
   return (
@@ -15,6 +36,15 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ text, isStreaming }) => {
       mode={isStreaming ? "streaming" : "static"}
       isAnimating={isStreaming}
       components={markdownComponents}
+      plugins={streamdownPlugins}
+      remarkPlugins={streamdownRemarkPlugins}
+      allowedTags={{
+        mark: ["className", "style"],
+        sub: [],
+        sup: [],
+        abbr: ["title"],
+        section: ["dataFootnotes"],
+      }}
       className="aui-md"
     >
       {text}
@@ -23,47 +53,6 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ text, isStreaming }) => {
 };
 
 export const MarkdownText = memo(MarkdownTextImpl);
-
-// ── Copy hook ──
-
-function useCopyToClipboard(copiedDuration = 3000) {
-  const [isCopied, setIsCopied] = useState(false);
-
-  const copyToClipboard = (value: string) => {
-    if (!value) return;
-    navigator.clipboard.writeText(value).then(() => {
-      setIsCopied(true);
-      setTimeout(() => setIsCopied(false), copiedDuration);
-    });
-  };
-
-  return { isCopied, copyToClipboard };
-}
-
-// ── Code header ──
-
-const CodeHeader: FC<{ language: string; code: string }> = ({
-  language,
-  code,
-}) => {
-  const { isCopied, copyToClipboard } = useCopyToClipboard();
-  const onCopy = () => {
-    if (!code || isCopied) return;
-    copyToClipboard(code);
-  };
-
-  return (
-    <div className="aui-code-header-root mt-2.5 flex items-center justify-between rounded-t-lg border border-border/50 border-b-0 bg-muted/50 px-3 py-1.5 text-xs">
-      <span className="aui-code-header-language font-medium text-muted-foreground lowercase">
-        {language}
-      </span>
-      <TooltipIconButton tooltip="Copy" onClick={onCopy}>
-        {!isCopied && <CopyIcon />}
-        {isCopied && <CheckIcon />}
-      </TooltipIconButton>
-    </div>
-  );
-};
 
 // ── Component overrides ──
 
@@ -131,17 +120,41 @@ const markdownComponents: Components = {
       {...props}
     />
   ),
-  a: ({ className, node: _, ...props }) => (
-    <a
-      className={cn(
-        "aui-md-a text-primary underline underline-offset-2 hover:text-primary/80",
-        className,
-      )}
-      target="_blank"
-      rel="noopener noreferrer"
-      {...props}
-    />
-  ),
+  a: ({ className, node: _, href, ...props }) => {
+    const isAnchor = href?.startsWith("#");
+
+    const handleClick = useCallback(
+      (e: React.MouseEvent<HTMLAnchorElement>) => {
+        if (!isAnchor || !href) return;
+        e.preventDefault();
+        const id = href.slice(1);
+        // rehype-sanitize clobbers id attrs with "user-content-" prefix,
+        // but remark-rehype already generates that prefix → double-prefixed IDs.
+        const el =
+          document.getElementById(id) ||
+          document.getElementById(`user-content-${id}`);
+        if (!el) return;
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.classList.add("aui-md-flash");
+        setTimeout(() => el.classList.remove("aui-md-flash"), 1500);
+      },
+      [isAnchor, href],
+    );
+
+    return (
+      <a
+        className={cn(
+          "aui-md-a text-primary underline underline-offset-2 hover:text-primary/80",
+          isAnchor && "no-underline",
+          className,
+        )}
+        href={href}
+        onClick={isAnchor ? handleClick : undefined}
+        {...(!isAnchor && { target: "_blank", rel: "noopener noreferrer" })}
+        {...props}
+      />
+    );
+  },
   blockquote: ({ className, node: _, ...props }) => (
     <blockquote
       className={cn(
@@ -214,6 +227,54 @@ const markdownComponents: Components = {
       {...props}
     />
   ),
+  mark: ({ className, node: _, ...props }) => (
+    <mark
+      className={cn("aui-md-mark rounded-sm px-0.5 text-inherit", className)}
+      style={{ backgroundColor: "color-mix(in srgb, var(--color-nx-accent) 20%, transparent)" }}
+      {...props}
+    />
+  ),
+  abbr: ({ className, node: _, title, children, ...props }) => (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <abbr
+          className={cn(
+            "aui-md-abbr cursor-help border-b border-dotted border-muted-foreground/50 no-underline",
+            className,
+          )}
+          title={undefined} // suppress native tooltip — we use Radix
+          {...props}
+        >
+          {children}
+        </abbr>
+      </TooltipTrigger>
+      {title && (
+        <TooltipContent side="top" className="max-w-xs text-xs">
+          {title}
+        </TooltipContent>
+      )}
+    </Tooltip>
+  ),
+  section: ({ className, node: _, ...props }) => {
+    const isFootnotes =
+      (props as Record<string, unknown>)["data-footnotes"] !== undefined;
+    return (
+      <section
+        className={cn(
+          isFootnotes &&
+            "aui-md-footnotes mt-4 border-t border-muted-foreground/20 pt-3 text-xs text-muted-foreground [&_ol]:ml-4 [&_ol]:list-decimal [&_li]:mt-1",
+          className,
+        )}
+        {...props}
+      />
+    );
+  },
+  sub: ({ className, node: _, ...props }) => (
+    <sub
+      className={cn("aui-md-sub", className)}
+      {...props}
+    />
+  ),
   sup: ({ className, node: _, ...props }) => (
     <sup
       className={cn(
@@ -223,52 +284,4 @@ const markdownComponents: Components = {
       {...props}
     />
   ),
-  pre: ({ className, children, node: _, ...props }) => {
-    // Extract language + code from the child <code> for CodeHeader
-    let language = "";
-    let code = "";
-
-    const child = Array.isArray(children) ? children[0] : children;
-    if (child && typeof child === "object" && "props" in child) {
-      const codeProps = child.props as {
-        className?: string;
-        children?: React.ReactNode;
-      };
-      const match = codeProps.className?.match(/language-(\w+)/);
-      language = match?.[1] ?? "";
-      code =
-        typeof codeProps.children === "string" ? codeProps.children : "";
-    }
-
-    return (
-      <>
-        {language && <CodeHeader language={language} code={code} />}
-        <pre
-          className={cn(
-            "aui-md-pre overflow-x-auto rounded-b-lg border border-border/50 bg-muted/30 p-3 text-xs leading-relaxed",
-            language
-              ? "rounded-t-none border-t-0"
-              : "rounded-lg mt-2.5",
-            className,
-          )}
-          {...props}
-        >
-          {children}
-        </pre>
-      </>
-    );
-  },
-  code: ({ className, node: _, ...props }) => {
-    const isCodeBlock = className?.includes("language-");
-    return (
-      <code
-        className={cn(
-          !isCodeBlock &&
-            "aui-md-inline-code rounded-md border border-border/50 bg-muted/50 px-1.5 py-0.5 font-mono text-[0.85em]",
-          className,
-        )}
-        {...props}
-      />
-    );
-  },
 };
