@@ -167,6 +167,12 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         return;
       }
 
+      // Re-check: if streaming started while we were fetching, don't overwrite
+      if (get().conversations[convId]?.isStreaming) {
+        set((s) => patchConv(s, convId, { isLoadingHistory: false }));
+        return;
+      }
+
       if (conv.repository?.messages?.length) {
         const repo = parseRepository(conv.repository.messages);
         const childrenMap = buildChildrenMap(repo);
