@@ -1,12 +1,12 @@
 {
   "id": "com.nexus.agent",
   "name": "Nexus Agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "AI chat with tool calling, elicitations, and rich UI surfaces",
   "author": "imdanibytes",
   "license": "MIT",
   "homepage": "https://github.com/imdanibytes/nexus-agent",
-  "image": "ghcr.io/imdanibytes/nexus-plugin-agent:0.1.0",
+  "image": "ghcr.io/imdanibytes/nexus-plugin-agent:0.2.0",
   "ui": {
     "port": 80,
     "path": "/"
