@@ -8,7 +8,7 @@ import {
 import { ArrowUpIcon, SquareIcon } from "lucide-react";
 import { AgentSwitcher } from "@/components/AgentSwitcher.js";
 import { TooltipIconButton } from "@/components/chat/tooltip-icon-button.js";
-import { Button } from "@/components/ui/button.js";
+import { Button } from "@imdanibytes/nexus-ui";
 
 interface ComposerProps {
   onSend: (text: string) => void;

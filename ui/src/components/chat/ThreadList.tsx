@@ -2,15 +2,15 @@ import { type FC } from "react";
 import { PlusIcon, MoreHorizontalIcon, TrashIcon } from "lucide-react";
 import { useThreadListStore } from "@/stores/threadListStore.js";
 import { useChatStore } from "@/stores/chatStore.js";
-import { Button } from "@/components/ui/button.js";
-import { Skeleton } from "@/components/ui/skeleton.js";
 import {
+  Button,
+  Skeleton,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu.js";
-import { cn } from "@/lib/utils.js";
+  cn,
+} from "@imdanibytes/nexus-ui";
 
 export const ThreadList: FC = () => {
   const threads = useThreadListStore((s) => s.threads);

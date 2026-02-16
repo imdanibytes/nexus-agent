@@ -12,31 +12,27 @@ import {
   type ProviderCreateData,
   type EndpointStatus,
 } from "@/api/client.js";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
 import {
+  Button,
+  Input,
+  Label,
+  Separator,
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
-import {
   Popover,
   PopoverContent,
   PopoverTrigger,
-} from "@/components/ui/popover";
-import {
   Command,
   CommandEmpty,
   CommandGroup,
   CommandInput,
   CommandItem,
   CommandList,
-} from "@/components/ui/command";
-import { cn } from "@/lib/utils";
+  cn,
+} from "@imdanibytes/nexus-ui";
 
 const TYPE_OPTIONS: { value: ProviderType; label: string }[] = [
   { value: "ollama", label: "Ollama" },

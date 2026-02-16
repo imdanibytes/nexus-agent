@@ -14,7 +14,7 @@ import {
   getActiveAgent,
 } from "./api/client.js";
 import { Settings } from "lucide-react";
-import { Button } from "./components/ui/button.js";
+import { Button } from "@imdanibytes/nexus-ui";
 
 function NexusApp() {
   const { setAgents, setActiveAgentId, setProviders, setAvailableTools } =

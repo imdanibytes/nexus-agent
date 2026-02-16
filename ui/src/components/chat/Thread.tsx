@@ -28,19 +28,17 @@ import { MarkdownText } from "@/components/chat/MarkdownText.js";
 import { ToolFallback } from "@/components/chat/ToolFallback.js";
 import { TooltipIconButton } from "@/components/chat/tooltip-icon-button.js";
 import { Composer } from "@/components/chat/Composer.js";
-import { cn } from "@/lib/utils.js";
 import {
+  cn,
   Sheet,
   SheetContent,
   SheetHeader,
   SheetTitle,
-} from "@/components/ui/sheet.js";
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu.js";
+} from "@imdanibytes/nexus-ui";
 import { TimingWaterfall } from "@/components/TimingWaterfall.js";
 import type { TimingSpan } from "@/stores/chatStore.js";
 

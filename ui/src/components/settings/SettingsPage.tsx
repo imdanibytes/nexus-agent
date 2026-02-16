@@ -4,7 +4,7 @@ import { useChatStore } from "@/stores/chatStore.js";
 import { AgentsTab } from "./AgentsTab.js";
 import { ProvidersTab } from "./ProvidersTab.js";
 import { ToolsTab } from "./ToolsTab.js";
-import { Button } from "@/components/ui/button";
+import { Button } from "@imdanibytes/nexus-ui";
 
 type SettingsTab = "agents" | "providers" | "tools";
 

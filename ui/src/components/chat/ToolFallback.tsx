@@ -10,8 +10,8 @@ import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
-} from "@/components/ui/collapsible.js";
-import { cn } from "@/lib/utils.js";
+  cn,
+} from "@imdanibytes/nexus-ui";
 import { useScrollLock } from "@/hooks/useScrollLock.js";
 import type { ToolCallStatus } from "@/stores/threadStore.js";
 

@@ -10,8 +10,7 @@ import {
   type EndpointStatus,
 } from "@/api/client.js";
 import { ProviderEditor } from "./ProviderEditor.js";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { Button, Badge } from "@imdanibytes/nexus-ui";
 
 const TYPE_LABELS: Record<string, string> = {
   ollama: "Ollama",

@@ -1,13 +1,14 @@
 import { ComponentPropsWithRef, forwardRef } from "react";
-import { Slottable } from "@radix-ui/react-slot";
+import { Slot } from "radix-ui";
+const { Slottable } = Slot;
 
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/ui/tooltip.js";
-import { Button } from "@/components/ui/button.js";
-import { cn } from "@/lib/utils.js";
+  Button,
+  cn,
+} from "@imdanibytes/nexus-ui";
 
 export type TooltipIconButtonProps = ComponentPropsWithRef<typeof Button> & {
   tooltip: string;

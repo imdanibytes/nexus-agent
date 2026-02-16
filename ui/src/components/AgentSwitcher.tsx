@@ -2,13 +2,13 @@ import { useState } from "react";
 import { ChevronsUpDown, Check } from "lucide-react";
 import { useChatStore } from "@/stores/chatStore.js";
 import { setActiveAgent as apiSetActive } from "@/api/client.js";
-import { Button } from "@/components/ui/button";
 import {
+  Button,
   Popover,
   PopoverContent,
   PopoverTrigger,
-} from "@/components/ui/popover";
-import { cn } from "@/lib/utils";
+  cn,
+} from "@imdanibytes/nexus-ui";
 
 export function AgentSwitcher() {
   const { agents, activeAgentId, setActiveAgentId, providers } = useChatStore();

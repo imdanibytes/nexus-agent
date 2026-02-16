@@ -2,7 +2,7 @@ import { memo, useState, type FC } from "react";
 import { Streamdown, type Components } from "streamdown";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { TooltipIconButton } from "@/components/chat/tooltip-icon-button.js";
-import { cn } from "@/lib/utils.js";
+import { cn } from "@imdanibytes/nexus-ui";
 
 interface MarkdownTextProps {
   text: string;

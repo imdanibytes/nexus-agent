@@ -7,17 +7,17 @@ import {
   type ToolFilter,
 } from "@/api/client.js";
 import { useChatStore } from "@/stores/chatStore.js";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
 import {
+  Button,
+  Input,
+  Label,
+  Separator,
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
+} from "@imdanibytes/nexus-ui";
 
 type FilterMode = "all" | "allow" | "deny";
 

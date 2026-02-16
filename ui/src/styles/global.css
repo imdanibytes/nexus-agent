@@ -1,82 +1,14 @@
-@import "tailwindcss";
-@import "tw-animate-css";
-@import "shadcn/tailwind.css";
+@import "@imdanibytes/nexus-ui/styles";
 
 @source "../node_modules/streamdown/dist/*.js";
+@source "../../node_modules/@imdanibytes/nexus-ui/dist";
 
 @custom-variant dark (&:is(.dark *));
 
-/*
- * Nexus theme tokens come from the host at /api/v1/theme.css.
- * Fallbacks here match the Nexus default dark theme.
- */
-
 @theme {
-  --color-nx-bg: var(--color-nx-deep, #0C0E12);
-  --color-nx-base: var(--color-nx-base, #12141A);
-  --color-nx-text: var(--color-nx-text, #E8ECF2);
-  --color-nx-surface: var(--color-nx-surface, #1A1D25);
-  --color-nx-raised: var(--color-nx-raised, #222631);
-  --color-nx-accent: var(--color-nx-accent, #2DD4A8);
-  --color-nx-border: var(--color-nx-border, #2A2E3A);
-  --color-nx-muted: var(--color-nx-text-muted, #848d9f);
-
   --animate-fade-in: fade-in 0.2s ease-out;
   --animate-slide-up: slide-up 0.2s ease-out;
   --animate-dot-pulse: dot-pulse 1.4s ease-in-out infinite;
-}
-
-/* shadcn theme — always dark, mapped to Nexus design tokens */
-@theme inline {
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
-  --radius-2xl: calc(var(--radius) + 8px);
-  --radius-3xl: calc(var(--radius) + 12px);
-  --radius-4xl: calc(var(--radius) + 16px);
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
-  --color-popover: var(--popover);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-primary: var(--primary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-destructive: var(--destructive);
-  --color-border: var(--border);
-  --color-input: var(--input);
-  --color-ring: var(--ring);
-}
-
-:root {
-  --radius: var(--radius-button, 8px);
-
-  --background: var(--color-nx-base, #12141A);
-  --foreground: var(--color-nx-text, #E8ECF2);
-  --card: var(--color-nx-surface, #1A1D25);
-  --card-foreground: var(--color-nx-text, #E8ECF2);
-  --popover: var(--color-nx-surface, #1A1D25);
-  --popover-foreground: var(--color-nx-text, #E8ECF2);
-  --primary: var(--color-nx-accent, #2DD4A8);
-  --primary-foreground: #0C0E12;
-  --secondary: var(--color-nx-raised, #222631);
-  --secondary-foreground: var(--color-nx-text, #E8ECF2);
-  --muted: var(--color-nx-raised, #222631);
-  --muted-foreground: var(--color-nx-text-muted, #848d9f);
-  --accent: var(--color-nx-overlay, #2A2E3A);
-  --accent-foreground: var(--color-nx-text, #E8ECF2);
-  --destructive: var(--color-nx-error, #F87171);
-  --border: var(--color-nx-border, #2A2E3A);
-  --input: var(--color-nx-border, #2A2E3A);
-  --ring: var(--color-nx-accent, #2DD4A8);
-  --shadow-dropdown: 0 4px 16px rgba(0, 0, 0, 0.4);
 }
 
 @layer base {
@@ -88,8 +20,8 @@
 body {
   margin: 0;
   padding: 0;
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--color-nx-base);
+  color: var(--color-nx-text);
   font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
   overflow: hidden;
   height: 100vh;
@@ -160,19 +92,19 @@ body {
   margin: 0.25em 0;
 }
 .markdown-content code {
-  background: var(--secondary);
+  background: var(--color-nx-raised);
   padding: 0.15em 0.4em;
   border-radius: 5px;
   font-size: 0.875em;
   font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
 }
 .markdown-content pre {
-  background: var(--secondary);
+  background: var(--color-nx-raised);
   padding: 1em;
   border-radius: 8px;
   overflow-x: auto;
   margin: 0.75em 0;
-  border: 1px solid var(--border);
+  border: 1px solid var(--color-nx-border);
 }
 .markdown-content pre code {
   background: none;
@@ -181,7 +113,7 @@ body {
   font-size: 0.8125em;
 }
 .markdown-content a {
-  color: var(--primary);
+  color: var(--color-nx-accent);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -189,21 +121,21 @@ body {
   opacity: 0.8;
 }
 .markdown-content blockquote {
-  border-left: 3px solid var(--border);
+  border-left: 3px solid var(--color-nx-border);
   padding-left: 1em;
   margin: 0.75em 0;
-  color: var(--muted-foreground);
+  color: var(--color-nx-text-muted);
 }
 .markdown-content hr {
   border: none;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--color-nx-border);
   margin: 1.5em 0;
 }
 .markdown-content .table-wrap {
   overflow-x: auto;
   margin: 0.75em 0;
   border-radius: 8px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--color-nx-border);
 }
 .markdown-content table {
   border-collapse: collapse;
@@ -211,13 +143,13 @@ body {
 }
 .markdown-content th,
 .markdown-content td {
-  border: 1px solid var(--border);
+  border: 1px solid var(--color-nx-border);
   padding: 0.5em 0.75em;
   text-align: left;
   font-size: 0.875em;
 }
 .markdown-content th {
-  background: var(--secondary);
+  background: var(--color-nx-raised);
   font-weight: 600;
 }
 .markdown-content img {

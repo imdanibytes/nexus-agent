@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import type { TimingSpan } from "@/stores/chatStore.js";
-import { cn } from "@/lib/utils";
+import { cn } from "@imdanibytes/nexus-ui";
 
 interface TreeNode {
   span: TimingSpan;

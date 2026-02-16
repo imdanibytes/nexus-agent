@@ -8,8 +8,7 @@ import {
   type Agent,
 } from "@/api/client.js";
 import { AgentEditor } from "./AgentEditor.js";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { Button, Badge } from "@imdanibytes/nexus-ui";
 
 export function AgentsTab() {
   const { agents, activeAgentId, setAgents, setActiveAgentId, providers, setProviders } =

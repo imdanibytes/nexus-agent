@@ -13,18 +13,18 @@ import {
   type ToolFilter,
 } from "@/api/client.js";
 import { useChatStore } from "@/stores/chatStore.js";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
 import {
+  Button,
+  Input,
+  Textarea,
+  Label,
+  Separator,
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
+} from "@imdanibytes/nexus-ui";
 
 interface Props {
   agent?: Agent;
