@@ -109,15 +109,6 @@ export interface Conversation {
   };
 }
 
-export interface McpTool {
-  name: string;
-  description: string;
-  input_schema: Record<string, unknown>;
-  plugin_id: string;
-  plugin_name: string;
-  enabled: boolean;
-}
-
 export interface SseWriter {
   writeEvent(event: string, data: unknown): void;
   close(): void;

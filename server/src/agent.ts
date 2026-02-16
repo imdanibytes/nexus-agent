@@ -17,6 +17,7 @@ import { SystemMessageBuilder } from "./system-message/builder.js";
 import { corePromptProvider } from "./system-message/providers/core-prompt.js";
 import { datetimeProvider } from "./system-message/providers/datetime.js";
 import { conversationContextProvider } from "./system-message/providers/conversation-context.js";
+import { messageBoundaryProvider } from "./system-message/providers/message-boundary.js";
 import { SpanCollector } from "./timing.js";
 import type {
   Conversation,
@@ -54,6 +55,7 @@ export function resolveFrontendToolResult(
 
 // System message builder — register providers once
 const systemMessageBuilder = new SystemMessageBuilder();
+systemMessageBuilder.register(messageBoundaryProvider);
 systemMessageBuilder.register(corePromptProvider);
 systemMessageBuilder.register(conversationContextProvider);
 systemMessageBuilder.register(datetimeProvider);
@@ -70,7 +72,10 @@ function buildApiMessages(
 
   for (const msg of wireMessages) {
     if (msg.role === "user") {
-      result.push({ role: "user", content: msg.content });
+      result.push({
+        role: "user",
+        content: `<user_message>\n${msg.content}\n</user_message>`,
+      });
     } else if (msg.role === "assistant") {
       const blocks: Anthropic.ContentBlockParam[] = [];
 

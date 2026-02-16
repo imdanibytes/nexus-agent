@@ -29,7 +29,6 @@ interface ChatState {
   setProviders: (providers: ProviderPublic[]) => void;
   setAvailableTools: (tools: AvailableTool[]) => void;
   setSettingsOpen: (open: boolean) => void;
-  updateTitle: (id: string, title: string) => void;
 }
 
 export const useChatStore = create<ChatState>((set) => ({
@@ -44,7 +43,4 @@ export const useChatStore = create<ChatState>((set) => ({
   setProviders: (providers) => set({ providers }),
   setAvailableTools: (availableTools) => set({ availableTools }),
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
-
-  // No-op — title updates are handled by the thread list runtime now
-  updateTitle: () => {},
 }));

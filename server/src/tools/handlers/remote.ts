@@ -1,9 +1,5 @@
-import { getAccessToken } from "../../auth.js";
-import type { McpTool } from "../../types.js";
+import { getMcpClient, closeMcpClient } from "../../mcp-client.js";
 import type { ToolHandler, ToolResult, ToolContext } from "../types.js";
-
-const NEXUS_HOST_URL =
-  process.env.NEXUS_HOST_URL || "http://host.docker.internal:9600";
 
 let cachedHandlers: ToolHandler[] = [];
 let lastFetch = 0;
@@ -15,19 +11,14 @@ export async function fetchMcpToolHandlers(): Promise<ToolHandler[]> {
   }
 
   try {
-    const token = await getAccessToken();
-    const res = await fetch(`${NEXUS_HOST_URL}/api/v1/mcp/tools`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) return cachedHandlers;
+    const client = await getMcpClient();
+    const { tools } = await client.listTools();
 
-    const tools = (await res.json()) as McpTool[];
-    cachedHandlers = tools
-      .filter((t) => t.enabled)
-      .map((t) => createMcpToolHandler(t));
+    cachedHandlers = tools.map((t) => createMcpToolHandler(t.name, t.description ?? "", t.inputSchema));
     lastFetch = Date.now();
   } catch (err) {
     console.error("Failed to fetch MCP tools:", err);
+    await closeMcpClient();
   }
 
   return cachedHandlers;
@@ -37,12 +28,16 @@ export function invalidateMcpToolCache(): void {
   lastFetch = 0;
 }
 
-function createMcpToolHandler(tool: McpTool): ToolHandler {
+function createMcpToolHandler(
+  name: string,
+  description: string,
+  inputSchema: Record<string, unknown>,
+): ToolHandler {
   return {
     definition: {
-      name: tool.name,
-      description: `[${tool.plugin_name}] ${tool.description}`,
-      input_schema: tool.input_schema as ToolHandler["definition"]["input_schema"],
+      name,
+      description,
+      input_schema: inputSchema as ToolHandler["definition"]["input_schema"],
     },
 
     async execute(
@@ -52,46 +47,39 @@ function createMcpToolHandler(tool: McpTool): ToolHandler {
     ): Promise<ToolResult> {
       ctx.sse.writeEvent("tool_executing", {
         id: toolUseId,
-        name: tool.name,
+        name,
       });
 
-      const token = await getAccessToken();
-      const res = await fetch(`${NEXUS_HOST_URL}/api/v1/mcp/call`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ tool_name: tool.name, arguments: args }),
-      });
+      try {
+        const client = await getMcpClient();
+        const result = await client.callTool({ name, arguments: args });
 
-      if (!res.ok) {
+        const text = (result.content as { type: string; text: string }[])
+          .map((c) => c.text)
+          .join("\n");
+        const isError = result.isError === true;
+
+        ctx.sse.writeEvent("tool_result", {
+          id: toolUseId,
+          name,
+          content: text,
+          is_error: isError,
+        });
+
         return {
           tool_use_id: toolUseId,
-          content: `MCP call failed: HTTP ${res.status}`,
+          content: text,
+          is_error: isError,
+        };
+      } catch (err) {
+        await closeMcpClient();
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          tool_use_id: toolUseId,
+          content: `MCP call failed: ${msg}`,
           is_error: true,
         };
       }
-
-      const data = (await res.json()) as {
-        content: { type: string; text: string }[];
-        is_error: boolean;
-      };
-
-      const text = data.content.map((c) => c.text).join("\n");
-
-      ctx.sse.writeEvent("tool_result", {
-        id: toolUseId,
-        name: tool.name,
-        content: text,
-        is_error: data.is_error,
-      });
-
-      return {
-        tool_use_id: toolUseId,
-        content: text,
-        is_error: data.is_error,
-      };
     },
   };
 }

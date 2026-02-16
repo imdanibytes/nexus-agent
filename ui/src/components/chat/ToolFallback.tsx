@@ -1,6 +1,4 @@
-"use client";
-
-import { memo, useCallback, useRef, useState } from "react";
+import { memo, useCallback, useRef, useState, type FC } from "react";
 import {
   AlertCircleIcon,
   CheckIcon,
@@ -9,18 +7,17 @@ import {
   XCircleIcon,
 } from "lucide-react";
 import {
-  useScrollLock,
-  type ToolCallMessagePartStatus,
-  type ToolCallMessagePartComponent,
-} from "@assistant-ui/react";
-import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
-} from "@/components/ui/collapsible";
-import { cn } from "@/lib/utils";
+} from "@/components/ui/collapsible.js";
+import { cn } from "@/lib/utils.js";
+import { useScrollLock } from "@/hooks/useScrollLock.js";
+import type { ToolCallStatus } from "@/stores/threadStore.js";
 
 const ANIMATION_DURATION = 200;
+
+// ── Root ──
 
 export type ToolFallbackRootProps = Omit<
   React.ComponentProps<typeof Collapsible>,
@@ -81,13 +78,14 @@ function ToolFallbackRoot({
   );
 }
 
-type ToolStatus = ToolCallMessagePartStatus["type"];
+// ── Trigger ──
 
-const statusIconMap: Record<ToolStatus, React.ElementType> = {
+type ToolStatusType = NonNullable<ToolCallStatus>["type"];
+
+const statusIconMap: Record<ToolStatusType, React.ElementType> = {
   running: LoaderIcon,
   complete: CheckIcon,
   incomplete: XCircleIcon,
-  "requires-action": AlertCircleIcon,
 };
 
 function ToolFallbackTrigger({
@@ -97,7 +95,7 @@ function ToolFallbackTrigger({
   ...props
 }: React.ComponentProps<typeof CollapsibleTrigger> & {
   toolName: string;
-  status?: ToolCallMessagePartStatus;
+  status?: ToolCallStatus;
 }) {
   const statusType = status?.type ?? "complete";
   const isRunning = statusType === "running";
@@ -157,6 +155,8 @@ function ToolFallbackTrigger({
   );
 }
 
+// ── Content ──
+
 function ToolFallbackContent({
   className,
   children,
@@ -183,15 +183,14 @@ function ToolFallbackContent({
   );
 }
 
+// ── Args / Result / Error ──
+
 function ToolFallbackArgs({
   argsText,
   className,
   ...props
-}: React.ComponentProps<"div"> & {
-  argsText?: string;
-}) {
+}: React.ComponentProps<"div"> & { argsText?: string }) {
   if (!argsText) return null;
-
   return (
     <div
       data-slot="tool-fallback-args"
@@ -209,11 +208,8 @@ function ToolFallbackResult({
   result,
   className,
   ...props
-}: React.ComponentProps<"div"> & {
-  result?: unknown;
-}) {
+}: React.ComponentProps<"div"> & { result?: unknown }) {
   if (result === undefined) return null;
-
   return (
     <div
       data-slot="tool-fallback-result"
@@ -235,18 +231,14 @@ function ToolFallbackError({
   status,
   className,
   ...props
-}: React.ComponentProps<"div"> & {
-  status?: ToolCallMessagePartStatus;
-}) {
+}: React.ComponentProps<"div"> & { status?: ToolCallStatus }) {
   if (status?.type !== "incomplete") return null;
-
   const error = status.error;
   const errorText = error
     ? typeof error === "string"
       ? error
       : JSON.stringify(error)
     : null;
-
   if (!errorText) return null;
 
   const isCancelled = status.reason === "cancelled";
@@ -268,7 +260,16 @@ function ToolFallbackError({
   );
 }
 
-const ToolFallbackImpl: ToolCallMessagePartComponent = ({
+// ── Composed ToolFallback ──
+
+interface ToolFallbackProps {
+  toolName: string;
+  argsText?: string;
+  result?: unknown;
+  status?: ToolCallStatus;
+}
+
+const ToolFallbackImpl: FC<ToolFallbackProps> = ({
   toolName,
   argsText,
   result,
@@ -294,31 +295,4 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
   );
 };
 
-const ToolFallback = memo(
-  ToolFallbackImpl,
-) as unknown as ToolCallMessagePartComponent & {
-  Root: typeof ToolFallbackRoot;
-  Trigger: typeof ToolFallbackTrigger;
-  Content: typeof ToolFallbackContent;
-  Args: typeof ToolFallbackArgs;
-  Result: typeof ToolFallbackResult;
-  Error: typeof ToolFallbackError;
-};
-
-ToolFallback.displayName = "ToolFallback";
-ToolFallback.Root = ToolFallbackRoot;
-ToolFallback.Trigger = ToolFallbackTrigger;
-ToolFallback.Content = ToolFallbackContent;
-ToolFallback.Args = ToolFallbackArgs;
-ToolFallback.Result = ToolFallbackResult;
-ToolFallback.Error = ToolFallbackError;
-
-export {
-  ToolFallback,
-  ToolFallbackRoot,
-  ToolFallbackTrigger,
-  ToolFallbackContent,
-  ToolFallbackArgs,
-  ToolFallbackResult,
-  ToolFallbackError,
-};
+export const ToolFallback = memo(ToolFallbackImpl);
