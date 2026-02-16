@@ -370,8 +370,11 @@ async function _runAgentTurnInner(
         system: systemMessage,
         messages: apiMessages,
         tools: anthropicTools.length > 0 ? anthropicTools : undefined,
-        ...(effectiveTemperature !== undefined ? { temperature: effectiveTemperature } : {}),
-        ...(effectiveTopP !== undefined ? { top_p: effectiveTopP } : {}),
+        ...(effectiveTemperature !== undefined
+          ? { temperature: effectiveTemperature }
+          : effectiveTopP !== undefined
+            ? { top_p: effectiveTopP }
+            : {}),
       });
 
       let stopReason: string | null = null;

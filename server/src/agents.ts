@@ -50,15 +50,18 @@ export function createAgent(data: {
 }): Agent {
   const agents = loadAgents();
   const now = Date.now();
+  // Enforce mutual exclusivity: temperature takes priority if both are set
+  const temperature = data.temperature ?? undefined;
+  const topP = temperature !== undefined ? undefined : (data.topP ?? undefined);
   const agent: Agent = {
     id: uuidv4(),
     name: data.name,
     providerId: data.providerId,
     model: data.model,
     systemPrompt: data.systemPrompt,
-    temperature: data.temperature,
+    temperature,
     maxTokens: data.maxTokens,
-    topP: data.topP,
+    topP,
     toolFilter: data.toolFilter,
     createdAt: now,
     updatedAt: now,
@@ -81,11 +84,12 @@ export function updateAgent(
   const idx = agents.findIndex((a) => a.id === id);
   if (idx < 0) return null;
 
-  const updated: Agent = {
-    ...agents[idx],
-    ...data,
-    updatedAt: Date.now(),
-  };
+  const merged = { ...agents[idx], ...data, updatedAt: Date.now() };
+  // Null means "clear this field" — strip nulls so they become undefined
+  for (const key of ["temperature", "topP"] as const) {
+    if (merged[key] === null) delete (merged as Record<string, unknown>)[key];
+  }
+  const updated: Agent = merged;
   agents[idx] = updated;
   atomicWrite(INDEX_PATH, agents);
   return updated;

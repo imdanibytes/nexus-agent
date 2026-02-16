@@ -265,9 +265,9 @@ export async function createAgentApi(data: {
   providerId: string;
   model: string;
   systemPrompt: string;
-  temperature?: number;
+  temperature?: number | null;
   maxTokens?: number;
-  topP?: number;
+  topP?: number | null;
   toolFilter?: ToolFilter;
 }): Promise<Agent> {
   const res = await fetch("/api/agents", {
@@ -285,9 +285,9 @@ export async function updateAgentApi(
     providerId: string;
     model: string;
     systemPrompt: string;
-    temperature: number;
+    temperature: number | null;
     maxTokens: number;
-    topP: number;
+    topP: number | null;
     toolFilter: ToolFilter;
   }>,
 ): Promise<Agent> {
