@@ -18,6 +18,10 @@ interface ThreadListState {
   renameThread: (id: string, title: string) => Promise<void>;
   switchThread: (id: string) => void;
   updateThreadTitle: (id: string, title: string) => void;
+  /** Bump updatedAt and re-sort so the thread floats to top */
+  touchThread: (id: string) => void;
+  /** Add a thread if it doesn't already exist (for MCP-created conversations) */
+  ensureThread: (id: string, title: string) => void;
 }
 
 export const useThreadListStore = create<ThreadListState>((set) => ({
@@ -78,10 +82,34 @@ export const useThreadListStore = create<ThreadListState>((set) => ({
   },
 
   updateThreadTitle: (id, title) => {
-    set((s) => ({
-      threads: s.threads.map((t) =>
-        t.id === id ? { ...t, title, updatedAt: Date.now() } : t,
-      ),
-    }));
+    set((s) => {
+      const threads = s.threads
+        .map((t) => (t.id === id ? { ...t, title, updatedAt: Date.now() } : t))
+        .sort((a, b) => b.updatedAt - a.updatedAt);
+      return { threads };
+    });
+  },
+
+  touchThread: (id) => {
+    set((s) => {
+      const threads = s.threads
+        .map((t) => (t.id === id ? { ...t, updatedAt: Date.now() } : t))
+        .sort((a, b) => b.updatedAt - a.updatedAt);
+      return { threads };
+    });
+  },
+
+  ensureThread: (id, title) => {
+    set((s) => {
+      if (s.threads.some((t) => t.id === id)) return s;
+      const meta: ConversationMeta = {
+        id,
+        title,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        messageCount: 0,
+      };
+      return { threads: [meta, ...s.threads] };
+    });
   },
 }));

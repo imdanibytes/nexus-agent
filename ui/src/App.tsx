@@ -42,8 +42,17 @@ function NexusApp() {
     });
 
     const unsubMcpPending = eventBus.on("mcp_turn_pending", (event) => {
-      const convId = event.value as { conversationId: string; userMessage: string };
-      useMcpTurnStore.getState().setPendingTurn(convId.conversationId, convId.userMessage);
+      const { conversationId, userMessage } = event.value as {
+        conversationId: string;
+        userMessage: string;
+      };
+      // Ensure the thread appears in the sidebar immediately
+      useThreadListStore
+        .getState()
+        .ensureThread(conversationId, userMessage.slice(0, 60) + (userMessage.length > 60 ? "..." : ""));
+      useMcpTurnStore
+        .getState()
+        .setPendingTurn(conversationId, userMessage);
     });
 
     const unsubConvChanged = eventBus.on("conversations_changed", () => {
@@ -57,17 +66,6 @@ function NexusApp() {
       eventBus.disconnect();
     };
   }, [setAvailableTools]);
-
-  // MCP thread switching: when an MCP turn targets a different thread, switch to it
-  const pendingConvId = useMcpTurnStore((s) => s.pendingConvId);
-
-  useEffect(() => {
-    if (!pendingConvId) return;
-    const tls = useThreadListStore.getState();
-    if (tls.activeThreadId !== pendingConvId) {
-      tls.switchThread(pendingConvId);
-    }
-  }, [pendingConvId]);
 
   return (
     <div className="flex h-full">

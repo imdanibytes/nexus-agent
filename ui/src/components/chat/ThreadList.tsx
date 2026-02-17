@@ -1,6 +1,7 @@
 import { type FC } from "react";
 import { PlusIcon, MoreHorizontalIcon, TrashIcon } from "lucide-react";
 import { useThreadListStore } from "@/stores/threadListStore.js";
+import { useThreadStore } from "@/stores/threadStore.js";
 import { useChatStore } from "@/stores/chatStore.js";
 import {
   Button,
@@ -65,9 +66,10 @@ export const ThreadList: FC = () => {
               )}
             >
               <button
-                className="flex h-full min-w-0 flex-1 items-center truncate px-3 text-start text-sm"
+                className="flex h-full min-w-0 flex-1 items-center gap-2 truncate px-3 text-start text-sm"
                 onClick={() => handleSwitch(thread.id)}
               >
+                <StreamingDot threadId={thread.id} />
                 {thread.title || "New Chat"}
               </button>
               <ThreadItemMenu
@@ -79,6 +81,20 @@ export const ThreadList: FC = () => {
         })
       )}
     </div>
+  );
+};
+
+/** Pulsing dot that only renders when the given thread is actively streaming. */
+const StreamingDot: FC<{ threadId: string }> = ({ threadId }) => {
+  const isStreaming = useThreadStore(
+    (s) => s.conversations[threadId]?.isStreaming ?? false,
+  );
+  if (!isStreaming) return null;
+  return (
+    <span className="relative flex size-2 shrink-0">
+      <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary/60" />
+      <span className="relative inline-flex size-2 rounded-full bg-primary" />
+    </span>
   );
 };
 

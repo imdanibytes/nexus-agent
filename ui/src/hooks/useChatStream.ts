@@ -155,13 +155,22 @@ interface TurnContext {
 
 // ── Stream consumer ──
 
+interface ConsumeOptions {
+  /** Skip the POST to /api/v1/turn (for MCP turns — server already started it) */
+  skipPost?: boolean;
+}
+
 async function consumeStream(
   conversationId: string,
   wireMessages: WireMessage[],
   agentId: string | undefined,
   signal: AbortSignal,
   turnCtx?: TurnContext,
+  options?: ConsumeOptions,
 ): Promise<void> {
+  // Bump thread to top of list
+  useThreadListStore.getState().touchThread(conversationId);
+
   const parts: MessagePart[] = [];
   let metadata: ChatMessage["metadata"] = {};
 
@@ -185,15 +194,18 @@ async function consumeStream(
   const stream = eventBus.subscribe(conversationId);
 
   // Fire-and-forget the turn POST — events arrive via SSE
-  startTurn(conversationId, wireMessages, agentId).catch((err) => {
-    console.error("Turn start failed:", err);
-    useThreadStore.getState().finalizeStreaming(conversationId, {
-      type: "incomplete",
-      reason: "error",
-      error: err.message,
+  // (Skip for MCP turns — the server already started the turn)
+  if (!options?.skipPost) {
+    startTurn(conversationId, wireMessages, agentId).catch((err) => {
+      console.error("Turn start failed:", err);
+      useThreadStore.getState().finalizeStreaming(conversationId, {
+        type: "incomplete",
+        reason: "error",
+        error: err.message,
+      });
+      eventBus.endSubscription(conversationId);
     });
-    eventBus.endSubscription(conversationId);
-  });
+  }
 
   try {
     for await (const event of stream) {
@@ -628,34 +640,32 @@ export function useChatStream(): {
     abortRef.current?.abort();
   }, []);
 
-  // MCP turn handling
+  // MCP turn handling — runs in background, no thread switching
   const pendingConvId = useMcpTurnStore((s) => s.pendingConvId);
   const pendingUserMessage = useMcpTurnStore((s) => s.pendingUserMessage);
 
   useEffect(() => {
     if (!pendingConvId || !pendingUserMessage) return;
-    if (pendingConvId !== activeThreadId) return;
 
     const store = useThreadStore.getState();
-    const parentId = store.getLastMessageId(pendingConvId);
-    const userMessage = store.appendUserMessage(pendingConvId, pendingUserMessage, {
+    store.appendUserMessage(pendingConvId, pendingUserMessage, {
       mcpSource: true,
     });
-    const assistantMessageId = store.startStreaming(pendingConvId);
+    store.startStreaming(pendingConvId);
 
-    const conv = store.conversations[pendingConvId] ?? EMPTY_CONV;
-    const wireMessages = toWireMessages(conv.messages);
-
+    // Separate controller — doesn't interfere with user-initiated turns
     const controller = new AbortController();
-    abortRef.current = controller;
-    consumeStream(pendingConvId, wireMessages, undefined, controller.signal, {
-      conversationId: pendingConvId,
-      userMessage,
-      parentId,
-      assistantMessageId,
+
+    // Don't POST (server already started the turn), don't persist (server handles it)
+    consumeStream(pendingConvId, [], undefined, controller.signal, undefined, {
+      skipPost: true,
+    }).finally(() => {
+      // Reload full history from server to get properly persisted messages
+      useThreadStore.getState().loadHistory(pendingConvId);
     });
+
     useMcpTurnStore.getState().clearPendingTurn();
-  }, [pendingConvId, pendingUserMessage, activeThreadId]);
+  }, [pendingConvId, pendingUserMessage]);
 
   return { sendMessage, sendMessageFromEdit, regenerateResponse, abort, isStreaming };
 }
