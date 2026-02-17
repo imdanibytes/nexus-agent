@@ -73,12 +73,10 @@ export async function getToolRegistry(
   executor.register(setTitleTool);
   executor.registerAll(await fetchMcpToolHandlers());
 
-  const allDefs: ToolDefinition[] = [
-    ...executor.definitions(),
-    ...(frontendTools ?? []),
-  ];
-
-  const filtered = applyToolFilters(allDefs, globalFilter, agentFilter);
+  // Filter server tools only — frontend tools bypass server-side filters
+  // (they're defined by the client and shouldn't be subject to admin deny-lists)
+  const serverDefs = applyToolFilters(executor.definitions(), globalFilter, agentFilter);
+  const filtered: ToolDefinition[] = [...serverDefs, ...(frontendTools ?? [])];
 
   // LLM APIs require tool names to match ^[a-zA-Z0-9_-]+$ — sanitize dots
   const toWire = new Map<string, string>();

@@ -140,17 +140,6 @@ export interface Agent {
   updatedAt: number;
 }
 
-/** @deprecated Use Agent instead */
-export interface AgentProfile {
-  id: string;
-  name: string;
-  model: string;
-  systemPrompt: string;
-  avatar?: string;
-  createdAt: number;
-  updatedAt: number;
-}
-
 // ── Tool settings types ──
 
 export interface ToolSettings {

@@ -276,16 +276,7 @@ async function _runAgentTurnInner(
               limit: contextWindow,
             }
           : undefined,
-        profile: config.agent
-          ? {
-              id: config.agent.id,
-              name: config.agent.name,
-              model: config.agent.model,
-              systemPrompt: config.agent.systemPrompt,
-              createdAt: config.agent.createdAt,
-              updatedAt: config.agent.updatedAt,
-            }
-          : null,
+        agent: config.agent ?? null,
       },
       smSpan,
     );

@@ -1,4 +1,4 @@
-import type { Conversation, AgentSettings, AgentProfile } from "../types.js";
+import type { Agent, Conversation, AgentSettings } from "../types.js";
 
 export interface SystemMessageContext {
   conversationId: string;
@@ -6,7 +6,7 @@ export interface SystemMessageContext {
   tokenUsage?: { input: number; output: number; limit: number };
   toolNames: string[];
   settings: AgentSettings;
-  profile?: AgentProfile | null;
+  agent?: Agent | null;
 }
 
 export interface SystemMessageProvider {

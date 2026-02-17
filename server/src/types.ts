@@ -51,17 +51,6 @@ export interface ToolSettings {
   globalToolFilter?: ToolFilter;
 }
 
-/** @deprecated Use Agent instead */
-export interface AgentProfile {
-  id: string;
-  name: string;
-  model: string;
-  systemPrompt: string;
-  avatar?: string;
-  createdAt: number;
-  updatedAt: number;
-}
-
 export interface ConversationMeta {
   id: string;
   title: string;
