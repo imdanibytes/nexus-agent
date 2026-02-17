@@ -1,15 +1,32 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { Provider } from "./types.js";
 
+// Cache keyed by provider ID — stale entries detected via updatedAt
+const clientCache = new Map<string, { client: Anthropic; updatedAt: number }>();
+
 /**
- * Create an LLM client from a provider configuration.
- * Ollama and OpenAI-compatible use the Anthropic SDK with a custom baseURL.
- * Anthropic uses the standard SDK.
- * Bedrock uses the Bedrock SDK (lazy-imported to keep it optional).
+ * Create (or return a cached) LLM client from a provider configuration.
+ * Cache invalidates automatically when the provider's updatedAt changes.
  */
 export async function createLlmClient(
   provider: Provider,
 ): Promise<Anthropic> {
+  const cached = clientCache.get(provider.id);
+  if (cached && cached.updatedAt === provider.updatedAt) {
+    return cached.client;
+  }
+
+  const client = await buildClient(provider);
+  clientCache.set(provider.id, { client, updatedAt: provider.updatedAt });
+  return client;
+}
+
+/** Remove a provider's cached client (belt-and-suspenders for CRUD ops). */
+export function invalidateClientCache(providerId: string): void {
+  clientCache.delete(providerId);
+}
+
+async function buildClient(provider: Provider): Promise<Anthropic> {
   switch (provider.type) {
     case "ollama":
       return new Anthropic({

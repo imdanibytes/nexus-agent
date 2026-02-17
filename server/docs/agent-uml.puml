@@ -1,0 +1,484 @@
+@startuml agent-class-diagram
+!theme plain
+skinparam classAttributeIconSize 0
+skinparam defaultFontSize 11
+skinparam packageStyle rectangle
+skinparam linetype ortho
+
+title nexus-agent: agent module dependency graph (post-refactor)
+
+' ─── Core Orchestrator ────────────────────────────────────────────────────
+
+package "agent.ts" as AgentModule <<Orchestrator>> {
+  class "<<module>>\nagent" as Agent {
+    -- exported --
+    +runAgentTurn(conversationId, wireMessages, sse, agentId?, externalAbort?, frontendTools?): Promise<TurnResult>
+    -- private --
+    -_runAgentTurnInner(...)
+    -buildApiMessages(wireMessages, mapName?): MessageParam[]
+    -mergeAndSave(agentConv, id): void
+    -- module state --
+    -activeTurns: Set<string>
+    -systemMessageBuilder: SystemMessageBuilder
+    -compactionPipeline: CompactionPipeline
+  }
+
+  interface TurnResult {
+    pendingToolCalls?: PendingToolCall[]
+    resolvedToolResults?: ResolvedToolResult[]
+  }
+}
+
+' ─── Turn Config ──────────────────────────────────────────────────────────
+
+package "turn-config.ts" as TurnConfigPkg {
+  interface TurnConfig {
+    client: Anthropic
+    provider: Provider | null
+    model: string
+    maxTokens: number
+    temperature?: number
+    topP?: number
+    agent: Agent | null
+  }
+
+  class "<<function>>\nresolveTurnConfig" as ResolveTurnConfig {
+    +(agentId?, settings): Promise<TurnConfig>
+  }
+}
+
+' ─── Tool Registry ────────────────────────────────────────────────────────
+
+package "tool-registry.ts" as ToolRegistryPkg {
+  interface ToolRegistry {
+    executor: ToolExecutor
+    definitions: ToolDefinition[]
+    anthropicTools: Anthropic.Tool[]
+    +wireName(name): string
+    +origName(name): string
+  }
+
+  class "<<function>>\ngetToolRegistry" as GetToolRegistry {
+    +(globalFilter?, agentFilter?, frontendTools?): Promise<ToolRegistry>
+  }
+
+  class "<<private>>\nmatchGlob" as MatchGlob
+  class "<<private>>\napplyToolFilters" as ApplyToolFilters
+}
+
+' ─── Round Runner ─────────────────────────────────────────────────────────
+
+package "round-runner.ts" as RoundRunnerPkg {
+  interface RoundParams {
+    client: Anthropic
+    model: string
+    maxTokens: number
+    temperature?: number
+    topP?: number
+    systemMessage: string
+    apiMessages: MessageParam[]
+    toolRegistry: ToolRegistry
+    toolCtx: ToolContext
+    messageId: string
+    signal: AbortSignal
+    sse: SseWriter
+    roundNumber: number
+    parentSpan: SpanHandle
+  }
+
+  interface RoundResult {
+    stopReason: "end_turn" | "tool_use" | "abort" | "error"
+    assistantParts: MessagePart[]
+    tokenUsage?: { inputTokens, outputTokens }
+    newApiMessages?: MessageParam[]
+    pendingToolCalls?: PendingToolCall[]
+    resolvedToolResults?: ResolvedToolResult[]
+    error?: string
+  }
+
+  class "<<function>>\nrunRound" as RunRound {
+    +(params: RoundParams): Promise<RoundResult>
+  }
+}
+
+' ─── Compaction System ────────────────────────────────────────────────────
+
+package "compaction/" as CompactionPkg {
+  class CompactionPipeline {
+    -passes: CompactionPass[]
+    +register(pass: CompactionPass): void
+    +run(messages: WireMessage[], ctx: CompactionContext): CompactionResult
+  }
+
+  class "<<function>>\ntruncateOldToolResults" as TruncateOld {
+    +(apiMessages: MessageParam[], keepRecentResults: number): { truncated, tokensSaved }
+  }
+
+  interface CompactionPass {
+    name: string
+    threshold: number
+    +compact(messages: WireMessage[], ctx: CompactionContext): CompactionResult
+  }
+
+  interface CompactionContext {
+    tokenUsage: number
+    tokenLimit: number
+    recentWindowSize: number
+  }
+
+  interface CompactionResult {
+    messages: WireMessage[]
+    report: CompactionReport
+  }
+
+  interface CompactionReport {
+    passesRun: string[]
+    entries: CompactionEntry[]
+    estimatedTokensSaved: number
+  }
+
+  class "<<object>>\ntoolResponsePruner" as ToolResponsePruner {
+    name = "tool-response-pruner"
+    threshold = 0.5
+    +compact(messages, ctx): CompactionResult
+  }
+
+  CompactionPipeline o-- "0..*" CompactionPass : registers
+  ToolResponsePruner ..|> CompactionPass
+  CompactionResult *-- CompactionReport
+}
+
+' ─── Model Resolution ─────────────────────────────────────────────────────
+
+package "compaction/models.ts" as ModelsPkg {
+  interface ModelMeta {
+    name: string
+    family: string
+    contextWindow: number
+  }
+
+  class OllamaModelResolver {
+    -cache: Map<string, ModelMeta>
+    +resolve(model, endpoint): Promise<ModelMeta | null>
+  }
+
+  class AnthropicModelResolver {
+    -{static} MODELS: Record<string, ModelMeta>
+    +resolve(model): ModelMeta | null
+  }
+
+  class OpenAIModelResolver {
+    -{static} MODELS: Record<string, ModelMeta>
+    +resolve(model): ModelMeta | null
+  }
+
+  class "<<function>>\nresolveModel" as ResolveModel {
+    +(model, provider?): Promise<ModelMeta>
+  }
+
+  class "<<function>>\nresolveContextWindow" as ResolveContextWindow {
+    +(model, provider?): Promise<number>
+  }
+
+  ResolveModel ..> OllamaModelResolver : ollama/openai-compat
+  ResolveModel ..> AnthropicModelResolver : anthropic/bedrock
+  ResolveModel ..> OpenAIModelResolver : fallback
+  ResolveContextWindow ..> ResolveModel
+}
+
+' ─── System Message ───────────────────────────────────────────────────────
+
+package "system-message/" as SysMsgPkg {
+  class SystemMessageBuilder {
+    -providers: SystemMessageProvider[]
+    +register(provider: SystemMessageProvider): void
+    +build(ctx: SystemMessageContext, parentSpan?): Promise<string>
+  }
+
+  interface SystemMessageProvider {
+    name: string
+    timeoutMs: number
+    +provide(ctx: SystemMessageContext): Promise<string | null>
+  }
+
+  class "<<object>>\nmessageBoundaryProvider" as MBP
+  class "<<object>>\ncorePromptProvider" as CPP
+  class "<<object>>\nconversationContextProvider" as CCP
+  class "<<object>>\ndatetimeProvider" as DTP
+
+  SystemMessageBuilder o-- "0..*" SystemMessageProvider : registers
+  MBP ..|> SystemMessageProvider
+  CPP ..|> SystemMessageProvider
+  CCP ..|> SystemMessageProvider
+  DTP ..|> SystemMessageProvider
+}
+
+' ─── Tool Execution ───────────────────────────────────────────────────────
+
+package "tools/" as ToolsPkg {
+  class ToolExecutor {
+    -handlers: Map<string, ToolHandler>
+    +register(handler: ToolHandler): void
+    +registerAll(handlers: ToolHandler[]): void
+    +has(name): boolean
+    +definitions(): ToolDefinition[]
+    +execute(name, toolUseId, args, ctx): Promise<ToolResult>
+  }
+
+  interface ToolHandler {
+    definition: ToolDefinition
+    +execute(toolUseId, args, ctx): Promise<ToolResult>
+  }
+
+  interface ToolDefinition {
+    name: string
+    description: string
+    input_schema: object
+  }
+
+  interface ToolResult {
+    tool_use_id: string
+    content: string
+    is_error?: boolean
+  }
+
+  interface ToolContext {
+    conversationId: string
+    sse: SseWriter
+    conversation: Conversation
+    saveConversation: Function
+    signal: AbortSignal
+  }
+
+  class "<<object>>\nsetTitleTool" as STT
+  class "<<function>>\nfetchMcpToolHandlers" as FMTH {
+    +(): Promise<ToolHandler[]>
+    -cachedHandlers: ToolHandler[]
+    -CACHE_TTL: 30s
+  }
+
+  ToolExecutor o-- "0..*" ToolHandler : registers
+  STT ..|> ToolHandler
+  FMTH ..> ToolHandler : returns
+}
+
+' ─── Client Factory ───────────────────────────────────────────────────────
+
+package "client-factory.ts" as ClientFactoryPkg {
+  class "<<module>>\nclient-factory" as ClientFactory {
+    -clientCache: Map<string, { client, updatedAt }>
+    +createLlmClient(provider): Promise<Anthropic>
+    +invalidateClientCache(providerId): void
+    -buildClient(provider): Promise<Anthropic>
+  }
+}
+
+' ─── Timing ───────────────────────────────────────────────────────────────
+
+package "timing.ts" as TimingPkg {
+  class SpanCollector {
+    -spans: RawSpan[]
+    -origin: number
+    +span(name, metadata?): SpanHandle
+    +toJSON(): Span[]
+  }
+
+  class SpanHandle {
+    +id: string
+    +span(name, metadata?): SpanHandle
+    +mark(label): void
+    +end(): void
+  }
+
+  SpanCollector ..> SpanHandle : creates
+  SpanHandle ..> SpanHandle : creates children
+}
+
+' ─── Domain Types ─────────────────────────────────────────────────────────
+
+package "types.ts" as TypesPkg {
+  interface WireMessage {
+    role: string
+    content: string
+    toolCalls?: WireToolCall[]
+  }
+
+  interface WireToolCall {
+    id: string
+    name: string
+    args: Record<string, unknown>
+    result?: string
+    isError?: boolean
+  }
+
+  interface Conversation {
+    id: string
+    title: string
+    createdAt: number
+    updatedAt: number
+    messages: Message[]
+    repository?: { messages: RepositoryMessage[] }
+    lastTokenUsage?: TokenUsage
+  }
+
+  interface TokenUsage {
+    inputTokens: number
+    outputTokens: number
+    timestamp: number
+  }
+
+  interface Agent <<config>> {
+    id: string
+    name: string
+    providerId: string
+    model: string
+    systemPrompt: string
+    temperature?: number
+    maxTokens?: number
+    topP?: number
+    toolFilter?: ToolFilter
+    createdAt: number
+    updatedAt: number
+  }
+
+  interface Provider <<config>> {
+    id: string
+    name: string
+    type: ProviderType
+    endpoint?: string
+    apiKey?: string
+    awsRegion?: string
+    createdAt: number
+    updatedAt: number
+  }
+
+  interface SseWriter <<transport>> {
+    +writeEvent(event, data): void
+    +close(): void
+  }
+
+  WireMessage *-- "0..*" WireToolCall
+  Conversation *-- "0..1" TokenUsage
+}
+
+' ─── SSE Protocol ─────────────────────────────────────────────────────────
+
+package "ag-ui-types.ts" as AgUiPkg {
+  enum EventType {
+    RUN_STARTED / RUN_FINISHED / RUN_ERROR
+    STEP_STARTED / STEP_FINISHED
+    TEXT_MESSAGE_START / CONTENT / END
+    TOOL_CALL_START / ARGS / END / RESULT
+    CUSTOM
+  }
+
+  interface PendingToolCall {
+    toolCallId: string
+    toolCallName: string
+    args: Record<string, unknown>
+  }
+
+  interface ResolvedToolResult {
+    toolCallId: string
+    content: string
+    isError: boolean
+  }
+}
+
+' ─── Services ─────────────────────────────────────────────────────────────
+
+package "services" as ServicesPkg {
+  class "<<function>>\ngetSettings" as GetSettings {
+    +(): Promise<AgentSettings>
+  }
+
+  class "<<function>>\ngetToolSettings" as GetToolSettings {
+    +(): Promise<ToolSettings>
+  }
+
+  class "<<function>>\ngetConversation" as GetConv {
+    +(id): Conversation | null
+  }
+
+  class "<<function>>\nsaveConversation" as SaveConv {
+    +(conv: Conversation): void
+  }
+
+  class "<<function>>\ngetAgent" as GetAgent {
+    +(id): Agent | null
+  }
+
+  class "<<function>>\ngetActiveAgentId" as GetActiveId {
+    +(): string | null
+  }
+
+  class "<<function>>\ngetProvider" as GetProvider {
+    +(id): Promise<Provider | null>
+  }
+}
+
+' ─── Tool Events ──────────────────────────────────────────────────────────
+
+package "tool-events.ts" as ToolEventsPkg {
+  class "<<function>>\nstartToolEventListener" as StartToolEvents {
+    +(): void
+  }
+}
+
+' ─── External SDK ─────────────────────────────────────────────────────────
+
+class "Anthropic\n(@anthropic-ai/sdk)" as AnthropicSDK <<external>> {
+  +messages.stream(params): MessageStream
+}
+
+' ─── Relationships ────────────────────────────────────────────────────────
+
+' Orchestrator → modules
+Agent ..> ResolveTurnConfig : resolves config
+Agent ..> GetToolRegistry : builds tool registry
+Agent ..> RunRound : executes rounds
+Agent ..> SystemMessageBuilder : builds system prompt
+Agent ..> CompactionPipeline : compacts messages (pre-turn)
+Agent ..> TruncateOld : compacts apiMessages (inter-round)
+Agent ..> ResolveContextWindow : resolves model context
+Agent ..> SpanCollector : tracks timing
+
+' Orchestrator → services
+Agent ..> GetSettings : reads config
+Agent ..> GetToolSettings : reads tool config
+Agent ..> GetConv : loads conversation
+Agent ..> SaveConv : persists conversation
+
+' Orchestrator → types
+Agent ..> SseWriter : emits events
+Agent ..> EventType : event constants
+Agent ..> WireMessage : input format
+Agent ..> TurnResult : output format
+
+' Turn config → dependencies
+ResolveTurnConfig ..> GetAgent : resolves agent config
+ResolveTurnConfig ..> GetActiveId : fallback agent id
+ResolveTurnConfig ..> GetProvider : resolves provider
+ResolveTurnConfig ..> ClientFactory : creates/caches LLM client
+
+' Tool registry → dependencies
+GetToolRegistry ..> ToolExecutor : builds per-turn
+GetToolRegistry ..> STT : registers local tool
+GetToolRegistry ..> FMTH : fetches MCP tools (TTL-cached)
+
+' Round runner → dependencies
+RunRound ..> ToolRegistry : executes tools, maps names
+RunRound ..> AnthropicSDK : streams LLM calls
+RunRound ..> SpanHandle : child spans
+RunRound ..> EventType : emits SSE events
+
+' Client factory → SDK
+ClientFactory ..> AnthropicSDK : creates instances
+
+' Provider CRUD → client cache
+GetProvider ..> ClientFactory : invalidateClientCache on update/delete
+
+' Tool events → MCP cache
+StartToolEvents ..> FMTH : invalidateMcpToolCache
+
+@enduml

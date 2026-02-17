@@ -98,6 +98,12 @@ export interface RepositoryMessage {
   parentId: string | null;
 }
 
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  timestamp: number;
+}
+
 export interface Conversation {
   id: string;
   title: string;
@@ -108,9 +114,26 @@ export interface Conversation {
   repository?: {
     messages: RepositoryMessage[];
   };
+  /** Last known token usage from LLM API response — persisted for compaction budgeting */
+  lastTokenUsage?: TokenUsage;
 }
 
 export interface SseWriter {
   writeEvent(event: string, data: unknown): void;
   close(): void;
+}
+
+/** Wire format from the frontend — matches active branch messages */
+export interface WireMessage {
+  role: string;
+  content: string;
+  toolCalls?: WireToolCall[];
+}
+
+export interface WireToolCall {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+  result?: string;
+  isError?: boolean;
 }

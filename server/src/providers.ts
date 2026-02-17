@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { v4 as uuidv4 } from "uuid";
 import type { Provider, ProviderPublic } from "./types.js";
+import { invalidateClientCache } from "./client-factory.js";
 
 const PROVIDERS_DIR = "/data/providers";
 const INDEX_PATH = path.join(PROVIDERS_DIR, "index.json");
@@ -78,6 +79,7 @@ export async function updateProvider(
   };
   providers[idx] = updated;
   atomicWrite(INDEX_PATH, providers);
+  invalidateClientCache(id);
   return stripSecrets(updated);
 }
 
@@ -86,5 +88,6 @@ export async function deleteProvider(id: string): Promise<boolean> {
   const filtered = providers.filter((p) => p.id !== id);
   if (filtered.length === providers.length) return false;
   atomicWrite(INDEX_PATH, filtered);
+  invalidateClientCache(id);
   return true;
 }
