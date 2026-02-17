@@ -151,15 +151,8 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
     const existing = get().conversations[convId];
     if (existing?.isStreaming) return;
 
-    set((s) =>
-      patchConv(s, convId, {
-        isLoadingHistory: true,
-        messages: [],
-        repository: [],
-        childrenMap: {},
-        branchSelections: {},
-      }),
-    );
+    set((s) => patchConv(s, convId, { isLoadingHistory: true }));
+
     try {
       const conv = await fetchConversation(convId);
       if (!conv) {
