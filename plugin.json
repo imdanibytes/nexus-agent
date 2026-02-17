@@ -14,7 +14,8 @@
   "permissions": [
     "system:info",
     "mcp:call",
-    "network:local"
+    "network:local",
+    "filesystem:write"
   ],
   "health": {
     "endpoint": "/health",

@@ -345,8 +345,14 @@ const server = http.createServer(async (req, res) => {
       const full = all.map((c) => getConversation(c.id)).filter(Boolean);
       const filename = `nexus-conversations-${new Date().toISOString().slice(0, 10)}.json`;
       const exportPath = `~/Downloads/${filename}`;
-      await nexus.writeFile(exportPath, JSON.stringify(full, null, 2));
-      json(res, 200, { path: exportPath });
+      try {
+        await nexus.writeFile(exportPath, JSON.stringify(full, null, 2));
+        json(res, 200, { path: exportPath });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error("[export] writeFile failed:", message);
+        json(res, 502, { error: message });
+      }
       return;
     }
 

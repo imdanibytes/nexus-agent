@@ -24,6 +24,7 @@ export function DataTab() {
   const [count, setCount] = useState<number | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportedPath, setExportedPath] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const loadThreads = useThreadListStore((s) => s.loadThreads);
 
@@ -34,9 +35,12 @@ export function DataTab() {
   async function handleExport() {
     setExporting(true);
     setExportedPath(null);
+    setExportError(null);
     try {
       const { path } = await exportConversations();
       setExportedPath(path);
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : "Export failed");
     } finally {
       setExporting(false);
     }
@@ -81,6 +85,9 @@ export function DataTab() {
               <Check size={12} />
               Saved to {exportedPath}
             </span>
+          )}
+          {exportError && (
+            <span className="text-xs text-destructive">{exportError}</span>
           )}
         </div>
       </div>

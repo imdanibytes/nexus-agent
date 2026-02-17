@@ -195,7 +195,10 @@ export async function deleteAllConversations(): Promise<{ deleted: number }> {
 
 export async function exportConversations(): Promise<{ path: string }> {
   const res = await fetch("/api/conversations/export", { method: "POST" });
-  if (!res.ok) throw new Error("Export failed");
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `Export failed (${res.status})`);
+  }
   return res.json();
 }
 
