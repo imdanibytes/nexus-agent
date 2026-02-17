@@ -398,6 +398,11 @@ const AssistantMessage: FC<{
 
       {/* Footer — always rendered for stable layout, actions fade in on hover */}
       <div className="aui-assistant-message-footer mt-1 ml-2 flex h-7 items-center gap-2">
+        {message.metadata?.profileName && (
+          <span className="text-[10px] font-medium text-muted-foreground/70">
+            {message.metadata.profileName}
+          </span>
+        )}
         {!isStreaming && (
           <>
             <BranchPicker messageId={message.id} />

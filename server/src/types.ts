@@ -83,6 +83,7 @@ export interface Message {
   profileId?: string;
   profileName?: string;
   timingSpans?: import("./timing.js").Span[];
+  mcpSource?: boolean;
 }
 
 export interface UiSurfaceInfo {

@@ -172,7 +172,11 @@ async function consumeStream(
   useThreadListStore.getState().touchThread(conversationId);
 
   const parts: MessagePart[] = [];
-  let metadata: ChatMessage["metadata"] = {};
+  const chatState = useChatStore.getState();
+  const activeAgent = chatState.agents.find((a) => a.id === chatState.activeAgentId);
+  let metadata: ChatMessage["metadata"] = {
+    ...(activeAgent ? { profileName: activeAgent.name } : {}),
+  };
 
   /** Write streaming parts to this conversation's slot in the store */
   function pushToStore(): void {

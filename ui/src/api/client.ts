@@ -63,6 +63,8 @@ export interface Message {
   uiSurfaces?: UiSurfaceInfo[];
   profileId?: string;
   profileName?: string;
+  timingSpans?: import("../stores/chatStore.js").TimingSpan[];
+  mcpSource?: boolean;
 }
 
 export interface UiSurfaceInfo {

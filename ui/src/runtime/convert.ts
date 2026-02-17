@@ -36,13 +36,18 @@ export function convertToMessage(msg: Message): ChatMessage {
     }
   }
 
+  const metadata: ChatMessage["metadata"] = {};
+  if (msg.profileName) metadata.profileName = msg.profileName;
+  if (msg.timingSpans) metadata.timingSpans = msg.timingSpans;
+  if (msg.mcpSource) metadata.mcpSource = true;
+
   return {
     id: msg.id,
     role: msg.role,
     parts,
     createdAt: new Date(msg.timestamp),
     status: msg.role === "assistant" ? { type: "complete" } : undefined,
-    metadata: msg.profileName ? { profileName: msg.profileName } : undefined,
+    metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
   };
 }
 
@@ -79,5 +84,7 @@ export function toServerMessage(msg: ChatMessage): Message {
     parts,
     timestamp: msg.createdAt.getTime(),
     profileName: msg.metadata?.profileName,
+    timingSpans: msg.metadata?.timingSpans,
+    mcpSource: msg.metadata?.mcpSource || undefined,
   };
 }

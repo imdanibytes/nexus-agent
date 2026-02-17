@@ -9,6 +9,7 @@ import { runAgentTurn, type WireMessage } from "./agent.js";
 import { hub } from "./sse-handler.js";
 import { EventType } from "./ag-ui-types.js";
 import type { CollectedEvent } from "./streaming.js";
+import type { Span } from "./timing.js";
 import type { Message, MessagePart } from "./types.js";
 
 interface McpCallRequest {
@@ -271,14 +272,19 @@ async function handleSendMessage(
     role: "user",
     parts: [{ type: "text", text: message }],
     timestamp: now,
+    mcpSource: true,
   };
 
   const assistantParts: MessagePart[] = [];
   let assistantText = "";
+  let timingSpans: Span[] | undefined;
   for (const ev of collector.events) {
     const d = ev.data as Record<string, unknown>;
     if (ev.type === EventType.TEXT_MESSAGE_CONTENT) {
       assistantText += d.delta as string;
+    } else if (ev.type === EventType.CUSTOM && d.name === "timing") {
+      const val = d.value as { spans?: Span[] };
+      if (val?.spans) timingSpans = val.spans;
     }
   }
   if (assistantText) {
@@ -294,6 +300,7 @@ async function handleSendMessage(
     parts: assistantParts.length > 0 ? assistantParts : [{ type: "text", text: "" }],
     timestamp: Date.now(),
     ...(agent ? { profileId: agent.id, profileName: agent.name } : {}),
+    ...(timingSpans ? { timingSpans } : {}),
   };
 
   conv = getConversation(conversationId) || conv;
