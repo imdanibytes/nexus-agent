@@ -13,6 +13,10 @@ export class ToolExecutor {
     }
   }
 
+  has(name: string): boolean {
+    return this.handlers.has(name);
+  }
+
   definitions(): ToolDefinition[] {
     return Array.from(this.handlers.values()).map((h) => h.definition);
   }

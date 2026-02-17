@@ -4,7 +4,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { v4 as uuidv4 } from "uuid";
 import { getAccessToken } from "./auth.js";
-import { resolveFrontendToolResult } from "./agent.js";
 import {
   listConversations,
   getConversation,
@@ -32,17 +31,13 @@ import {
 } from "./providers.js";
 import { getToolSettings, updateToolSettings } from "./tool-settings.js";
 import { startToolEventListener } from "./tool-events.js";
-import { attach as attachWebSocket } from "./ws-handler.js";
 import { probeEndpoint, probeProvider } from "./discovery.js";
 import { getSettings, updateSettings } from "./settings.js";
 import { ToolExecutor } from "./tools/executor.js";
 import { setTitleTool } from "./tools/handlers/local.js";
 import { fetchMcpToolHandlers } from "./tools/handlers/remote.js";
-import {
-  FrontendToolBridge,
-  createClipboardTools,
-} from "./tools/handlers/frontend.js";
 import { handleMcpCall } from "./mcp-handler.js";
+import { handleSseRoute } from "./sse-handler.js";
 import type { Conversation } from "./types.js";
 
 const PORT = 80;
@@ -102,6 +97,14 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // AG-UI SSE routes (events stream, turn start, turn abort)
+    const handled = await handleSseRoute(
+      req, res, url, method,
+      () => readBody(req),
+      json,
+    );
+    if (handled) return;
+
     // MCP tool call handler — Nexus dispatches here
     if (method === "POST" && url === "/mcp/call") {
       const body = JSON.parse(await readBody(req));
@@ -114,27 +117,6 @@ const server = http.createServer(async (req, res) => {
     if (url === "/api/config") {
       const token = await getAccessToken();
       json(res, 200, { token, apiUrl: NEXUS_API_URL });
-      return;
-    }
-
-    // Legacy chat respond (backward compat — will be removed)
-    if (method === "POST" && url === "/api/chat/respond") {
-      const body = JSON.parse(await readBody(req));
-      const { tool_use_id, content } = body as {
-        tool_use_id: string;
-        content: unknown;
-      };
-
-      const resolved = resolveFrontendToolResult(
-        tool_use_id,
-        typeof content === "string" ? content : JSON.stringify(content),
-        false,
-      );
-      if (resolved) {
-        json(res, 200, { ok: true });
-      } else {
-        json(res, 404, { error: "No pending tool request with that ID" });
-      }
       return;
     }
 
@@ -163,7 +145,6 @@ const server = http.createServer(async (req, res) => {
         json(res, 400, { error: "type is required" });
         return;
       }
-      // If editing an existing provider, fill in missing secrets from storage
       if (body.id) {
         const stored = await getProvider(body.id);
         if (stored) {
@@ -306,12 +287,11 @@ const server = http.createServer(async (req, res) => {
     if (method === "GET" && url === "/api/tools") {
       const executor = new ToolExecutor();
       executor.register(setTitleTool);
-      executor.registerAll(createClipboardTools(new FrontendToolBridge()));
       executor.registerAll(await fetchMcpToolHandlers());
       const tools = executor.definitions().map((d) => ({
         name: d.name,
         description: d.description,
-        source: d.name.startsWith("_nexus_") ? "built-in" : "mcp",
+        source: "mcp" as const,
       }));
       json(res, 200, tools);
       return;
@@ -453,8 +433,6 @@ const server = http.createServer(async (req, res) => {
     });
   }
 });
-
-attachWebSocket(server);
 
 server.listen(PORT, () => {
   console.log(`Nexus Agent server running on port ${PORT}`);

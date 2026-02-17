@@ -5,8 +5,7 @@ import { SettingsPage } from "./components/settings/SettingsPage.js";
 import { useChatStore } from "./stores/chatStore.js";
 import { useThreadListStore } from "./stores/threadListStore.js";
 import { useMcpTurnStore } from "./stores/mcpTurnStore.js";
-import { wsClient } from "./runtime/ws-client.js";
-import { turnRouter } from "./runtime/turn-router.js";
+import { eventBus } from "./runtime/event-bus.js";
 import {
   fetchAgents,
   fetchProviders,
@@ -34,46 +33,28 @@ function NexusApp() {
     useThreadListStore.getState().loadThreads();
   }, []);
 
-  // Connect WebSocket and route events
+  // Connect EventSource and register broadcast handlers
   useEffect(() => {
-    wsClient.connect();
+    eventBus.connect();
 
-    const unsubTools = wsClient.on("tools_changed", () => {
+    const unsubTools = eventBus.on("tools_changed", () => {
       fetchAvailableTools().then(setAvailableTools);
     });
 
-    const unsubMcpPending = wsClient.on("mcp_turn_pending", (msg) => {
-      const d = msg.data!;
-      const convId = d.conversationId as string;
-      const userMessage = d.userMessage as string;
-      useMcpTurnStore.getState().setPendingTurn(convId, userMessage);
+    const unsubMcpPending = eventBus.on("mcp_turn_pending", (event) => {
+      const convId = event.value as { conversationId: string; userMessage: string };
+      useMcpTurnStore.getState().setPendingTurn(convId.conversationId, convId.userMessage);
     });
 
-    // Route all turn-scoped events to TurnRouter
-    const turnEvents = [
-      "turn_start",
-      "text_start",
-      "text_delta",
-      "tool_start",
-      "tool_input_delta",
-      "tool_result",
-      "tool_request",
-      "ui_surface",
-      "title_update",
-      "timing",
-      "turn_end",
-      "error",
-    ];
-
-    const unsubTurn = turnEvents.map((type) =>
-      wsClient.on(type, (msg) => turnRouter.route(msg)),
-    );
+    const unsubConvChanged = eventBus.on("conversations_changed", () => {
+      useThreadListStore.getState().loadThreads();
+    });
 
     return () => {
       unsubTools();
       unsubMcpPending();
-      unsubTurn.forEach((unsub) => unsub());
-      wsClient.disconnect();
+      unsubConvChanged();
+      eventBus.disconnect();
     };
   }, [setAvailableTools]);
 

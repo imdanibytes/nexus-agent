@@ -6,7 +6,9 @@ import {
   saveConversation,
 } from "./storage.js";
 import { runAgentTurn, type WireMessage } from "./agent.js";
-import { broadcast, createCollectingWsSseWriter, type CollectedEvent } from "./ws-handler.js";
+import { hub } from "./sse-handler.js";
+import { EventType } from "./ag-ui-types.js";
+import type { CollectedEvent } from "./streaming.js";
 import type { Message, MessagePart } from "./types.js";
 
 interface McpCallRequest {
@@ -83,11 +85,11 @@ function buildMcpResponse(events: CollectedEvent[]): McpCallResponse {
   for (const ev of events) {
     const d = ev.data as Record<string, unknown>;
 
-    switch (ev.event) {
-      case "text_delta":
-        chunks.push(d.text as string);
+    switch (ev.type) {
+      case EventType.TEXT_MESSAGE_CONTENT:
+        chunks.push(d.delta as string);
         break;
-      case "error":
+      case EventType.RUN_ERROR:
         error = d.message as string;
         break;
     }
@@ -164,7 +166,6 @@ function handleGetConversation(args: Record<string, unknown>): McpCallResponse {
   const conv = getConversation(id);
   if (!conv) return err(`Conversation '${id}' not found`);
 
-  // Format messages for readability
   const messages = conv.messages.map((m) => {
     const textParts = m.parts
       .filter((p) => p.type === "text")
@@ -222,7 +223,7 @@ async function handleSendMessage(
   const conversationId = (args.conversation_id as string) || uuidv4();
   const agentId = (args.agent_id as string) || undefined;
 
-  // Load or create conversation — save to disk so runAgentTurn finds it
+  // Load or create conversation
   let conv = getConversation(conversationId);
   if (!conv) {
     conv = {
@@ -235,31 +236,34 @@ async function handleSendMessage(
     saveConversation(conv);
   }
 
-  // Convert stored messages to wire format
   const wireMessages = messagesToWire(conv.messages);
-
-  // Append the new user message
   wireMessages.push({ role: "user", content: message });
 
   // Notify UI that an MCP turn is starting
-  broadcast("mcp_turn_pending", { conversationId, userMessage: message, agentId });
+  hub.push({
+    type: EventType.CUSTOM,
+    name: "mcp_turn_pending",
+    value: { conversationId, userMessage: message, agentId },
+  });
 
-  // Create collecting writer that also broadcasts over WebSocket
-  const collector = createCollectingWsSseWriter(conversationId, broadcast);
+  // Create collecting writer that also broadcasts to SSE clients
+  const collector = hub.createCollectingWriter(conversationId);
 
-  // Run agent turn
   try {
     await runAgentTurn(conversationId, wireMessages, collector, agentId);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    broadcast("conversations_changed", { conversationId });
+    hub.push({
+      type: EventType.CUSTOM,
+      name: "conversations_changed",
+      value: { conversationId },
+    });
     return err(msg);
   }
 
-  // Build response from collected events
   const response = buildMcpResponse(collector.events);
 
-  // Persist: append user message + assistant response to conversation
+  // Persist: append user message + assistant response
   const now = Date.now();
 
   const userMsg: Message = {
@@ -269,13 +273,12 @@ async function handleSendMessage(
     timestamp: now,
   };
 
-  // Build assistant message from collected events
   const assistantParts: MessagePart[] = [];
   let assistantText = "";
   for (const ev of collector.events) {
     const d = ev.data as Record<string, unknown>;
-    if (ev.event === "text_delta") {
-      assistantText += d.text as string;
+    if (ev.type === EventType.TEXT_MESSAGE_CONTENT) {
+      assistantText += d.delta as string;
     }
   }
   if (assistantText) {
@@ -293,16 +296,17 @@ async function handleSendMessage(
     ...(agent ? { profileId: agent.id, profileName: agent.name } : {}),
   };
 
-  // Reload conversation (runAgentTurn may have updated metadata)
   conv = getConversation(conversationId) || conv;
   conv.messages.push(userMsg, assistantMsg);
   conv.updatedAt = Date.now();
   saveConversation(conv);
 
-  // Notify the UI that conversations changed (turn_end already sent by runAgentTurn)
-  broadcast("conversations_changed", { conversationId });
+  hub.push({
+    type: EventType.CUSTOM,
+    name: "conversations_changed",
+    value: { conversationId },
+  });
 
-  // Wrap response with conversation_id so the caller can continue the conversation
   if (!response.is_error) {
     const text = response.content[0].text;
     response.content[0].text = JSON.stringify(

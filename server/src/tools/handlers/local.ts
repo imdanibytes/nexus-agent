@@ -1,4 +1,5 @@
 import type { ToolHandler, ToolResult, ToolContext } from "../types.js";
+import { EventType } from "../../ag-ui-types.js";
 
 export const setTitleTool: ToolHandler = {
   definition: {
@@ -28,7 +29,7 @@ export const setTitleTool: ToolHandler = {
       ctx.conversation.title = newTitle;
       ctx.conversation.updatedAt = Date.now();
       ctx.saveConversation(ctx.conversation);
-      ctx.sse.writeEvent("title_update", { title: newTitle });
+      ctx.sse.writeEvent(EventType.CUSTOM, { name: "title_update", value: { title: newTitle } });
     }
 
     return {

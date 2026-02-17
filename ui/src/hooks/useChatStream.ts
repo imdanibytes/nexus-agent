@@ -11,8 +11,12 @@ import { useChatStore } from "@/stores/chatStore.js";
 import { useMcpTurnStore } from "@/stores/mcpTurnStore.js";
 import { fetchToolSettings } from "@/api/client.js";
 import type { WireMessage } from "@/api/client.js";
-import { wsClient } from "@/runtime/ws-client.js";
-import { turnRouter } from "@/runtime/turn-router.js";
+import {
+  eventBus,
+  EventType,
+  type AgUiEvent,
+  type PendingToolCall,
+} from "@/runtime/event-bus.js";
 
 // ── Hidden tool filtering ──
 
@@ -74,28 +78,68 @@ function toWireMessages(messages: ChatMessage[]): WireMessage[] {
 
 async function executeFrontendTool(
   name: string,
-  input: Record<string, unknown>,
+  _input: Record<string, unknown>,
 ): Promise<{ content: string; isError: boolean }> {
   switch (name) {
-    case "_nexus_clipboard_read": {
+    case "_nexus_get_location": {
       try {
-        const text = await navigator.clipboard.readText();
-        return { content: text, isError: false };
+        const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(resolve, reject, {
+            enableHighAccuracy: true,
+            timeout: 10000,
+          });
+        });
+        const { latitude, longitude, accuracy } = pos.coords;
+        return {
+          content: JSON.stringify({ latitude, longitude, accuracy }),
+          isError: false,
+        };
       } catch (err) {
-        return { content: `Clipboard read failed: ${err}`, isError: true };
-      }
-    }
-    case "_nexus_clipboard_write": {
-      try {
-        await navigator.clipboard.writeText((input.text as string) || "");
-        return { content: "Written to clipboard", isError: false };
-      } catch (err) {
-        return { content: `Clipboard write failed: ${err}`, isError: true };
+        const msg = err instanceof GeolocationPositionError
+          ? err.message
+          : String(err);
+        return { content: `Location access failed: ${msg}`, isError: true };
       }
     }
     default:
       return { content: `Unknown frontend tool: ${name}`, isError: true };
   }
+}
+
+// ── Frontend tool definitions (passed to server so the LLM knows about them) ──
+
+const FRONTEND_TOOLS = [
+  {
+    name: "_nexus_get_location",
+    description: "Get the user's current geographic location (latitude, longitude, accuracy).",
+    input_schema: { type: "object" as const, properties: {}, required: [] },
+  },
+];
+
+// ── REST helpers ──
+
+async function startTurn(
+  conversationId: string,
+  messages: WireMessage[],
+  agentId?: string,
+): Promise<void> {
+  const res = await fetch("/api/v1/turn", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ conversationId, messages, agentId, frontendTools: FRONTEND_TOOLS }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: "Turn request failed" }));
+    throw new Error(body.error || `Turn request failed (${res.status})`);
+  }
+}
+
+async function abortTurn(conversationId: string): Promise<void> {
+  await fetch("/api/v1/turn/abort", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ conversationId }),
+  }).catch(() => {});
 }
 
 // ── Persistence context ──
@@ -113,10 +157,11 @@ interface TurnContext {
 
 async function consumeStream(
   conversationId: string,
+  wireMessages: WireMessage[],
+  agentId: string | undefined,
   signal: AbortSignal,
   turnCtx?: TurnContext,
 ): Promise<void> {
-  const stream = turnRouter.createTurnStream(conversationId);
   const parts: MessagePart[] = [];
   let metadata: ChatMessage["metadata"] = {};
 
@@ -136,20 +181,32 @@ async function consumeStream(
     });
   }
 
+  // Subscribe to SSE events for this conversation
+  const stream = eventBus.subscribe(conversationId);
+
+  // Fire-and-forget the turn POST — events arrive via SSE
+  startTurn(conversationId, wireMessages, agentId).catch((err) => {
+    console.error("Turn start failed:", err);
+    useThreadStore.getState().finalizeStreaming(conversationId, {
+      type: "incomplete",
+      reason: "error",
+      error: err.message,
+    });
+    eventBus.endSubscription(conversationId);
+  });
+
   try {
-    for await (const msg of stream) {
+    for await (const event of stream) {
       if (signal.aborted) break;
 
-      const data = msg.data || {};
-
-      switch (msg.type) {
-        case "text_start": {
+      switch (event.type) {
+        case EventType.TEXT_MESSAGE_START: {
           parts.push({ type: "text", text: "" });
           break;
         }
 
-        case "text_delta": {
-          const chunk = (data.text as string) || "";
+        case EventType.TEXT_MESSAGE_CONTENT: {
+          const chunk = (event.delta as string) || "";
           let found = false;
           for (let i = parts.length - 1; i >= 0; i--) {
             if (parts[i].type === "text") {
@@ -165,11 +222,11 @@ async function consumeStream(
           break;
         }
 
-        case "tool_start": {
+        case EventType.TOOL_CALL_START: {
           parts.push({
             type: "tool-call",
-            toolCallId: data.id as string,
-            toolName: data.name as string,
+            toolCallId: event.toolCallId as string,
+            toolName: event.toolCallName as string,
             args: {},
             argsText: "{}",
             status: { type: "running" },
@@ -178,15 +235,14 @@ async function consumeStream(
           break;
         }
 
-        case "tool_input_delta": {
+        case EventType.TOOL_CALL_ARGS: {
           for (let i = parts.length - 1; i >= 0; i--) {
             const p = parts[i];
-            if (p.type === "tool-call") {
-              const partial = (data.partial_json as string) || "";
+            if (p.type === "tool-call" && p.toolCallId === event.toolCallId) {
               const tc = p as ToolCallPart;
               parts[i] = {
                 ...tc,
-                argsText: (tc.argsText || "") + partial,
+                argsText: (tc.argsText || "") + (event.delta as string || ""),
               };
               break;
             }
@@ -195,17 +251,17 @@ async function consumeStream(
           break;
         }
 
-        case "tool_result": {
+        case EventType.TOOL_CALL_RESULT: {
           const toolIdx = parts.findIndex(
             (p) =>
-              p.type === "tool-call" && p.toolCallId === data.id,
+              p.type === "tool-call" && p.toolCallId === event.toolCallId,
           );
           if (toolIdx !== -1) {
             const tc = parts[toolIdx] as ToolCallPart;
             parts[toolIdx] = {
               ...tc,
-              result: data.content as string,
-              isError: (data.is_error as boolean) || false,
+              result: event.content as string,
+              isError: (event.isError as boolean) || false,
               status: { type: "complete" },
             };
           }
@@ -213,101 +269,71 @@ async function consumeStream(
           break;
         }
 
-        case "tool_request": {
-          const toolUseId = data.tool_use_id as string;
-          const toolName = data.name as string;
-          const input = (data.input ?? {}) as Record<string, unknown>;
+        case EventType.CUSTOM: {
+          const name = event.name as string;
 
-          parts.push({
-            type: "tool-call",
-            toolCallId: toolUseId,
-            toolName,
-            args: input,
-            argsText: JSON.stringify(input),
-            status: { type: "running" },
-          });
-          pushToStore();
-
-          // Execute locally and send result back
-          executeFrontendTool(toolName, input)
-            .then(({ content: result, isError }) => {
-              wsClient.send({
-                type: "tool_result",
-                conversationId,
-                data: { toolUseId, content: result, isError },
-              });
-            })
-            .catch((err) => {
-              wsClient.send({
-                type: "tool_result",
-                conversationId,
-                data: { toolUseId, content: String(err), isError: true },
-              });
-            });
-          break;
-        }
-
-        case "ui_surface": {
-          parts.push({
-            type: "tool-call",
-            toolCallId: data.tool_use_id as string,
-            toolName: data.name as string,
-            args: data.input as Record<string, unknown>,
-            argsText: JSON.stringify(data.input),
-            status: { type: "complete" },
-          });
-          pushToStore();
-          break;
-        }
-
-        case "title_update": {
-          const title = data.title as string;
-          if (title && conversationId) {
-            useThreadListStore
-              .getState()
-              .updateThreadTitle(conversationId, title);
-          }
-          break;
-        }
-
-        case "timing": {
-          const spans = data.spans as import("@/stores/chatStore.js").TimingSpan[];
-          if (spans) {
-            metadata = { ...metadata, timingSpans: spans };
-            pushToStore();
-          }
-          break;
-        }
-
-        case "turn_end": {
-          const returnedId = data.conversationId as string | undefined;
-          if (returnedId) {
-            const tls = useThreadListStore.getState();
-            if (tls.activeThreadId !== returnedId) {
-              tls.switchThread(returnedId);
+          if (name === "title_update") {
+            const val = event.value as { title?: string };
+            if (val?.title && conversationId) {
+              useThreadListStore
+                .getState()
+                .updateThreadTitle(conversationId, val.title);
+            }
+          } else if (name === "timing") {
+            const val = event.value as { spans?: import("@/stores/chatStore.js").TimingSpan[] };
+            if (val?.spans) {
+              metadata = { ...metadata, timingSpans: val.spans };
+              pushToStore();
             }
           }
-          turnRouter.endTurn(conversationId);
           break;
         }
 
-        case "error": {
-          console.error("Stream error:", data.message);
+        case EventType.RUN_FINISHED: {
+          const result = event.result as {
+            pendingToolCalls?: PendingToolCall[];
+          } | undefined;
+
+          const pending = result?.pendingToolCalls;
+
+          if (pending && pending.length > 0) {
+            // Frontend tools need execution — run ends, we execute and re-POST
+            await handlePendingToolCalls(
+              conversationId,
+              wireMessages,
+              parts,
+              pending,
+              agentId,
+              signal,
+              turnCtx,
+              metadata,
+            );
+            return; // handlePendingToolCalls takes over from here
+          }
+
+          // Normal completion — just let the stream end
+          eventBus.endSubscription(conversationId);
+          break;
+        }
+
+        case EventType.RUN_ERROR: {
+          console.error("Stream error:", event.message);
           useThreadStore.getState().finalizeStreaming(
             conversationId,
             {
               type: "incomplete",
               reason: "error",
-              error: (data.message as string) ?? undefined,
+              error: (event.message as string) ?? undefined,
             },
             metadata,
           );
+          eventBus.endSubscription(conversationId);
           return;
         }
       }
     }
 
-    // Explicit abort (Stop button) — finalize as incomplete, don't persist
+    // Explicit abort (Stop button)
     if (signal.aborted) {
       useThreadStore.getState().finalizeStreaming(conversationId, {
         type: "incomplete",
@@ -330,7 +356,6 @@ async function consumeStream(
         await store.persistMessage(convId, turnCtx.userMessage, turnCtx.parentId);
       }
 
-      // Build assistant message from local parts buffer
       const assistantMsg: ChatMessage = {
         id: turnCtx.assistantMessageId,
         role: "assistant",
@@ -355,6 +380,87 @@ async function consumeStream(
       metadata,
     );
   }
+}
+
+// ── Frontend tool handling (end-run pattern) ──
+
+async function handlePendingToolCalls(
+  conversationId: string,
+  previousWireMessages: WireMessage[],
+  currentParts: MessagePart[],
+  pending: PendingToolCall[],
+  agentId: string | undefined,
+  signal: AbortSignal,
+  turnCtx: TurnContext | undefined,
+  metadata: ChatMessage["metadata"],
+): Promise<void> {
+  if (signal.aborted) {
+    useThreadStore.getState().finalizeStreaming(conversationId, {
+      type: "incomplete",
+      reason: "aborted",
+    });
+    return;
+  }
+
+  // Execute frontend tools locally
+  const results: { toolCallId: string; content: string; isError: boolean }[] = [];
+
+  for (const tc of pending) {
+    const { content, isError } = await executeFrontendTool(tc.toolCallName, tc.args);
+    results.push({ toolCallId: tc.toolCallId, content, isError });
+
+    // Update the part in the UI with the result
+    const idx = currentParts.findIndex(
+      (p) => p.type === "tool-call" && p.toolCallId === tc.toolCallId,
+    );
+    if (idx !== -1) {
+      const part = currentParts[idx] as ToolCallPart;
+      currentParts[idx] = { ...part, result: content, isError, status: { type: "complete" } };
+    }
+
+    useThreadStore
+      .getState()
+      .updateStreamingParts(
+        conversationId,
+        currentParts.filter(
+          (p) => !(p.type === "tool-call" && matchHiddenPattern(p.toolName)),
+        ),
+        metadata,
+      );
+  }
+
+  // Build updated wire messages: previous + assistant (with all tool calls + results) + tool results
+  const assistantText = currentParts
+    .filter((p): p is TextPart => p.type === "text")
+    .map((p) => p.text)
+    .join("");
+
+  const allToolCalls = currentParts
+    .filter((p): p is ToolCallPart => p.type === "tool-call")
+    .map((tc) => ({
+      id: tc.toolCallId,
+      name: tc.toolName,
+      args: tc.args,
+      result:
+        typeof tc.result === "string"
+          ? tc.result
+          : tc.result !== undefined
+            ? JSON.stringify(tc.result)
+            : undefined,
+      isError: tc.isError,
+    }));
+
+  const updatedMessages: WireMessage[] = [
+    ...previousWireMessages,
+    {
+      role: "assistant",
+      content: assistantText,
+      toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
+    },
+  ];
+
+  // Re-POST with updated history — the server continues the agent loop
+  await consumeStream(conversationId, updatedMessages, agentId, signal, turnCtx);
 }
 
 // ── Hook ──
@@ -391,19 +497,11 @@ export function useChatStream(): {
 
     const agentId = useChatStore.getState().activeAgentId;
     const conv = useThreadStore.getState().conversations[conversationId] ?? EMPTY_CONV;
-
-    wsClient.send({
-      type: "start_turn",
-      conversationId,
-      data: {
-        messages: toWireMessages(conv.messages),
-        agentId: agentId || undefined,
-      } as unknown as Record<string, unknown>,
-    });
+    const wireMessages = toWireMessages(conv.messages);
 
     const controller = new AbortController();
     abortRef.current = controller;
-    consumeStream(conversationId, controller.signal, {
+    consumeStream(conversationId, wireMessages, agentId || undefined, controller.signal, {
       conversationId,
       userMessage,
       parentId,
@@ -458,19 +556,11 @@ export function useChatStream(): {
 
       const agentId = useChatStore.getState().activeAgentId;
       const allMessages = [...branchMessages, userMessage];
-
-      wsClient.send({
-        type: "start_turn",
-        conversationId,
-        data: {
-          messages: toWireMessages(allMessages),
-          agentId: agentId || undefined,
-        } as unknown as Record<string, unknown>,
-      });
+      const wireMessages = toWireMessages(allMessages);
 
       const controller = new AbortController();
       abortRef.current = controller;
-      consumeStream(conversationId, controller.signal, {
+      consumeStream(conversationId, wireMessages, agentId || undefined, controller.signal, {
         conversationId,
         userMessage,
         parentId: branchParentId,
@@ -514,19 +604,11 @@ export function useChatStream(): {
       );
 
       const agentId = useChatStore.getState().activeAgentId;
-
-      wsClient.send({
-        type: "start_turn",
-        conversationId,
-        data: {
-          messages: toWireMessages(messagesUpToUser),
-          agentId: agentId || undefined,
-        } as unknown as Record<string, unknown>,
-      });
+      const wireMessages = toWireMessages(messagesUpToUser);
 
       const controller = new AbortController();
       abortRef.current = controller;
-      consumeStream(conversationId, controller.signal, {
+      consumeStream(conversationId, wireMessages, agentId || undefined, controller.signal, {
         conversationId,
         userMessage,
         parentId: userIdx > 0 ? conv.messages[userIdx - 1].id : null,
@@ -540,8 +622,8 @@ export function useChatStream(): {
   const abort = useCallback(() => {
     const conversationId = useThreadListStore.getState().activeThreadId;
     if (conversationId) {
-      wsClient.send({ type: "abort_turn", conversationId });
-      turnRouter.abort(conversationId);
+      abortTurn(conversationId);
+      eventBus.endSubscription(conversationId);
     }
     abortRef.current?.abort();
   }, []);
@@ -561,9 +643,12 @@ export function useChatStream(): {
     });
     const assistantMessageId = store.startStreaming(pendingConvId);
 
+    const conv = store.conversations[pendingConvId] ?? EMPTY_CONV;
+    const wireMessages = toWireMessages(conv.messages);
+
     const controller = new AbortController();
     abortRef.current = controller;
-    consumeStream(pendingConvId, controller.signal, {
+    consumeStream(pendingConvId, wireMessages, undefined, controller.signal, {
       conversationId: pendingConvId,
       userMessage,
       parentId,
