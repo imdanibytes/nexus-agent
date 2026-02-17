@@ -1,10 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
-import { getAccessToken } from "./auth.js";
-
-const NEXUS_HOST_URL =
-  process.env.NEXUS_HOST_URL || "http://host.docker.internal:9600";
+import { nexus } from "./nexus.js";
 
 let client: Client | null = null;
 let toolsChangedHandler: (() => void) | null = null;
@@ -16,10 +13,10 @@ export function setToolsChangedHandler(handler: () => void): void {
 export async function getMcpClient(): Promise<Client> {
   if (client) return client;
 
-  const token = await getAccessToken();
+  const token = await nexus.getAccessToken();
 
   const transport = new StreamableHTTPClientTransport(
-    new URL(`${NEXUS_HOST_URL}/mcp`),
+    new URL(`${nexus.apiUrl}/mcp`),
     {
       requestInit: {
         headers: {

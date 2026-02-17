@@ -1,7 +1,5 @@
-import { getAccessToken } from "./auth.js";
+import { nexus } from "./nexus.js";
 import type { AgentSettings } from "./types.js";
-
-const NEXUS_HOST_URL = process.env.NEXUS_HOST_URL || "http://host.docker.internal:9600";
 
 const DEFAULTS: AgentSettings = {
   llm_endpoint: "http://host.docker.internal:11434",
@@ -13,12 +11,7 @@ const DEFAULTS: AgentSettings = {
 
 export async function getSettings(): Promise<AgentSettings> {
   try {
-    const token = await getAccessToken();
-    const res = await fetch(`${NEXUS_HOST_URL}/api/v1/settings`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) return DEFAULTS;
-    const data = await res.json() as Record<string, unknown>;
+    const data = await nexus.getSettings();
     return {
       llm_endpoint: (data.llm_endpoint as string) || DEFAULTS.llm_endpoint,
       llm_api_key: (data.llm_api_key as string) || DEFAULTS.llm_api_key,
@@ -34,15 +27,7 @@ export async function getSettings(): Promise<AgentSettings> {
 export async function updateSettings(
   updates: Partial<AgentSettings>,
 ): Promise<void> {
-  const token = await getAccessToken();
   const current = await getSettings();
   const merged = { ...current, ...updates };
-  await fetch(`${NEXUS_HOST_URL}/api/v1/settings`, {
-    method: "PUT",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(merged),
-  });
+  await nexus.saveSettings(merged);
 }

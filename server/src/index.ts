@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { v4 as uuidv4 } from "uuid";
-import { getAccessToken } from "./auth.js";
+import { nexus } from "./nexus.js";
 import {
   listConversations,
   getConversation,
@@ -41,7 +41,6 @@ import { handleSseRoute } from "./sse-handler.js";
 import type { Conversation } from "./types.js";
 
 const PORT = 80;
-const NEXUS_API_URL = process.env.NEXUS_API_URL || "http://host.docker.internal:9600";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "..", "public");
@@ -115,8 +114,8 @@ const server = http.createServer(async (req, res) => {
 
     // Config endpoint — frontend gets token + apiUrl
     if (url === "/api/config") {
-      const token = await getAccessToken();
-      json(res, 200, { token, apiUrl: NEXUS_API_URL });
+      await nexus.getAccessToken();
+      json(res, 200, nexus.getClientConfig());
       return;
     }
 
