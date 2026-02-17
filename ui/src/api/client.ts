@@ -188,6 +188,17 @@ export async function appendRepositoryMessage(
   });
 }
 
+export async function deleteAllConversations(): Promise<{ deleted: number }> {
+  const res = await fetch("/api/conversations", { method: "DELETE" });
+  return res.json();
+}
+
+export async function exportConversations(): Promise<{ path: string }> {
+  const res = await fetch("/api/conversations/export", { method: "POST" });
+  if (!res.ok) throw new Error("Export failed");
+  return res.json();
+}
+
 export async function renameConversation(id: string, title: string): Promise<void> {
   await fetch(`/api/conversations/${id}`, {
     method: "PATCH",

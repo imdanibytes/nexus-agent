@@ -339,6 +339,25 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // Export all conversations — writes to host filesystem via Nexus SDK
+    if (method === "POST" && url === "/api/conversations/export") {
+      const all = listConversations();
+      const full = all.map((c) => getConversation(c.id)).filter(Boolean);
+      const filename = `nexus-conversations-${new Date().toISOString().slice(0, 10)}.json`;
+      const exportPath = `~/Downloads/${filename}`;
+      await nexus.writeFile(exportPath, JSON.stringify(full, null, 2));
+      json(res, 200, { path: exportPath });
+      return;
+    }
+
+    // Delete all conversations
+    if (method === "DELETE" && url === "/api/conversations") {
+      const all = listConversations();
+      for (const c of all) deleteConversation(c.id);
+      json(res, 200, { deleted: all.length });
+      return;
+    }
+
     // Create conversation
     if (method === "POST" && url === "/api/conversations") {
       const conv: Conversation = {

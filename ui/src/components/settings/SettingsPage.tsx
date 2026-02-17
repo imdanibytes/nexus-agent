@@ -1,17 +1,19 @@
 import { useState } from "react";
-import { ArrowLeft, Bot, Server, Wrench } from "lucide-react";
+import { ArrowLeft, Bot, Database, Server, Wrench } from "lucide-react";
 import { useChatStore } from "@/stores/chatStore.js";
 import { AgentsTab } from "./AgentsTab.js";
 import { ProvidersTab } from "./ProvidersTab.js";
 import { ToolsTab } from "./ToolsTab.js";
+import { DataTab } from "./DataTab.js";
 import { Button } from "@imdanibytes/nexus-ui";
 
-type SettingsTab = "agents" | "providers" | "tools";
+type SettingsTab = "agents" | "providers" | "tools" | "data";
 
 const TABS: { id: SettingsTab; label: string; icon: typeof Bot }[] = [
   { id: "agents", label: "Agents", icon: Bot },
   { id: "providers", label: "Providers", icon: Server },
   { id: "tools", label: "Tools", icon: Wrench },
+  { id: "data", label: "Data", icon: Database },
 ];
 
 export function SettingsPage() {
@@ -62,6 +64,7 @@ export function SettingsPage() {
             {active === "agents" && <AgentsTab />}
             {active === "providers" && <ProvidersTab />}
             {active === "tools" && <ToolsTab />}
+            {active === "data" && <DataTab />}
           </div>
         </div>
       </div>
