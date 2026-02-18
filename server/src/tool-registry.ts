@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { ToolExecutor } from "./tools/executor.js";
 import type { ToolDefinition } from "./tools/types.js";
 import type { ToolFilter } from "./types.js";
+import { getToolSettings } from "./tool-settings.js";
 import { setTitleTool } from "./tools/handlers/local.js";
 import { fetchMcpToolHandlers } from "./tools/handlers/remote.js";
 
@@ -73,9 +74,16 @@ export async function getToolRegistry(
   executor.register(setTitleTool);
   executor.registerAll(await fetchMcpToolHandlers());
 
-  // Filter server tools only — frontend tools bypass server-side filters
-  // (they're defined by the client and shouldn't be subject to admin deny-lists)
-  const serverDefs = applyToolFilters(executor.definitions(), globalFilter, agentFilter);
+  // Apply hiddenToolPatterns first — these are system-level patterns (e.g. "_nexus_*")
+  // that should always be excluded regardless of other filters
+  const toolSettings = await getToolSettings();
+  const visibleDefs = executor.definitions().filter(
+    (d) => !toolSettings.hiddenToolPatterns.some((p) => matchGlob(p, d.name)),
+  );
+
+  // Then apply global + agent-level filters. Frontend tools bypass server-side
+  // filters (they're defined by the client and shouldn't be subject to admin deny-lists)
+  const serverDefs = applyToolFilters(visibleDefs, globalFilter, agentFilter);
   const filtered: ToolDefinition[] = [...serverDefs, ...(frontendTools ?? [])];
 
   // LLM APIs require tool names to match ^[a-zA-Z0-9_-]+$ — sanitize dots
