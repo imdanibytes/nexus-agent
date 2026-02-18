@@ -24,6 +24,8 @@ import type { ChatMessage, ToolCallPart } from "@/stores/threadStore.js";
 import { getBranchInfo } from "@/lib/message-tree.js";
 import { useAutoScroll } from "@/hooks/useAutoScroll.js";
 import { useChatStream } from "@/hooks/useChatStream.js";
+import { useUsageStore } from "@/stores/usageStore.js";
+import { fetchConversationUsage } from "@/api/client.js";
 import { MarkdownText } from "@/components/chat/MarkdownText.js";
 import { ToolFallback } from "@/components/chat/ToolFallback.js";
 import { TooltipIconButton } from "@/components/chat/tooltip-icon-button.js";
@@ -60,10 +62,13 @@ export const Thread: FC = () => {
     scrollToBottomIfNeeded,
   } = useAutoScroll();
 
-  // Load history when thread changes
+  // Load history + usage when thread changes
   useEffect(() => {
     if (activeThreadId) {
       useThreadStore.getState().loadHistory(activeThreadId);
+      fetchConversationUsage(activeThreadId).then((u) => {
+        if (u) useUsageStore.getState().setUsage(activeThreadId, u);
+      });
     }
   }, [activeThreadId]);
 

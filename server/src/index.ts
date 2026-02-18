@@ -378,6 +378,18 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // Usage for a conversation
+    const usageMatch = url.match(/^\/api\/conversations\/([a-f0-9-]+)\/usage$/);
+    if (method === "GET" && usageMatch) {
+      const conv = getConversation(usageMatch[1]);
+      if (!conv) {
+        json(res, 404, { error: "Conversation not found" });
+        return;
+      }
+      json(res, 200, conv.usage ?? null);
+      return;
+    }
+
     // Append message to conversation repository (tree-structured persistence)
     const convMsgMatch = url.match(/^\/api\/conversations\/([a-f0-9-]+)\/messages$/);
     if (method === "POST" && convMsgMatch) {

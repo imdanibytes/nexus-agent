@@ -9,7 +9,9 @@ import type {
 } from "@/stores/threadStore.js";
 import { useChatStore } from "@/stores/chatStore.js";
 import { useMcpTurnStore } from "@/stores/mcpTurnStore.js";
+import { useUsageStore } from "@/stores/usageStore.js";
 import { fetchToolSettings } from "@/api/client.js";
+import type { ConversationUsage } from "@/api/client.js";
 import type { WireMessage } from "@/api/client.js";
 import {
   eventBus,
@@ -300,6 +302,11 @@ async function consumeStream(
             if (val?.spans) {
               metadata = { ...metadata, timingSpans: val.spans };
               pushToStore();
+            }
+          } else if (name === "usage") {
+            const val = event.value as ConversationUsage;
+            if (val) {
+              useUsageStore.getState().setUsage(conversationId, val);
             }
           }
           break;

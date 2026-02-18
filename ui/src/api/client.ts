@@ -210,6 +210,22 @@ export async function renameConversation(id: string, title: string): Promise<voi
   });
 }
 
+// ── Conversation usage ──
+
+export interface ConversationUsage {
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCost: number;
+  contextTokens: number;
+  contextWindow: number;
+}
+
+export async function fetchConversationUsage(id: string): Promise<ConversationUsage | null> {
+  const res = await fetch(`/api/conversations/${id}/usage`);
+  if (!res.ok) return null;
+  return res.json();
+}
+
 // ── Providers ──
 
 export async function fetchProviders(): Promise<ProviderPublic[]> {

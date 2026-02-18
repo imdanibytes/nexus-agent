@@ -7,6 +7,7 @@ import {
 } from "react";
 import { ArrowUpIcon, SquareIcon } from "lucide-react";
 import { AgentSwitcher } from "@/components/AgentSwitcher.js";
+import { ContextRing } from "@/components/ContextRing.js";
 import { TooltipIconButton } from "@/components/chat/tooltip-icon-button.js";
 import { Button } from "@imdanibytes/nexus-ui";
 
@@ -69,6 +70,7 @@ export const Composer: FC<ComposerProps> = ({
       <div className="aui-composer-action-wrapper relative mx-2 mb-2 flex items-center justify-between">
         <div className="flex items-center gap-1">
           <AgentSwitcher />
+          <ContextRing />
         </div>
         {!isStreaming ? (
           <TooltipIconButton

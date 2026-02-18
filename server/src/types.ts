@@ -93,6 +93,19 @@ export interface TokenUsage {
   timestamp: number;
 }
 
+export interface ConversationUsage {
+  /** Sum of input tokens billed across all API calls in this conversation */
+  totalInputTokens: number;
+  /** Sum of output tokens billed across all API calls */
+  totalOutputTokens: number;
+  /** Running USD cost total */
+  totalCost: number;
+  /** Latest context fill — input tokens from most recent API response */
+  contextTokens: number;
+  /** Model context window at time of last call */
+  contextWindow: number;
+}
+
 export interface Conversation {
   id: string;
   title: string;
@@ -105,6 +118,8 @@ export interface Conversation {
   };
   /** Last known token usage from LLM API response — persisted for compaction budgeting */
   lastTokenUsage?: TokenUsage;
+  /** Cumulative usage / cost tracking for the conversation */
+  usage?: ConversationUsage;
 }
 
 export interface SseWriter {

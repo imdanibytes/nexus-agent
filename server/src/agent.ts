@@ -15,7 +15,8 @@ import { SpanCollector } from "./timing.js";
 import { CompactionPipeline, truncateOldToolResults } from "./compaction/pipeline.js";
 import { toolResponsePruner } from "./compaction/passes/tool-response-pruner.js";
 import { resolveContextWindow } from "./compaction/models.js";
-import type { Conversation, MessagePart, SseWriter, WireMessage } from "./types.js";
+import { resolvePrice, calculateCost } from "./compaction/pricing.js";
+import type { Conversation, ConversationUsage, MessagePart, SseWriter, WireMessage } from "./types.js";
 import type { ToolDefinition } from "./tools/types.js";
 import { EventType, type PendingToolCall, type ResolvedToolResult } from "./ag-ui-types.js";
 
@@ -308,6 +309,29 @@ async function _runAgentTurnInner(
         outputTokens: result.tokenUsage.outputTokens,
         timestamp: Date.now(),
       };
+
+      // Accumulate cumulative usage + cost
+      const pricing = resolvePrice(config.model, config.provider);
+      const turnCost = calculateCost(
+        result.tokenUsage.inputTokens,
+        result.tokenUsage.outputTokens,
+        pricing,
+      );
+
+      if (!conv.usage) {
+        conv.usage = {
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          totalCost: 0,
+          contextTokens: 0,
+          contextWindow: 0,
+        };
+      }
+      conv.usage.totalInputTokens += result.tokenUsage.inputTokens;
+      conv.usage.totalOutputTokens += result.tokenUsage.outputTokens;
+      conv.usage.totalCost += turnCost;
+      conv.usage.contextTokens = result.tokenUsage.inputTokens;
+      conv.usage.contextWindow = contextWindow;
     }
 
     roundSpan.end();
@@ -343,6 +367,13 @@ async function _runAgentTurnInner(
     value: { spans: timingSpans },
   });
 
+  if (conv.usage) {
+    sse.writeEvent(EventType.CUSTOM, {
+      name: "usage",
+      value: conv.usage,
+    });
+  }
+
   const stopReason = abortController.signal.aborted
     ? "abort"
     : turnResult.pendingToolCalls
@@ -373,6 +404,9 @@ function mergeAndSave(agentConv: Conversation, id: string): void {
   disk.updatedAt = Date.now();
   if (agentConv.lastTokenUsage) {
     disk.lastTokenUsage = agentConv.lastTokenUsage;
+  }
+  if (agentConv.usage) {
+    disk.usage = agentConv.usage;
   }
   saveConversation(disk);
 }
