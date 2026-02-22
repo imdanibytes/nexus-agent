@@ -2,28 +2,30 @@ pub mod context;
 pub mod decorator;
 pub mod error;
 pub mod events;
+pub mod inference;
 pub mod memory;
-pub mod provider;
 pub mod session;
 pub mod tools;
 pub mod types;
 
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 pub use context::{
     estimate_str_tokens, estimate_tokens, ContextManager, ManagedContextManager, TokenBudget,
 };
 pub use error::{AgentError, InferenceError};
 pub use events::AgentEvent;
-pub use provider::{AnthropicProvider, InferenceProvider};
+pub use inference::{AnthropicProvider, InferenceProvider, OllamaProvider, OpenAiProvider};
 pub use session::{FileSessionManager, NoSessionManager, SessionManager, SessionState};
 pub use decorator::{
     redaction::RedactionTransform, source_tag::SourceTagTransform, Decoration, DecoratorError,
     ToolDecorator, ToolTransform,
 };
 pub use tools::{ToolHandler, ToolPipeline, ToolRegistry};
-pub use types::{ContentBlock, InferenceRequest, InferenceResponse, StopReason, Usage};
+pub use types::{
+    ContentBlock, InferenceRequest, InferenceResponse, StopReason, ThinkingConfig, Usage,
+};
 
 /// Agent configuration.
 pub struct AgentConfig {
@@ -189,6 +191,13 @@ impl Agent {
 
             // Build and send inference request
             let request = self.context.build_request();
+            debug!(
+                turn,
+                messages = request.messages.len(),
+                tools = request.tools.len(),
+                has_system = request.system.is_some(),
+                "sending inference request"
+            );
             let response = if let Some(ref cancel) = cancel {
                 tokio::select! {
                     result = self.provider.infer(request) => result?,
@@ -201,20 +210,43 @@ impl Agent {
                 self.provider.infer(request).await?
             };
 
+            debug!(
+                turn,
+                stop_reason = ?response.stop_reason,
+                content_blocks = response.content.len(),
+                input_tokens = response.usage.input_tokens,
+                output_tokens = response.usage.output_tokens,
+                "inference response received"
+            );
+
             total_usage.accumulate(&response.usage);
             self.context.record_response(&response);
 
-            // Extract text from content blocks
+            // Extract text and thinking from content blocks
             for block in &response.content {
-                if let ContentBlock::Text(text) = block {
-                    final_text = text.clone();
-                    if let Some(ref tx) = tx {
-                        let _ = tx
-                            .send(AgentEvent::Text {
-                                content: text.clone(),
-                            })
-                            .await;
+                match block {
+                    ContentBlock::Thinking(thinking) => {
+                        debug!(turn, thinking_len = thinking.len(), "thinking block");
+                        if let Some(ref tx) = tx {
+                            let _ = tx
+                                .send(AgentEvent::Thinking {
+                                    content: thinking.clone(),
+                                })
+                                .await;
+                        }
                     }
+                    ContentBlock::Text(text) => {
+                        final_text = text.clone();
+                        debug!(turn, text_len = text.len(), "text block");
+                        if let Some(ref tx) = tx {
+                            let _ = tx
+                                .send(AgentEvent::Text {
+                                    content: text.clone(),
+                                })
+                                .await;
+                        }
+                    }
+                    ContentBlock::ToolUse { .. } => {} // handled below in ToolUse branch
                 }
             }
 
@@ -233,6 +265,7 @@ impl Agent {
                 StopReason::ToolUse => {
                     for block in &response.content {
                         if let ContentBlock::ToolUse { id, name, input } = block {
+                            debug!(turn, tool = %name, "tool call");
                             if let Some(ref tx) = tx {
                                 let _ = tx
                                     .send(AgentEvent::ToolCall {
@@ -247,6 +280,14 @@ impl Agent {
                                 Ok(s) => (s.as_str(), false),
                                 Err(s) => (s.as_str(), true),
                             };
+
+                            debug!(
+                                turn,
+                                tool = %name,
+                                is_error = is_err,
+                                output_len = output.len(),
+                                "tool result"
+                            );
 
                             if let Some(ref tx) = tx {
                                 let _ = tx

@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 use tracing::debug;
 
 use crate::error::AgentError;
-use crate::types::{ContentBlock, InferenceRequest, InferenceResponse};
+use crate::types::{ContentBlock, InferenceRequest, InferenceResponse, ThinkingConfig};
 
 /// Owns everything the LLM sees. The ONE place all context decisions happen.
 pub trait ContextManager: Send + Sync {
@@ -121,6 +121,9 @@ pub struct ManagedContextManager {
     // Tool deferral
     active_tools: HashSet<String>,
 
+    // Extended thinking
+    thinking: Option<ThinkingConfig>,
+
     // Compaction
     compaction_state: CompactionState,
 
@@ -142,6 +145,7 @@ impl ManagedContextManager {
             messages: Vec::new(),
             tool_schemas: Vec::new(),
             active_tools: HashSet::new(),
+            thinking: None,
             compaction_state: CompactionState::default(),
             compaction_threshold: 0.80,
             prune_threshold: 0.70,
@@ -183,6 +187,12 @@ impl ManagedContextManager {
 
     pub fn with_tool_defer_threshold(mut self, fraction: f32) -> Self {
         self.tool_defer_threshold = fraction;
+        self
+    }
+
+    /// Enable extended thinking with the given token budget.
+    pub fn with_thinking(mut self, budget_tokens: u32) -> Self {
+        self.thinking = Some(ThinkingConfig { budget_tokens });
         self
     }
 
@@ -365,6 +375,7 @@ impl ContextManager for ManagedContextManager {
             system: self.system.clone(),
             tools,
             messages,
+            thinking: self.thinking.clone(),
         }
     }
 
@@ -383,6 +394,10 @@ impl ContextManager for ManagedContextManager {
                 ContentBlock::Text(text) => json!({
                     "type": "text",
                     "text": text,
+                }),
+                ContentBlock::Thinking(thinking) => json!({
+                    "type": "thinking",
+                    "thinking": thinking,
                 }),
                 ContentBlock::ToolUse { id, name, input } => json!({
                     "type": "tool_use",
@@ -546,6 +561,7 @@ impl ContextManager for ManagedContextManager {
                 "role": "user",
                 "content": prompt,
             })],
+            thinking: None,
         })
     }
 

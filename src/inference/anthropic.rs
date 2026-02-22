@@ -1,15 +1,9 @@
 use async_trait::async_trait;
 use serde_json::Value;
 
+use super::InferenceProvider;
 use crate::error::InferenceError;
 use crate::types::{ContentBlock, InferenceRequest, InferenceResponse, StopReason, Usage};
-
-/// Pure LLM API call. No state, no history, no context management.
-/// Request in, response out.
-#[async_trait]
-pub trait InferenceProvider: Send + Sync {
-    async fn infer(&self, request: InferenceRequest) -> Result<InferenceResponse, InferenceError>;
-}
 
 /// Claude API client via Anthropic's messages endpoint.
 pub struct AnthropicProvider {
@@ -54,16 +48,33 @@ impl InferenceProvider for AnthropicProvider {
             body["system"] = Value::String(system.clone());
         }
 
-        if !request.tools.is_empty() {
+        let has_tools = !request.tools.is_empty();
+        if has_tools {
             body["tools"] = Value::Array(request.tools);
         }
 
-        let resp = self
+        // Extended thinking
+        let thinking_enabled = request.thinking.is_some();
+        if let Some(ref thinking) = request.thinking {
+            body["thinking"] = serde_json::json!({
+                "type": "enabled",
+                "budget_tokens": thinking.budget_tokens,
+            });
+        }
+
+        let mut req = self
             .client
             .post(format!("{}/v1/messages", self.base_url))
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
-            .header("content-type", "application/json")
+            .header("content-type", "application/json");
+
+        // Interleaved thinking with tool use requires a beta header
+        if thinking_enabled && has_tools {
+            req = req.header("anthropic-beta", "interleaved-thinking-2025-05-14");
+        }
+
+        let resp = req
             .json(&body)
             .send()
             .await
@@ -99,6 +110,9 @@ impl InferenceProvider for AnthropicProvider {
             .filter_map(|block| match block["type"].as_str()? {
                 "text" => Some(ContentBlock::Text(
                     block["text"].as_str().unwrap_or("").to_string(),
+                )),
+                "thinking" => Some(ContentBlock::Thinking(
+                    block["thinking"].as_str().unwrap_or("").to_string(),
                 )),
                 "tool_use" => Some(ContentBlock::ToolUse {
                     id: block["id"].as_str()?.to_string(),

@@ -4,6 +4,7 @@ use serde_json::Value;
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
     TurnStart { turn: usize },
+    Thinking { content: String },
     Text { content: String },
     ToolCall { name: String, input: Value },
     ToolResult { name: String, output: String, is_error: bool },

@@ -21,5 +21,7 @@ tokio-util = "0.7"
 tracing = "0.1"
 
 [dev-dependencies]
+clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 tempfile = "3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
