@@ -110,6 +110,17 @@ impl Agent {
         self.run_loop(0, None, Some(tx)).await
     }
 
+    /// Invocation with both streaming events and cancellation support.
+    pub async fn invoke_streaming_with_cancel(
+        &mut self,
+        prompt: &str,
+        cancel: CancellationToken,
+        tx: tokio::sync::mpsc::Sender<AgentEvent>,
+    ) -> Result<AgentResult, AgentError> {
+        self.context.add_prompt(prompt);
+        self.run_loop(0, Some(cancel), Some(tx)).await
+    }
+
     /// Resume from a previously checkpointed session.
     pub async fn resume(&mut self, session_id: &str) -> Result<Option<AgentResult>, AgentError> {
         if let Some(state) = self.session.load(session_id).await? {
