@@ -1,4 +1,5 @@
 pub mod context;
+pub mod decorator;
 pub mod error;
 pub mod events;
 pub mod memory;
@@ -17,7 +18,11 @@ pub use error::{AgentError, InferenceError};
 pub use events::AgentEvent;
 pub use provider::{AnthropicProvider, InferenceProvider};
 pub use session::{FileSessionManager, NoSessionManager, SessionManager, SessionState};
-pub use tools::{ToolHandler, ToolSet};
+pub use decorator::{
+    redaction::RedactionTransform, source_tag::SourceTagTransform, Decoration, DecoratorError,
+    ToolDecorator, ToolTransform,
+};
+pub use tools::{ToolHandler, ToolPipeline, ToolRegistry};
 pub use types::{ContentBlock, InferenceRequest, InferenceResponse, StopReason, Usage};
 
 /// Agent configuration.
@@ -52,7 +57,7 @@ pub struct Agent {
     provider: Box<dyn InferenceProvider>,
     context: Box<dyn ContextManager>,
     session: Box<dyn SessionManager>,
-    tools: ToolSet,
+    tools: ToolPipeline,
     config: AgentConfig,
 }
 
@@ -60,7 +65,7 @@ impl Agent {
     pub fn new(
         provider: impl InferenceProvider + 'static,
         context: impl ContextManager + 'static,
-        tools: ToolSet,
+        tools: ToolPipeline,
         config: AgentConfig,
     ) -> Self {
         Self {
@@ -374,9 +379,10 @@ mod tests {
     }
 
     fn make_agent(provider: MockProvider) -> Agent {
-        let tools = ToolSet::new().add("echo", echo_schema(), EchoTool);
+        let registry = ToolRegistry::new().add("echo", echo_schema(), EchoTool);
         let context =
-            ManagedContextManager::new("test-model", 1024, 200_000).with_tools(tools.schemas());
+            ManagedContextManager::new("test-model", 1024, 200_000).with_tools(registry.schemas());
+        let tools = ToolPipeline::new(registry);
         Agent::new(
             provider,
             context,
@@ -465,9 +471,10 @@ mod tests {
             .collect();
 
         let provider = MockProvider::new(responses);
-        let tools = ToolSet::new().add("echo", echo_schema(), EchoTool);
+        let registry = ToolRegistry::new().add("echo", echo_schema(), EchoTool);
         let context =
-            ManagedContextManager::new("test-model", 1024, 200_000).with_tools(tools.schemas());
+            ManagedContextManager::new("test-model", 1024, 200_000).with_tools(registry.schemas());
+        let tools = ToolPipeline::new(registry);
         let mut agent = Agent::new(
             provider,
             context,
@@ -551,11 +558,12 @@ mod tests {
             },
         ]);
 
-        let tools = ToolSet::new()
+        let registry = ToolRegistry::new()
             .add("fail_tool", json!({"name": "fail_tool"}), ErrorTool)
             .add("echo", echo_schema(), EchoTool);
         let context =
-            ManagedContextManager::new("test-model", 1024, 200_000).with_tools(tools.schemas());
+            ManagedContextManager::new("test-model", 1024, 200_000).with_tools(registry.schemas());
+        let tools = ToolPipeline::new(registry);
         let mut agent = Agent::new(
             provider,
             context,
@@ -609,9 +617,10 @@ mod tests {
             usage: Usage::default(),
         }]);
 
-        let tools1 = ToolSet::new().add("echo", echo_schema(), EchoTool);
+        let registry1 = ToolRegistry::new().add("echo", echo_schema(), EchoTool);
         let context1 =
-            ManagedContextManager::new("test-model", 1024, 200_000).with_tools(tools1.schemas());
+            ManagedContextManager::new("test-model", 1024, 200_000).with_tools(registry1.schemas());
+        let tools1 = ToolPipeline::new(registry1);
         let mut agent1 = Agent::new(
             provider1,
             context1,
@@ -638,9 +647,10 @@ mod tests {
             },
         }]);
 
-        let tools2 = ToolSet::new().add("echo", echo_schema(), EchoTool);
+        let registry2 = ToolRegistry::new().add("echo", echo_schema(), EchoTool);
         let context2 =
-            ManagedContextManager::new("test-model", 1024, 200_000).with_tools(tools2.schemas());
+            ManagedContextManager::new("test-model", 1024, 200_000).with_tools(registry2.schemas());
+        let tools2 = ToolPipeline::new(registry2);
         let mut agent2 = Agent::new(
             provider2,
             context2,
@@ -790,7 +800,7 @@ mod tests {
         let mut agent = Agent::new(
             provider,
             context,
-            ToolSet::new(),
+            ToolPipeline::new(ToolRegistry::new()),
             AgentConfig {
                 model: "test-model".into(),
                 max_tokens: 1024,
@@ -1240,14 +1250,15 @@ mod tests {
                 ])),
             };
 
-            let tools = ToolSet::new().add("echo", echo_schema(), EchoTool);
+            let registry = ToolRegistry::new().add("echo", echo_schema(), EchoTool);
             // 4000-token window. Initial prompt + schema ≈ 50 tokens (well under 60%).
             // After tool call + result: assistant msg with 2000-char input ≈ 500 tokens,
             // plus tool result (echo returns the input) ≈ 500 tokens → total ≈ 1050.
             // Effective window = 4000 - 100 = 3900. Threshold 0.25 = 975. Should trigger.
             let context = ManagedContextManager::new("test-model", 100, 4000)
                 .with_compaction_threshold(0.25)
-                .with_tools(tools.schemas());
+                .with_tools(registry.schemas());
+            let tools = ToolPipeline::new(registry);
 
             let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(32);
 
