@@ -421,11 +421,10 @@ impl ContextManager for ManagedContextManager {
         }));
     }
 
-    fn record_tool_result(&mut self, call_id: &str, name: &str, result: &str, is_error: bool) {
+    fn record_tool_result(&mut self, call_id: &str, _name: &str, result: &str, is_error: bool) {
         let mut tool_result = json!({
             "type": "tool_result",
             "tool_use_id": call_id,
-            "tool_name": name,
             "content": result,
         });
         if is_error {
