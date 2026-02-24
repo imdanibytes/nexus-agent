@@ -422,6 +422,13 @@ fn spawn_agent_turn(
             }
             Err(e) => {
                 tracing::error!("Agent turn failed: {}", e);
+                // Safety net: run_agent_turn sends RUN_ERROR internally,
+                // but if that was missed, send one from here too.
+                let _ = agent_tx.send(AgUiEvent::RunError {
+                    thread_id: conversation_id.clone(),
+                    run_id: String::new(),
+                    message: e.to_string(),
+                });
             }
         }
     });

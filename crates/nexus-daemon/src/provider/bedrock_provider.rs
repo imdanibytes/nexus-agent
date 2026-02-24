@@ -70,6 +70,13 @@ impl InferenceProvider for BedrockProvider {
             body["tools"] = serde_json::to_value(&tools)?;
         }
 
+        tracing::debug!(
+            model = model,
+            tools = tools.len(),
+            body = %serde_json::to_string_pretty(&body).unwrap_or_default(),
+            "Bedrock request body"
+        );
+
         let body_bytes = serde_json::to_vec(&body)?;
 
         let output = self
