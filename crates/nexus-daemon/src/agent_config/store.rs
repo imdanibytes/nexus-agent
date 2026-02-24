@@ -44,6 +44,19 @@ impl AgentStore {
         temperature: Option<f32>,
         max_tokens: Option<u32>,
     ) -> Result<AgentEntry> {
+        self.create_with_mcp(name, provider_id, model, system_prompt, temperature, max_tokens, None)
+    }
+
+    pub fn create_with_mcp(
+        &mut self,
+        name: String,
+        provider_id: String,
+        model: String,
+        system_prompt: Option<String>,
+        temperature: Option<f32>,
+        max_tokens: Option<u32>,
+        mcp_server_ids: Option<Vec<String>>,
+    ) -> Result<AgentEntry> {
         let now = Utc::now();
         let agent = AgentEntry {
             id: Uuid::new_v4().to_string(),
@@ -53,6 +66,7 @@ impl AgentStore {
             system_prompt,
             temperature,
             max_tokens,
+            mcp_server_ids,
             created_at: now,
             updated_at: now,
         };
@@ -83,6 +97,9 @@ impl AgentStore {
         }
         if updates.set_max_tokens {
             agent.max_tokens = updates.max_tokens;
+        }
+        if updates.set_mcp_server_ids {
+            agent.mcp_server_ids = updates.mcp_server_ids;
         }
         agent.updated_at = Utc::now();
 
@@ -123,4 +140,6 @@ pub struct AgentUpdate {
     pub set_temperature: bool,
     pub max_tokens: Option<u32>,
     pub set_max_tokens: bool,
+    pub mcp_server_ids: Option<Vec<String>>,
+    pub set_mcp_server_ids: bool,
 }

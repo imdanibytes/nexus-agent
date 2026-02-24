@@ -55,6 +55,11 @@ export interface ChatMessage {
   };
   metadata?: {
     timingSpans?: TimingSpan[];
+    agent?: {
+      agent_id: string;
+      agent_name: string;
+      model: string;
+    };
   };
 }
 

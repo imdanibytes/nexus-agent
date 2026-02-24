@@ -22,6 +22,7 @@ interface AgentState {
     data: Partial<CreateAgentRequest> & {
       set_temperature?: boolean;
       set_max_tokens?: boolean;
+      set_mcp_server_ids?: boolean;
     },
   ) => Promise<AgentConfig>;
   deleteAgent: (id: string) => Promise<void>;

@@ -14,9 +14,14 @@ interface ThreadListState {
   isLoading: boolean;
 
   loadThreads: () => Promise<void>;
+  /** Create a conversation on the server. Returns the new ID. Caller navigates. */
   createThread: () => Promise<string>;
-  deleteThread: (id: string) => Promise<void>;
+  /** Delete a conversation. Returns the next thread ID (or null). Caller navigates. */
+  deleteThread: (id: string) => Promise<string | null>;
   renameThread: (id: string, title: string) => Promise<void>;
+  /** Set the active thread from route params. No URL side-effects. */
+  setActiveThread: (id: string | null) => void;
+  /** @deprecated alias — use setActiveThread */
   switchThread: (id: string) => void;
   updateThreadTitle: (id: string, title: string) => void;
   touchThread: (id: string) => void;
@@ -28,7 +33,7 @@ function sortByDate(a: ConversationMeta, b: ConversationMeta): number {
   );
 }
 
-export const useThreadListStore = create<ThreadListState>((set) => ({
+export const useThreadListStore = create<ThreadListState>((set, get) => ({
   threads: [],
   activeThreadId: null,
   isLoading: false,
@@ -51,21 +56,22 @@ export const useThreadListStore = create<ThreadListState>((set) => ({
       threads: [conv, ...s.threads],
       activeThreadId: conv.id,
     }));
-    history.replaceState(null, "", `/c/${conv.id}`);
     return conv.id;
   },
 
   deleteThread: async (id) => {
     await deleteConversation(id);
+    let nextId: string | null = null;
     set((s) => {
       const threads = s.threads.filter((t) => t.id !== id);
       const activeThreadId =
         s.activeThreadId === id
           ? threads[0]?.id ?? null
           : s.activeThreadId;
-      history.replaceState(null, "", activeThreadId ? `/c/${activeThreadId}` : "/");
+      nextId = activeThreadId;
       return { threads, activeThreadId };
     });
+    return nextId;
   },
 
   renameThread: async (id, title) => {
@@ -75,9 +81,12 @@ export const useThreadListStore = create<ThreadListState>((set) => ({
     }));
   },
 
-  switchThread: (id) => {
+  setActiveThread: (id) => {
     set({ activeThreadId: id });
-    history.replaceState(null, "", id ? `/c/${id}` : "/");
+  },
+
+  switchThread: (id) => {
+    get().setActiveThread(id);
   },
 
   updateThreadTitle: (id, title) => {

@@ -375,7 +375,8 @@ async fn consume_stream(
                 if let Some((idx, tc)) = current_tool.take() {
                     if idx == index {
                         let input: serde_json::Value =
-                            serde_json::from_str(&tc.args_json).unwrap_or_default();
+                            serde_json::from_str(&tc.args_json)
+                                .unwrap_or_else(|_| serde_json::json!({}));
                         content_blocks.push(ContentBlock::ToolUse {
                             id: tc.id.clone(),
                             name: tc.name.clone(),

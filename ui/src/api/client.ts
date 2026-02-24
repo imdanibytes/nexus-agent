@@ -18,6 +18,7 @@ export interface ConversationFull {
   active_path: string[];
   branch_info?: Record<string, string[]>;
   usage?: ConversationUsage;
+  agent_id?: string;
   created_at: string;
   updated_at: string;
 }
@@ -233,6 +234,18 @@ export async function testProvider(
   return res.json();
 }
 
+export async function testProviderInline(
+  data: CreateProviderRequest,
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await fetch("/api/providers/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+  return res.json();
+}
+
 // ── Agents ──
 
 export interface AgentConfig {
@@ -243,6 +256,7 @@ export interface AgentConfig {
   system_prompt?: string;
   temperature?: number;
   max_tokens?: number;
+  mcp_server_ids?: string[];
   created_at: string;
   updated_at: string;
 }
@@ -254,6 +268,7 @@ export interface CreateAgentRequest {
   system_prompt?: string;
   temperature?: number;
   max_tokens?: number;
+  mcp_server_ids?: string[];
 }
 
 export async function fetchAgents(): Promise<AgentConfig[]> {
@@ -279,6 +294,7 @@ export async function updateAgent(
   data: Partial<CreateAgentRequest> & {
     set_temperature?: boolean;
     set_max_tokens?: boolean;
+    set_mcp_server_ids?: boolean;
   },
 ): Promise<AgentConfig> {
   const res = await fetch(`/api/agents/${id}`, {
@@ -309,6 +325,70 @@ export async function setActiveAgent(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ agent_id: agentId }),
   });
+}
+
+// ── MCP Servers ──
+
+export interface McpServerConfig {
+  id: string;
+  name: string;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+}
+
+export interface CreateMcpServerRequest {
+  name: string;
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+}
+
+export async function fetchMcpServers(): Promise<McpServerConfig[]> {
+  const res = await fetch("/api/mcp-servers");
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function createMcpServer(
+  data: CreateMcpServerRequest,
+): Promise<McpServerConfig> {
+  const res = await fetch("/api/mcp-servers", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(`Create MCP server failed (${res.status})`);
+  return res.json();
+}
+
+export async function updateMcpServer(
+  id: string,
+  data: Partial<CreateMcpServerRequest>,
+): Promise<McpServerConfig> {
+  const res = await fetch(`/api/mcp-servers/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(`Update MCP server failed (${res.status})`);
+  return res.json();
+}
+
+export async function deleteMcpServer(id: string): Promise<void> {
+  await fetch(`/api/mcp-servers/${id}`, { method: "DELETE" });
+}
+
+export async function testMcpServerInline(
+  data: CreateMcpServerRequest,
+): Promise<{ ok: boolean; tools?: number; tool_names?: string[]; error?: string }> {
+  const res = await fetch("/api/mcp-servers/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+  return res.json();
 }
 
 // ── Model Discovery ──

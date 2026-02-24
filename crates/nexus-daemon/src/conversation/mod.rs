@@ -51,6 +51,7 @@ impl ConversationStore {
             messages: Vec::new(),
             active_path: Vec::new(),
             usage: None,
+            agent_id: None,
         };
 
         self.write_conversation(&conv)?;
@@ -66,7 +67,9 @@ impl ConversationStore {
             return Ok(None);
         }
         let content = fs::read_to_string(&path)?;
-        let conv: Conversation = serde_json::from_str(&content)?;
+        let mut conv: Conversation = serde_json::from_str(&content)?;
+        // Normalize legacy format (tool results as separate user messages)
+        conv.normalize_tool_calls();
         Ok(Some(conv))
     }
 

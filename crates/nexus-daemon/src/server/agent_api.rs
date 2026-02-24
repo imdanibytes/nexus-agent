@@ -29,13 +29,14 @@ pub async fn create(
 
     let mut store = state.agents.write().await;
     let agent = store
-        .create(
+        .create_with_mcp(
             body.name,
             body.provider_id,
             body.model,
             body.system_prompt,
             body.temperature,
             body.max_tokens,
+            body.mcp_server_ids,
         )
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -79,6 +80,8 @@ pub async fn update(
         set_temperature: body.set_temperature.unwrap_or(false),
         max_tokens: body.max_tokens,
         set_max_tokens: body.set_max_tokens.unwrap_or(false),
+        mcp_server_ids: body.mcp_server_ids,
+        set_mcp_server_ids: body.set_mcp_server_ids.unwrap_or(false),
     };
 
     match store
@@ -137,6 +140,7 @@ pub struct CreateAgentRequest {
     pub system_prompt: Option<String>,
     pub temperature: Option<f32>,
     pub max_tokens: Option<u32>,
+    pub mcp_server_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -149,6 +153,8 @@ pub struct UpdateAgentRequest {
     pub set_temperature: Option<bool>,
     pub max_tokens: Option<u32>,
     pub set_max_tokens: Option<bool>,
+    pub mcp_server_ids: Option<Vec<String>>,
+    pub set_mcp_server_ids: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]

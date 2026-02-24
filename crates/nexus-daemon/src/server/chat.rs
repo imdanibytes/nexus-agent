@@ -84,7 +84,18 @@ pub async fn start_turn(
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         let api_messages = conv_to_api_messages(&conv.active_messages());
-        let tools = state.mcp.tools();
+
+        // Filter MCP tools based on active agent's mcp_server_ids
+        let tools = {
+            let mcp = state.mcp.read().await;
+            let agents = state.agents.read().await;
+            let active_id = agents.active_agent_id().map(|s| s.to_string());
+            let agent = active_id.as_deref().and_then(|id| agents.get(id));
+            match agent.and_then(|a| a.mcp_server_ids.as_ref()) {
+                Some(ids) => mcp.tools_for(Some(ids)),
+                None => mcp.tools(),
+            }
+        };
 
         (conv, api_messages, tools, user_msg_id)
     };
@@ -159,7 +170,18 @@ pub async fn branch_turn(
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         let api_messages = conv_to_api_messages(&conv.active_messages());
-        let tools = state.mcp.tools();
+
+        // Filter MCP tools based on active agent's mcp_server_ids
+        let tools = {
+            let mcp = state.mcp.read().await;
+            let agents = state.agents.read().await;
+            let active_id = agents.active_agent_id().map(|s| s.to_string());
+            let agent = active_id.as_deref().and_then(|id| agents.get(id));
+            match agent.and_then(|a| a.mcp_server_ids.as_ref()) {
+                Some(ids) => mcp.tools_for(Some(ids)),
+                None => mcp.tools(),
+            }
+        };
 
         (conv, api_messages, tools, new_msg_id)
     };
@@ -227,7 +249,17 @@ pub async fn regenerate_turn(
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         let api_messages = conv_to_api_messages(&conv.active_messages());
-        let tools = state.mcp.tools();
+
+        let tools = {
+            let mcp = state.mcp.read().await;
+            let agents = state.agents.read().await;
+            let active_id = agents.active_agent_id().map(|s| s.to_string());
+            let agent = active_id.as_deref().and_then(|id| agents.get(id));
+            match agent.and_then(|a| a.mcp_server_ids.as_ref()) {
+                Some(ids) => mcp.tools_for(Some(ids)),
+                None => mcp.tools(),
+            }
+        };
 
         (conv, api_messages, tools)
     };
@@ -301,7 +333,7 @@ fn spawn_agent_turn(
 
     tokio::spawn(async move {
         // Resolve active agent → provider
-        let (provider_record, model, max_tokens, system_prompt, temperature) = {
+        let (provider_record, model, max_tokens, system_prompt, temperature, agent_meta) = {
             let agents = state_clone.agents.read().await;
             let providers = state_clone.providers.read().await;
 
@@ -318,6 +350,11 @@ fn spawn_agent_turn(
                             a.max_tokens.unwrap_or(8192),
                             a.system_prompt.clone(),
                             a.temperature,
+                            serde_json::json!({
+                                "agent_id": a.id,
+                                "agent_name": a.name,
+                                "model": a.model,
+                            }),
                         ),
                         None => {
                             let _ = agent_tx.send(AgUiEvent::RunError {
@@ -356,6 +393,7 @@ fn spawn_agent_turn(
             }
         };
 
+        let mcp_guard = state_clone.mcp.read().await;
         let result = agent::run_agent_turn(
             provider.as_ref(),
             &conversation_id,
@@ -365,23 +403,34 @@ fn spawn_agent_turn(
             &model,
             max_tokens,
             temperature,
-            &state_clone.mcp,
+            &mcp_guard,
             &agent_tx,
             cancel,
         )
         .await;
+        drop(mcp_guard);
 
         match result {
             Ok(AgentTurnResult { messages: new_messages, timing_spans, input_tokens, output_tokens, context_window }) => {
                 let mut chat_messages =
                     api_messages_to_chat(&new_messages, last_active_id.as_deref(), assistant_message_id.as_deref());
 
+                // Stamp every assistant message with agent info so it's
+                // self-contained even if the agent is later deleted.
+                for msg in chat_messages.iter_mut().filter(|m| m.role == MessageRole::Assistant) {
+                    let meta = msg.metadata.get_or_insert_with(|| serde_json::json!({}));
+                    if let Some(obj) = meta.as_object_mut() {
+                        obj.insert("agent".to_string(), agent_meta.clone());
+                    }
+                }
+
                 // Attach timing spans to the last assistant message's metadata
                 if !timing_spans.is_empty() {
                     if let Some(last_assistant) = chat_messages.iter_mut().rev().find(|m| m.role == MessageRole::Assistant) {
-                        last_assistant.metadata = Some(serde_json::json!({
-                            "timingSpans": timing_spans,
-                        }));
+                        let meta = last_assistant.metadata.get_or_insert_with(|| serde_json::json!({}));
+                        if let Some(obj) = meta.as_object_mut() {
+                            obj.insert("timingSpans".to_string(), serde_json::to_value(&timing_spans).unwrap_or_default());
+                        }
                     }
                 }
 
@@ -391,6 +440,7 @@ fn spawn_agent_turn(
                 conv.messages.extend(chat_messages);
                 conv.active_path.extend(new_ids);
                 conv.updated_at = Utc::now();
+                conv.agent_id = agent_meta["agent_id"].as_str().map(|s| s.to_string());
                 conv.usage = Some(ConversationUsage {
                     input_tokens,
                     output_tokens,
@@ -459,7 +509,11 @@ fn conv_to_api_messages(messages: &[&ChatMessage]) -> Vec<Message> {
                     } => Some(ContentBlock::ToolUse {
                         id: tool_call_id.clone(),
                         name: tool_name.clone(),
-                        input: args.clone(),
+                        input: if args.is_object() {
+                            args.clone()
+                        } else {
+                            serde_json::json!({})
+                        },
                     }),
                     MessagePart::Thinking { .. } => None,
                 })
@@ -639,6 +693,76 @@ fn api_messages_to_chat(
             chat_msg
         })
         .collect();
+
+    // Merge tool results from user messages into preceding assistant message's
+    // ToolCall parts, then drop the now-empty user messages.  The Anthropic API
+    // sends tool results as separate user-role messages, but the UI expects each
+    // ToolCall part to carry its own result inline.
+    let mut i = 0;
+    while i < result.len() {
+        if result[i].role == MessageRole::User {
+            // Collect tool results from this user message
+            let tool_results: Vec<(String, String, bool)> = result[i]
+                .parts
+                .iter()
+                .filter_map(|p| match p {
+                    MessagePart::ToolCall {
+                        tool_call_id,
+                        result: Some(res),
+                        is_error,
+                        ..
+                    } => Some((tool_call_id.clone(), res.clone(), *is_error)),
+                    _ => None,
+                })
+                .collect();
+
+            if !tool_results.is_empty() {
+                // Find preceding assistant message and merge results
+                if let Some(asst) = result[..i]
+                    .iter_mut()
+                    .rev()
+                    .find(|m| m.role == MessageRole::Assistant)
+                {
+                    for (tc_id, res, is_err) in &tool_results {
+                        for part in asst.parts.iter_mut() {
+                            if let MessagePart::ToolCall {
+                                tool_call_id,
+                                result: ref mut slot,
+                                is_error: ref mut err_slot,
+                                ..
+                            } = part
+                            {
+                                if tool_call_id == tc_id && slot.is_none() {
+                                    *slot = Some(res.clone());
+                                    *err_slot = *is_err;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Check if user message has any text parts worth keeping
+                let has_text = result[i]
+                    .parts
+                    .iter()
+                    .any(|p| matches!(p, MessagePart::Text { text } if !text.is_empty()));
+
+                if !has_text {
+                    // Fix parent_id chain: children of this message → its parent
+                    let removed_id = result[i].id.clone();
+                    let removed_parent = result[i].parent_id.clone();
+                    result.remove(i);
+                    for m in result.iter_mut() {
+                        if m.parent_id.as_deref() == Some(&removed_id) {
+                            m.parent_id = removed_parent.clone();
+                        }
+                    }
+                    continue; // don't increment i
+                }
+            }
+        }
+        i += 1;
+    }
 
     // Assign client-provided ID to the last assistant message
     if let Some(aid) = assistant_message_id {

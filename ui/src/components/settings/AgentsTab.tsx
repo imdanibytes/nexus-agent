@@ -3,6 +3,7 @@ import { PlusIcon, TrashIcon, CheckIcon, Loader2Icon } from "lucide-react";
 import { Select, SelectItem, SelectSection } from "@heroui/react";
 import { useAgentStore } from "../../stores/agentStore";
 import { useProviderStore } from "../../stores/providerStore";
+import { useMcpStore } from "../../stores/mcpStore";
 import { fetchProviderModels, type ModelInfo } from "../../api/client";
 import type { AgentConfig, CreateAgentRequest } from "../../api/client";
 import { cn } from "../../lib/utils";
@@ -110,12 +111,15 @@ export const AgentsTab: FC = () => {
   );
 };
 
+type McpMode = "all" | "none" | "select";
+
 const AgentEditor: FC<{
   agent?: AgentConfig;
   onClose: () => void;
 }> = ({ agent, onClose }) => {
   const { createAgent, updateAgent } = useAgentStore();
   const providers = useProviderStore((s) => s.providers);
+  const mcpServers = useMcpStore((s) => s.servers);
   const isEdit = !!agent;
 
   const [name, setName] = useState(agent?.name ?? "");
@@ -136,6 +140,17 @@ const AgentEditor: FC<{
   );
   const [saving, setSaving] = useState(false);
 
+  // MCP server selection
+  const initialMcpMode: McpMode = agent?.mcp_server_ids === undefined
+    ? "all"
+    : agent.mcp_server_ids.length === 0
+      ? "none"
+      : "select";
+  const [mcpMode, setMcpMode] = useState<McpMode>(initialMcpMode);
+  const [selectedMcpIds, setSelectedMcpIds] = useState<Set<string>>(
+    new Set(agent?.mcp_server_ids ?? []),
+  );
+
   useEffect(() => {
     if (!providerId) return;
     setLoadingModels(true);
@@ -148,6 +163,13 @@ const AgentEditor: FC<{
   const handleSave = async () => {
     setSaving(true);
     try {
+      const mcpServerIds =
+        mcpMode === "all"
+          ? undefined
+          : mcpMode === "none"
+            ? []
+            : [...selectedMcpIds];
+
       const data: CreateAgentRequest = {
         name,
         provider_id: providerId,
@@ -155,6 +177,7 @@ const AgentEditor: FC<{
         ...(systemPrompt ? { system_prompt: systemPrompt } : {}),
         ...(temperature ? { temperature: parseFloat(temperature) } : {}),
         ...(maxTokens ? { max_tokens: parseInt(maxTokens) } : {}),
+        mcp_server_ids: mcpServerIds,
       };
 
       if (isEdit) {
@@ -162,6 +185,7 @@ const AgentEditor: FC<{
           ...data,
           set_temperature: true,
           set_max_tokens: true,
+          set_mcp_server_ids: true,
         });
       } else {
         await createAgent(data);
@@ -304,6 +328,63 @@ const AgentEditor: FC<{
           />
         </Field>
       </div>
+
+      {/* MCP Server Access */}
+      {mcpServers.length > 0 && (
+        <div>
+          <label className="block text-[11px] text-default-500 mb-2">
+            MCP Server Access
+          </label>
+          <div className="flex gap-2 mb-2">
+            {(["all", "none", "select"] as const).map((opt) => (
+              <button
+                key={opt}
+                type="button"
+                onClick={() => setMcpMode(opt)}
+                className={cn(
+                  "px-2.5 py-1 text-[11px] rounded-md font-medium transition-colors",
+                  mcpMode === opt
+                    ? "bg-foreground text-background"
+                    : "bg-default-200/50 text-default-500 hover:bg-default-200",
+                )}
+              >
+                {opt === "all" ? "All Servers" : opt === "none" ? "None" : "Select"}
+              </button>
+            ))}
+          </div>
+          {mcpMode === "select" && (
+            <div className="space-y-1 ml-1">
+              {mcpServers.map((srv) => {
+                const checked = selectedMcpIds.has(srv.id);
+                return (
+                  <label
+                    key={srv.id}
+                    className="flex items-center gap-2 cursor-pointer group"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => {
+                        const next = new Set(selectedMcpIds);
+                        if (checked) next.delete(srv.id);
+                        else next.add(srv.id);
+                        setSelectedMcpIds(next);
+                      }}
+                      className="accent-primary size-3"
+                    />
+                    <span className="text-xs text-default-600 group-hover:text-foreground transition-colors">
+                      {srv.name}
+                    </span>
+                    <span className="text-[10px] text-default-400 font-mono">
+                      {srv.command}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="flex items-center gap-2 pt-1">
         <button

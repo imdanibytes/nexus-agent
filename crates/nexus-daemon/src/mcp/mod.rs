@@ -1,6 +1,8 @@
-mod server;
+pub(crate) mod server;
+pub mod store;
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 use crate::anthropic::types::Tool as AnthropicTool;
 use crate::config::McpServerConfig;
@@ -60,10 +62,31 @@ impl McpManager {
 
     /// Get all tools as Anthropic API Tool definitions.
     pub fn tools(&self) -> Vec<AnthropicTool> {
+        self.tools_inner(None)
+    }
+
+    /// Get tools filtered to only the given MCP server IDs.
+    /// If `server_ids` is None, returns all tools.
+    /// If `server_ids` is Some([]), returns no tools.
+    pub fn tools_for(&self, server_ids: Option<&[String]>) -> Vec<AnthropicTool> {
+        self.tools_inner(server_ids)
+    }
+
+    fn tools_inner(&self, server_ids: Option<&[String]>) -> Vec<AnthropicTool> {
+        let allowed: Option<HashSet<&str>> = server_ids.map(|ids| ids.iter().map(|s| s.as_str()).collect());
+
         let mut result = Vec::new();
 
         for (routed_name, &server_idx) in &self.tool_routing {
             let server = &self.servers[server_idx];
+
+            // Filter by allowed server IDs if specified
+            if let Some(ref allowed_set) = allowed {
+                if !allowed_set.contains(server.id.as_str()) {
+                    continue;
+                }
+            }
+
             let original_name = routed_name
                 .strip_prefix(&format!("{server_id}__", server_id = server.id))
                 .unwrap_or(routed_name);
@@ -109,8 +132,7 @@ impl McpManager {
         let arguments: Option<serde_json::Map<String, serde_json::Value>> =
             match serde_json::from_str(args_json) {
                 Ok(serde_json::Value::Object(map)) => Some(map),
-                Ok(_) => None,
-                Err(_) => None,
+                _ => Some(serde_json::Map::new()),
             };
 
         match server.call_tool(original_name, arguments).await {

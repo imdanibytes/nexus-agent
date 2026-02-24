@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
+import { useNavigate } from "react-router";
 import { useThreadListStore } from "../stores/threadListStore";
 import { useThreadStore, EMPTY_CONV } from "../stores/threadStore";
 import { useUsageStore } from "../stores/usageStore";
@@ -317,6 +318,7 @@ export function useChatStream(): {
   abort: () => void;
   isStreaming: boolean;
 } {
+  const navigate = useNavigate();
   const abortRef = useRef<AbortController | null>(null);
   const activeThreadId = useThreadListStore((s) => s.activeThreadId);
   const isStreaming = useThreadStore(
@@ -350,22 +352,9 @@ export function useChatStream(): {
       }
     });
 
-    // Sync repo with server after conversation is saved (ensures timing
-    // persists, temp IDs are replaced with server UUIDs, and branches resolve
-    // correctly across refreshes).
-    const unsubUpdated = eventBus.on("conversation_updated", (event) => {
-      const threadId = event.threadId as string | undefined;
-      if (!threadId) return;
-      const store = useThreadStore.getState();
-      // Only sync if we're NOT currently streaming (avoid clobbering live data)
-      if (store.conversations[threadId]?.isStreaming) return;
-      syncRepoFromServer(threadId);
-    });
-
     return () => {
       unsubTitle();
       unsubUsage();
-      unsubUpdated();
     };
   }, []);
 
@@ -373,6 +362,7 @@ export function useChatStream(): {
     let conversationId = useThreadListStore.getState().activeThreadId;
     if (!conversationId) {
       conversationId = await useThreadListStore.getState().createThread();
+      navigate(`/c/${conversationId}`, { replace: true });
     }
 
     // Generate Snowflake IDs upfront — client owns the IDs, server uses them

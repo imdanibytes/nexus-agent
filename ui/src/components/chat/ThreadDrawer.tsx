@@ -22,6 +22,7 @@ import { useThreadStore } from "../../stores/threadStore";
 interface ThreadDrawerProps {
   isOpen: boolean;
   onClose: () => void;
+  navigate: (path: string) => void;
 }
 
 function groupByTime(
@@ -53,11 +54,10 @@ function groupByTime(
     .map(([label, items]) => ({ label, items }));
 }
 
-export const ThreadDrawer: FC<ThreadDrawerProps> = ({ isOpen, onClose }) => {
+export const ThreadDrawer: FC<ThreadDrawerProps> = ({ isOpen, onClose, navigate }) => {
   const threads = useThreadListStore((s) => s.threads);
   const activeThreadId = useThreadListStore((s) => s.activeThreadId);
-  const { createThread, switchThread, deleteThread } =
-    useThreadListStore.getState();
+  const { createThread, deleteThread } = useThreadListStore.getState();
   const [search, setSearch] = useState("");
 
   const filtered = useMemo(() => {
@@ -71,12 +71,13 @@ export const ThreadDrawer: FC<ThreadDrawerProps> = ({ isOpen, onClose }) => {
   const groups = useMemo(() => groupByTime(filtered), [filtered]);
 
   const handleNew = async () => {
-    await createThread();
+    const id = await createThread();
+    navigate(`/c/${id}`);
     onClose();
   };
 
   const handleSwitch = (id: string) => {
-    switchThread(id);
+    navigate(`/c/${id}`);
     onClose();
   };
 
@@ -160,7 +161,10 @@ export const ThreadDrawer: FC<ThreadDrawerProps> = ({ isOpen, onClose }) => {
                           {thread.title || "New Chat"}
                         </button>
                         <DrawerThreadMenu
-                          onDelete={() => deleteThread(thread.id)}
+                          onDelete={async () => {
+                            const nextId = await deleteThread(thread.id);
+                            navigate(nextId ? `/c/${nextId}` : "/");
+                          }}
                         />
                       </div>
                     );

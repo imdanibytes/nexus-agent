@@ -1,6 +1,7 @@
 pub mod agent_api;
 pub mod chat;
 pub mod conversations;
+pub mod mcp_api;
 pub mod providers;
 pub mod sse;
 
@@ -16,6 +17,7 @@ use crate::agent_config::AgentStore;
 use crate::anthropic::AnthropicClient;
 use crate::config::NexusConfig;
 use crate::conversation::ConversationStore;
+use crate::mcp::store::McpServerStore;
 use crate::mcp::McpManager;
 use crate::provider::{ProviderFactory, ProviderStore};
 use sse::{AgentEventBridge, SseHub};
@@ -28,7 +30,8 @@ pub struct AppState {
     pub factory: Arc<ProviderFactory>,
     /// Anthropic client used only for title generation (from ANTHROPIC_API_KEY env)
     pub title_client: Option<AnthropicClient>,
-    pub mcp: McpManager,
+    pub mcp: RwLock<McpManager>,
+    pub mcp_configs: RwLock<McpServerStore>,
     pub sse_hub: SseHub,
     pub event_bridge: AgentEventBridge,
     pub active_cancel:
@@ -71,6 +74,10 @@ pub fn build_router(state: AppState, ui_dist_path: &str) -> Router {
                 .delete(providers::delete),
         )
         .route(
+            "/api/providers/test",
+            post(providers::test_inline),
+        )
+        .route(
             "/api/providers/{id}/test",
             post(providers::test_connection),
         )
@@ -93,14 +100,32 @@ pub fn build_router(state: AppState, ui_dist_path: &str) -> Router {
                 .put(agent_api::update)
                 .delete(agent_api::delete),
         )
+        // MCP Servers
+        .route(
+            "/api/mcp-servers/test",
+            post(mcp_api::test_inline),
+        )
+        .route(
+            "/api/mcp-servers",
+            get(mcp_api::list).post(mcp_api::create),
+        )
+        .route(
+            "/api/mcp-servers/{id}",
+            put(mcp_api::update).delete(mcp_api::delete),
+        )
         // Tools
         .route("/api/tools", get(list_tools))
         // SSE events
         .route("/api/events", get(events_stream))
         // Status
         .route("/api/status", get(health))
-        // Static files (UI)
-        .fallback_service(ServeDir::new(ui_dist_path))
+        // Static files (UI) — SPA fallback: serve index.html for non-file routes
+        .fallback_service(
+            ServeDir::new(ui_dist_path)
+                .not_found_service(tower_http::services::ServeFile::new(
+                    format!("{}/index.html", ui_dist_path),
+                )),
+        )
         .layer(CorsLayer::permissive())
         .with_state(state)
 }
@@ -112,7 +137,8 @@ async fn health() -> Json<serde_json::Value> {
 async fn list_tools(
     State(state): State<Arc<AppState>>,
 ) -> Json<serde_json::Value> {
-    let tools = state.mcp.tools();
+    let mcp = state.mcp.read().await;
+    let tools = mcp.tools();
     Json(serde_json::json!({ "tools": tools }))
 }
 

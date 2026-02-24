@@ -14,6 +14,7 @@ use crate::agent_config::AgentStore;
 use crate::anthropic::AnthropicClient;
 use crate::config::NexusConfig;
 use crate::conversation::ConversationStore;
+use crate::mcp::store::McpServerStore;
 use crate::mcp::McpManager;
 use crate::provider::{ProviderFactory, ProviderStore, ProviderType};
 use crate::server::sse::{AgentEventBridge, SseHub};
@@ -95,6 +96,7 @@ async fn main() -> Result<()> {
     );
 
     let mcp = McpManager::from_configs(&mcp_servers).await;
+    let mcp_configs = McpServerStore::new(mcp_servers);
     let factory = Arc::new(ProviderFactory::new());
 
     let state = AppState {
@@ -104,7 +106,8 @@ async fn main() -> Result<()> {
         agents: tokio::sync::RwLock::new(agent_store),
         factory,
         title_client,
-        mcp,
+        mcp: tokio::sync::RwLock::new(mcp),
+        mcp_configs: tokio::sync::RwLock::new(mcp_configs),
         sse_hub,
         event_bridge,
         active_cancel: tokio::sync::Mutex::new(None),

@@ -49,6 +49,8 @@ pub struct AgentConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerConfig {
     pub id: String,
+    #[serde(default)]
+    pub name: String,
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
@@ -155,6 +157,17 @@ impl NexusConfig {
             fs::write(&path, "[]")?;
             Ok(Vec::new())
         }
+    }
+
+    pub fn save_mcp_servers(servers: &[McpServerConfig]) -> Result<()> {
+        let path = Self::mcp_path();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let content = serde_json::to_string_pretty(servers)?;
+        fs::write(&path, content)
+            .with_context(|| format!("Failed to write MCP config to {}", path.display()))?;
+        Ok(())
     }
 
     pub fn save(&self) -> Result<()> {

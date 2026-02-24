@@ -14,6 +14,7 @@ import { useUIStore, type Theme } from "../../stores/uiStore";
 import { cn } from "../../lib/utils";
 import { ProvidersTab } from "./ProvidersTab";
 import { AgentsTab } from "./AgentsTab";
+import { McpTab } from "./McpTab";
 
 interface SettingsTab {
   id: string;
@@ -72,17 +73,6 @@ const GeneralTab: FC = () => {
     </div>
   );
 };
-
-const McpTab: FC = () => (
-  <div className="space-y-6">
-    <div>
-      <h3 className="text-sm font-medium text-foreground mb-1">MCP Servers</h3>
-      <p className="text-xs text-default-500">
-        Configured in <code className="text-[11px] px-1 py-0.5 rounded bg-default-200/50">~/.nexus/config.toml</code>
-      </p>
-    </div>
-  </div>
-);
 
 const TAB_COMPONENTS: Record<string, FC> = {
   general: GeneralTab,

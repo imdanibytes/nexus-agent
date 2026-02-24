@@ -1,4 +1,4 @@
-import { type FC, useState } from "react";
+import { type FC, useState, useCallback } from "react";
 import {
   PlusIcon,
   TrashIcon,
@@ -8,10 +8,11 @@ import {
 } from "lucide-react";
 import { Select, SelectItem } from "@heroui/react";
 import { useProviderStore } from "../../stores/providerStore";
-import type {
-  ProviderPublic,
-  CreateProviderRequest,
-  ProviderType,
+import {
+  testProviderInline,
+  type ProviderPublic,
+  type CreateProviderRequest,
+  type ProviderType,
 } from "../../api/client";
 import { cn } from "../../lib/utils";
 
@@ -105,31 +106,52 @@ const ProviderEditor: FC<{
   const [awsProfile, setAwsProfile] = useState(provider?.aws_profile ?? "");
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [verified, setVerified] = useState(false);
   const [testResult, setTestResult] = useState<{
     ok: boolean;
     error?: string;
   } | null>(null);
 
+  // Any config field change invalidates the verified state
+  const clearVerified = useCallback(() => {
+    setVerified(false);
+    setTestResult(null);
+  }, []);
+
+  const buildData = useCallback((): CreateProviderRequest => ({
+    name,
+    type,
+    ...(endpoint ? { endpoint } : {}),
+    ...(apiKey ? { api_key: apiKey } : {}),
+    ...(type === "bedrock"
+      ? {
+          aws_region: awsRegion,
+          ...(awsProfile ? { aws_profile: awsProfile } : {}),
+        }
+      : {}),
+  }), [name, type, endpoint, apiKey, awsRegion, awsProfile]);
+
+  const handleTest = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const result = isEdit
+        ? await testProvider(provider!.id)
+        : await testProviderInline(buildData());
+      setTestResult(result);
+      setVerified(result.ok);
+    } finally {
+      setTesting(false);
+    }
+  };
+
   const handleSave = async () => {
     setSaving(true);
     try {
-      const data: CreateProviderRequest = {
-        name,
-        type,
-        ...(endpoint ? { endpoint } : {}),
-        ...(apiKey ? { api_key: apiKey } : {}),
-        ...(type === "bedrock"
-          ? {
-              aws_region: awsRegion,
-              ...(awsProfile ? { aws_profile: awsProfile } : {}),
-            }
-          : {}),
-      };
-
       if (isEdit) {
-        await updateProvider(provider!.id, data);
+        await updateProvider(provider!.id, buildData());
       } else {
-        await createProvider(data);
+        await createProvider(buildData());
       }
       onClose();
     } finally {
@@ -137,17 +159,8 @@ const ProviderEditor: FC<{
     }
   };
 
-  const handleTest = async () => {
-    if (!isEdit) return;
-    setTesting(true);
-    setTestResult(null);
-    try {
-      const result = await testProvider(provider!.id);
-      setTestResult(result);
-    } finally {
-      setTesting(false);
-    }
-  };
+  // For edits where nothing changed, allow save without re-testing
+  const canSave = name && verified;
 
   return (
     <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 space-y-3">
@@ -159,7 +172,7 @@ const ProviderEditor: FC<{
         <Field label="Name">
           <input
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => { setName(e.target.value); clearVerified(); }}
             placeholder="My Provider"
             className="input-field"
           />
@@ -174,7 +187,7 @@ const ProviderEditor: FC<{
             selectedKeys={[type]}
             onSelectionChange={(keys) => {
               const key = [...keys][0] as ProviderType | undefined;
-              if (key) setType(key);
+              if (key) { setType(key); clearVerified(); }
             }}
             classNames={{
               trigger: "input-field !h-auto",
@@ -193,7 +206,7 @@ const ProviderEditor: FC<{
             <input
               type="password"
               value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
+              onChange={(e) => { setApiKey(e.target.value); clearVerified(); }}
               placeholder={isEdit && provider?.has_api_key ? "••••••••" : "sk-ant-..."}
               className="input-field"
             />
@@ -201,7 +214,7 @@ const ProviderEditor: FC<{
           <Field label="Endpoint (optional)">
             <input
               value={endpoint}
-              onChange={(e) => setEndpoint(e.target.value)}
+              onChange={(e) => { setEndpoint(e.target.value); clearVerified(); }}
               placeholder="https://api.anthropic.com"
               className="input-field"
             />
@@ -214,7 +227,7 @@ const ProviderEditor: FC<{
           <Field label="AWS Region">
             <input
               value={awsRegion}
-              onChange={(e) => setAwsRegion(e.target.value)}
+              onChange={(e) => { setAwsRegion(e.target.value); clearVerified(); }}
               placeholder="us-east-1"
               className="input-field"
             />
@@ -222,7 +235,7 @@ const ProviderEditor: FC<{
           <Field label="AWS Profile (optional)">
             <input
               value={awsProfile}
-              onChange={(e) => setAwsProfile(e.target.value)}
+              onChange={(e) => { setAwsProfile(e.target.value); clearVerified(); }}
               placeholder={provider?.aws_profile ?? "default"}
               className="input-field"
             />
@@ -244,28 +257,31 @@ const ProviderEditor: FC<{
           ) : (
             <XCircleIcon className="size-3.5" />
           )}
-          {testResult.ok ? "Connection successful" : testResult.error}
+          {testResult.ok ? "Connection verified" : testResult.error}
         </div>
       )}
 
       <div className="flex items-center gap-2 pt-1">
         <button
+          onClick={handleTest}
+          disabled={testing || !name}
+          className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-md border border-default-200 hover:bg-default-100 disabled:opacity-50 transition-colors"
+        >
+          {testing && <Loader2Icon className="size-3 animate-spin" />}
+          {verified ? "Re-test" : "Test Connection"}
+        </button>
+        <button
           onClick={handleSave}
-          disabled={!name || saving}
-          className="px-3 py-1.5 text-xs font-medium rounded-md bg-primary text-white hover:bg-primary/90 disabled:opacity-50 transition-colors"
+          disabled={!canSave || saving}
+          className={cn(
+            "px-3 py-1.5 text-xs font-medium rounded-md transition-colors disabled:opacity-50",
+            verified
+              ? "bg-primary text-white hover:bg-primary/90"
+              : "bg-default-200 text-default-400 cursor-not-allowed",
+          )}
         >
           {saving ? "Saving..." : isEdit ? "Update" : "Create"}
         </button>
-        {isEdit && (
-          <button
-            onClick={handleTest}
-            disabled={testing}
-            className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-md border border-default-200 hover:bg-default-100 transition-colors"
-          >
-            {testing && <Loader2Icon className="size-3 animate-spin" />}
-            Test Connection
-          </button>
-        )}
         <button
           onClick={onClose}
           className="px-3 py-1.5 text-xs text-default-500 hover:text-foreground transition-colors"
@@ -273,6 +289,12 @@ const ProviderEditor: FC<{
           Cancel
         </button>
       </div>
+
+      {!verified && !testResult && (
+        <p className="text-[11px] text-default-400">
+          Test the connection before saving.
+        </p>
+      )}
     </div>
   );
 };

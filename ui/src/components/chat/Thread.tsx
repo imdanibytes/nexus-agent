@@ -79,7 +79,14 @@ export const Thread: FC = () => {
     scrollToBottomIfNeeded();
   }, [messages, scrollToBottomIfNeeded]);
 
-  const isEmpty = messages.length === 0 && !isStreaming && !isLoadingHistory;
+  // If activeThreadId is set but the conv state hasn't been created yet
+  // (loadHistory hasn't fired), don't flash the welcome screen.
+  const convExists = useThreadStore(
+    (s) => !!(activeThreadId && s.conversations[activeThreadId]),
+  );
+  const isEmpty =
+    !activeThreadId ||
+    (convExists && messages.length === 0 && !isStreaming && !isLoadingHistory);
 
   return (
     <div
@@ -545,11 +552,16 @@ const AssistantMessage: FC<{
           }
           if (part.type === "tool-call") {
             const tc = part as ToolCallPart;
+            const argsText =
+              tc.argsText ||
+              (tc.args && Object.keys(tc.args).length > 0
+                ? JSON.stringify(tc.args)
+                : undefined);
             return (
               <ToolFallback
                 key={tc.toolCallId}
                 toolName={tc.toolName}
-                argsText={tc.argsText}
+                argsText={argsText}
                 result={tc.result}
                 status={tc.status}
                 durationMs={toolTimingMap.get(tc.toolCallId)}
@@ -574,6 +586,11 @@ const AssistantMessage: FC<{
 
       {/* Footer */}
       <div className="mt-1 ml-2 flex h-7 items-center gap-2">
+        {message.metadata?.agent && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-default-100 dark:bg-default-100/40 text-default-400 border border-default-200/50 truncate max-w-48">
+            {message.metadata.agent.agent_name}
+          </span>
+        )}
         {!isActiveStream && (
           <>
             <BranchPicker messageId={message.id} />

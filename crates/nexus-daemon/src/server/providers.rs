@@ -4,7 +4,7 @@ use axum::Json;
 use serde::Deserialize;
 use std::sync::Arc;
 
-use crate::provider::types::{ProviderPublic, ProviderType};
+use crate::provider::types::{Provider, ProviderPublic, ProviderType};
 use crate::provider::store::ProviderUpdate;
 use crate::server::AppState;
 
@@ -135,6 +135,50 @@ pub async fn test_connection(
         Err(e) => Ok(Json(
             serde_json::json!({ "ok": false, "error": e.to_string() }),
         )),
+    }
+}
+
+pub async fn test_inline(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<CreateProviderRequest>,
+) -> Json<serde_json::Value> {
+    let provider = Provider {
+        id: String::new(),
+        name: body.name,
+        provider_type: body.provider_type,
+        endpoint: body.endpoint,
+        api_key: body.api_key,
+        aws_region: body.aws_region,
+        aws_profile: body.aws_profile,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    };
+
+    let test_model = match provider.provider_type {
+        ProviderType::Anthropic => "claude-haiku-4-5-20251001",
+        ProviderType::Bedrock => "us.anthropic.claude-3-haiku-20240307-v1:0",
+    };
+
+    let client = match state.factory.get(&provider).await {
+        Ok(c) => c,
+        Err(e) => {
+            return Json(serde_json::json!({ "ok": false, "error": e.to_string() }));
+        }
+    };
+
+    let messages = vec![crate::anthropic::types::Message {
+        role: crate::anthropic::types::Role::User,
+        content: vec![crate::anthropic::types::ContentBlock::Text {
+            text: "Hi".to_string(),
+        }],
+    }];
+
+    match client
+        .create_message_stream(test_model, 1, None, None, messages, vec![])
+        .await
+    {
+        Ok(_) => Json(serde_json::json!({ "ok": true })),
+        Err(e) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
     }
 }
 

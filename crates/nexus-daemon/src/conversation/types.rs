@@ -29,6 +29,9 @@ pub struct Conversation {
     pub active_path: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<ConversationUsage>,
+    /// The agent that was last used in this conversation
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
 }
 
 impl Conversation {
@@ -118,6 +121,88 @@ impl Conversation {
             .filter(|m| m.parent_id.as_deref() == parent_id)
             .map(|m| m.id.as_str())
             .collect()
+    }
+
+    /// Normalize legacy format: merge tool results from user messages into
+    /// the preceding assistant message's ToolCall parts, then drop those
+    /// tool-result-only user messages.  The Anthropic API uses separate user
+    /// messages for tool results, but our storage/display format keeps tool
+    /// calls self-contained on assistant messages (AG-UI style).
+    pub fn normalize_tool_calls(&mut self) {
+        let mut i = 0;
+        while i < self.messages.len() {
+            if self.messages[i].role != MessageRole::User {
+                i += 1;
+                continue;
+            }
+
+            // Collect tool results from this user message
+            let tool_results: Vec<(String, String, bool)> = self.messages[i]
+                .parts
+                .iter()
+                .filter_map(|p| match p {
+                    MessagePart::ToolCall {
+                        tool_call_id,
+                        result: Some(res),
+                        is_error,
+                        ..
+                    } => Some((tool_call_id.clone(), res.clone(), *is_error)),
+                    _ => None,
+                })
+                .collect();
+
+            if tool_results.is_empty() {
+                i += 1;
+                continue;
+            }
+
+            // Merge into preceding assistant message
+            if let Some(asst) = self.messages[..i]
+                .iter_mut()
+                .rev()
+                .find(|m| m.role == MessageRole::Assistant)
+            {
+                for (tc_id, res, is_err) in &tool_results {
+                    for part in asst.parts.iter_mut() {
+                        if let MessagePart::ToolCall {
+                            tool_call_id,
+                            result: ref mut slot,
+                            is_error: ref mut err_slot,
+                            ..
+                        } = part
+                        {
+                            if tool_call_id == tc_id && slot.is_none() {
+                                *slot = Some(res.clone());
+                                *err_slot = *is_err;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Remove if user message has no text
+            let has_text = self.messages[i]
+                .parts
+                .iter()
+                .any(|p| matches!(p, MessagePart::Text { text } if !text.is_empty()));
+
+            if !has_text {
+                let removed_id = self.messages[i].id.clone();
+                let removed_parent = self.messages[i].parent_id.clone();
+                self.messages.remove(i);
+
+                // Fix parent_id chain + active_path
+                for m in self.messages.iter_mut() {
+                    if m.parent_id.as_deref() == Some(&removed_id) {
+                        m.parent_id = removed_parent.clone();
+                    }
+                }
+                self.active_path.retain(|id| id != &removed_id);
+                continue;
+            }
+
+            i += 1;
+        }
     }
 
     /// Compute branch_info: maps parent_id → list of child message IDs.
