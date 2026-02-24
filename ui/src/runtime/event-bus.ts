@@ -52,11 +52,20 @@ class EventBus {
   private source: EventSource | null = null;
   private broadcastHandlers = new Map<string, Set<BroadcastHandler>>();
   private streams = new Map<string, TurnStream>();
+  private openWaiters: Array<() => void> = [];
 
   connect(): void {
-    if (this.source) return;
+    if (this.source?.readyState === EventSource.OPEN) return;
+
+    // Close stale connection that's stuck reconnecting
+    this.source?.close();
 
     const es = new EventSource("/api/events");
+
+    es.onopen = () => {
+      for (const resolve of this.openWaiters) resolve();
+      this.openWaiters = [];
+    };
 
     es.onmessage = (evt) => {
       try {
@@ -68,10 +77,28 @@ class EventBus {
     };
 
     es.onerror = () => {
-      // EventSource auto-reconnects
+      // EventSource auto-reconnects, but we need to force a fresh
+      // connection if the server restarted (new process = new broadcast
+      // channel, old reconnect lands on a clean hub that missed events).
     };
 
     this.source = es;
+  }
+
+  /** Resolves when the SSE connection is open. Forces reconnect if needed. */
+  ensureConnected(): Promise<void> {
+    if (this.source?.readyState === EventSource.OPEN) {
+      return Promise.resolve();
+    }
+    this.connect();
+    return new Promise((resolve) => {
+      // Double-check after connect() — might already be open
+      if (this.source?.readyState === EventSource.OPEN) {
+        resolve();
+        return;
+      }
+      this.openWaiters.push(resolve);
+    });
   }
 
   disconnect(): void {

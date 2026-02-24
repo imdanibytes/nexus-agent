@@ -1,7 +1,8 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 
 use super::stream::SseStream;
 use super::types::*;
+use crate::provider::error::ProviderError;
 
 #[derive(Clone)]
 pub struct AnthropicClient {
@@ -45,11 +46,7 @@ impl AnthropicClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow!(
-                "Anthropic API error ({}): {}",
-                status,
-                body
-            ));
+            return Err(ProviderError::from_anthropic_http(status, &body).into());
         }
 
         let response: MessagesResponse = resp.json().await?;
@@ -75,11 +72,7 @@ impl AnthropicClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow!(
-                "Anthropic API error ({}): {}",
-                status,
-                body
-            ));
+            return Err(ProviderError::from_anthropic_http(status, &body).into());
         }
 
         Ok(SseStream::new(resp.bytes_stream()))

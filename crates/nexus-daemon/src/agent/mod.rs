@@ -1,4 +1,5 @@
 pub mod events;
+pub mod tool_dispatch;
 
 use std::time::Instant;
 
@@ -9,9 +10,15 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::anthropic::types::*;
+use crate::ask_user::PendingQuestionStore;
 use crate::mcp::McpManager;
 use crate::provider::InferenceProvider;
+use crate::system_prompt::fence_tool_result;
+use crate::tasks::store::TaskStateStore;
 use events::AgUiEvent;
+use tool_dispatch::{
+    AskUserHandler, McpToolHandler, TaskToolHandler, ToolContext,
+};
 
 const MAX_ROUNDS: usize = 50;
 
@@ -24,12 +31,18 @@ struct PendingToolCall {
 }
 
 /// Result of a completed agent turn: new messages + timing spans + usage.
+/// Always contains partial results — even when the turn ended with an error,
+/// messages from completed rounds are included so they can be persisted.
 pub struct AgentTurnResult {
     pub messages: Vec<Message>,
     pub timing_spans: Vec<serde_json::Value>,
     pub input_tokens: u32,
     pub output_tokens: u32,
     pub context_window: u32,
+    /// If the turn ended with an error, this contains the error message.
+    pub error: Option<String>,
+    /// Structured error details (serialized ProviderError) for the frontend.
+    pub error_details: Option<serde_json::Value>,
 }
 
 /// Runs a single agent turn: inference → tool calls → loop.
@@ -43,6 +56,8 @@ pub async fn run_agent_turn(
     max_tokens: u32,
     temperature: Option<f32>,
     mcp: &McpManager,
+    task_store: &tokio::sync::RwLock<TaskStateStore>,
+    pending_questions: &tokio::sync::RwLock<PendingQuestionStore>,
     tx: &broadcast::Sender<AgUiEvent>,
     cancel: CancellationToken,
 ) -> Result<AgentTurnResult> {
@@ -62,6 +77,8 @@ pub async fn run_agent_turn(
     let mut cumulative_input: u32 = 0;
     let mut cumulative_output: u32 = 0;
     let context_window = context_window_for_model(model);
+    let mut turn_error: Option<String> = None;
+    let mut turn_error_details: Option<serde_json::Value> = None;
 
     for round in 0..MAX_ROUNDS {
         if cancel.is_cancelled() {
@@ -91,18 +108,40 @@ pub async fn run_agent_turn(
         {
             Ok(s) => s,
             Err(e) => {
+                let details = e
+                    .downcast_ref::<crate::provider::error::ProviderError>()
+                    .and_then(|pe| serde_json::to_value(pe).ok());
                 let _ = tx.send(AgUiEvent::RunError {
                     thread_id: conversation_id.to_string(),
                     run_id: run_id.clone(),
                     message: e.to_string(),
+                    details: details.clone(),
                 });
-                return Err(e);
+                turn_error = Some(e.to_string());
+                turn_error_details = details;
+                break;
             }
         };
 
         // Consume the stream, emitting AG-UI events
         let (assistant_blocks, stop_reason, tool_calls, round_input_tokens, round_output_tokens) =
-            consume_stream(stream, conversation_id, &run_id, tx, &cancel).await?;
+            match consume_stream(stream, conversation_id, &run_id, tx, &cancel).await {
+                Ok(r) => r,
+                Err(e) => {
+                    let details = e
+                        .downcast_ref::<crate::provider::error::ProviderError>()
+                        .and_then(|pe| serde_json::to_value(pe).ok());
+                    let _ = tx.send(AgUiEvent::RunError {
+                        thread_id: conversation_id.to_string(),
+                        run_id: run_id.clone(),
+                        message: e.to_string(),
+                        details: details.clone(),
+                    });
+                    turn_error = Some(e.to_string());
+                    turn_error_details = details;
+                    break;
+                }
+            };
 
         let inference_duration = inference_start.elapsed().as_millis() as u64;
         let llm_span_id = format!("t-llm-{}", round);
@@ -145,10 +184,26 @@ pub async fn run_agent_turn(
                 let tool_exec_span_id = format!("t-toolexec-{}", round);
                 let tool_exec_start = Instant::now();
 
+                let ask_handler = AskUserHandler { pending_questions };
+                let task_handler = TaskToolHandler { task_store };
+                let mcp_handler = McpToolHandler { mcp };
+                let handlers: Vec<&dyn tool_dispatch::ToolHandler> =
+                    vec![&ask_handler, &task_handler, &mcp_handler];
+
                 for tc in &tool_calls {
                     let tool_start_ms = turn_start.elapsed().as_millis() as u64;
                     let tool_start = Instant::now();
-                    let (content, is_error): (String, bool) = mcp.call_tool(&tc.name, &tc.args_json).await;
+                    let ctx = ToolContext {
+                        tool_call_id: &tc.id,
+                        tool_name: &tc.name,
+                        args_json: &tc.args_json,
+                        conversation_id,
+                        tx,
+                        cancel: &cancel,
+                    };
+                    let result = tool_dispatch::dispatch_tool_call(&handlers, ctx).await;
+                    let content = result.content;
+                    let is_error = result.is_error;
                     let tool_duration = tool_start.elapsed().as_millis() as u64;
 
                     let _ = tx.send(AgUiEvent::ToolCallResult {
@@ -170,7 +225,7 @@ pub async fn run_agent_turn(
 
                     result_blocks.push(ContentBlock::ToolResult {
                         tool_use_id: tc.id.clone(),
-                        content,
+                        content: fence_tool_result(&content),
                         is_error: Some(is_error),
                     });
                 }
@@ -245,6 +300,8 @@ pub async fn run_agent_turn(
         input_tokens: cumulative_input,
         output_tokens: cumulative_output,
         context_window,
+        error: turn_error,
+        error_details: turn_error_details,
     })
 }
 
@@ -410,8 +467,12 @@ async fn consume_stream(
                 }
             }
             StreamEvent::MessageStop => break,
-            StreamEvent::Error { message } => {
-                return Err(anyhow::anyhow!("Anthropic stream error: {}", message));
+            StreamEvent::Error { error_type, message } => {
+                let err = crate::provider::error::ProviderError::from_anthropic_stream(
+                    error_type.as_deref(),
+                    &message,
+                );
+                return Err(err.into());
             }
             StreamEvent::Ping => {}
         }
@@ -420,7 +481,7 @@ async fn consume_stream(
     Ok((content_blocks, stop_reason, pending_tool_calls, input_tokens, output_tokens))
 }
 
-fn context_window_for_model(model: &str) -> u32 {
+pub fn context_window_for_model(model: &str) -> u32 {
     if model.contains("opus") || model.contains("sonnet") || model.contains("haiku") {
         200_000
     } else {

@@ -1,5 +1,6 @@
 pub mod anthropic_provider;
 pub mod bedrock_provider;
+pub mod error;
 pub mod factory;
 pub mod store;
 pub mod types;

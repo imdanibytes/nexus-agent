@@ -12,13 +12,13 @@ use crate::server::AppState;
 /// Shut down old MCP servers and spawn new ones from the current config.
 async fn reload_mcp(state: &Arc<AppState>) {
     let configs = {
-        let store = state.mcp_configs.read().await;
+        let store = state.mcp.configs.read().await;
         store.list().to_vec()
     };
 
     let new_manager = McpManager::from_configs(&configs).await;
 
-    let mut mcp = state.mcp.write().await;
+    let mut mcp = state.mcp.mcp.write().await;
     mcp.shutdown().await;
     *mcp = new_manager;
 
@@ -28,7 +28,7 @@ async fn reload_mcp(state: &Arc<AppState>) {
 pub async fn list(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let store = state.mcp_configs.read().await;
+    let store = state.mcp.configs.read().await;
     let configs = store.list();
     Ok(Json(serde_json::to_value(configs).unwrap()))
 }
@@ -38,7 +38,7 @@ pub async fn create(
     Json(body): Json<CreateMcpServerRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), StatusCode> {
     let config = {
-        let mut store = state.mcp_configs.write().await;
+        let mut store = state.mcp.configs.write().await;
         store
             .create(body.name, body.command, body.args.unwrap_or_default(), body.env.unwrap_or_default())
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
@@ -58,7 +58,7 @@ pub async fn update(
     Json(body): Json<UpdateMcpServerRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let result = {
-        let mut store = state.mcp_configs.write().await;
+        let mut store = state.mcp.configs.write().await;
         let updates = McpServerUpdate {
             name: body.name,
             command: body.command,
@@ -85,7 +85,7 @@ pub async fn delete(
     Path(id): Path<String>,
 ) -> StatusCode {
     let deleted = {
-        let mut store = state.mcp_configs.write().await;
+        let mut store = state.mcp.configs.write().await;
         store.delete(&id)
     };
 

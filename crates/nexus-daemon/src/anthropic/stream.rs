@@ -151,6 +151,7 @@ fn parse_sse_event(text: &str) -> Result<Option<StreamEvent>> {
         "error" => {
             let raw: RawError = serde_json::from_str(data_str)?;
             StreamEvent::Error {
+                error_type: raw.error.error_type,
                 message: raw.error.message,
             }
         }

@@ -1,11 +1,14 @@
 mod agent;
 mod agent_config;
 mod anthropic;
+mod ask_user;
 mod config;
 mod conversation;
 mod mcp;
 mod provider;
 mod server;
+mod system_prompt;
+mod tasks;
 
 use anyhow::Result;
 use std::sync::Arc;
@@ -18,7 +21,7 @@ use crate::mcp::store::McpServerStore;
 use crate::mcp::McpManager;
 use crate::provider::{ProviderFactory, ProviderStore, ProviderType};
 use crate::server::sse::{AgentEventBridge, SseHub};
-use crate::server::AppState;
+use crate::server::{AppState, AgentService, ChatService, McpService};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -99,18 +102,32 @@ async fn main() -> Result<()> {
     let mcp_configs = McpServerStore::new(mcp_servers);
     let factory = Arc::new(ProviderFactory::new());
 
+    let chat = Arc::new(ChatService {
+        conversations: tokio::sync::RwLock::new(conversations),
+        active_cancel: tokio::sync::Mutex::new(None),
+        event_bridge,
+        pending_questions: tokio::sync::RwLock::new(ask_user::PendingQuestionStore::new()),
+        task_store: tokio::sync::RwLock::new(tasks::store::TaskStateStore::new(nexus_dir.join("tasks"))),
+    });
+
+    let agents_svc = Arc::new(AgentService {
+        agents: tokio::sync::RwLock::new(agent_store),
+        providers: tokio::sync::RwLock::new(provider_store),
+        factory,
+    });
+
+    let mcp_svc = Arc::new(McpService {
+        mcp: tokio::sync::RwLock::new(mcp),
+        configs: tokio::sync::RwLock::new(mcp_configs),
+    });
+
     let state = AppState {
         config: config.clone(),
-        conversations: tokio::sync::RwLock::new(conversations),
-        providers: tokio::sync::RwLock::new(provider_store),
-        agents: tokio::sync::RwLock::new(agent_store),
-        factory,
-        title_client,
-        mcp: tokio::sync::RwLock::new(mcp),
-        mcp_configs: tokio::sync::RwLock::new(mcp_configs),
+        chat,
+        agents: agents_svc,
+        mcp: mcp_svc,
         sse_hub,
-        event_bridge,
-        active_cancel: tokio::sync::Mutex::new(None),
+        title_client,
     };
 
     let router = server::build_router(state, "ui/dist");

@@ -86,6 +86,7 @@ pub enum StreamEvent {
     MessageStop,
     Ping,
     Error {
+        error_type: Option<String>,
         message: String,
     },
 }
@@ -200,5 +201,7 @@ pub(crate) struct RawError {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct RawErrorInner {
+    #[serde(rename = "type")]
+    pub error_type: Option<String>,
     pub message: String,
 }

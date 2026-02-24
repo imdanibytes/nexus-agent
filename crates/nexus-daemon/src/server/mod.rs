@@ -3,39 +3,31 @@ pub mod chat;
 pub mod conversations;
 pub mod mcp_api;
 pub mod providers;
+pub mod services;
 pub mod sse;
+pub mod turn;
 
 use axum::extract::State;
 use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
-use crate::agent_config::AgentStore;
 use crate::anthropic::AnthropicClient;
 use crate::config::NexusConfig;
-use crate::conversation::ConversationStore;
-use crate::mcp::store::McpServerStore;
-use crate::mcp::McpManager;
-use crate::provider::{ProviderFactory, ProviderStore};
-use sse::{AgentEventBridge, SseHub};
+use sse::SseHub;
+
+pub use services::{AgentService, ChatService, McpService};
 
 pub struct AppState {
     pub config: NexusConfig,
-    pub conversations: RwLock<ConversationStore>,
-    pub providers: RwLock<ProviderStore>,
-    pub agents: RwLock<AgentStore>,
-    pub factory: Arc<ProviderFactory>,
+    pub chat: Arc<ChatService>,
+    pub agents: Arc<AgentService>,
+    pub mcp: Arc<McpService>,
+    pub sse_hub: SseHub,
     /// Anthropic client used only for title generation (from ANTHROPIC_API_KEY env)
     pub title_client: Option<AnthropicClient>,
-    pub mcp: RwLock<McpManager>,
-    pub mcp_configs: RwLock<McpServerStore>,
-    pub sse_hub: SseHub,
-    pub event_bridge: AgentEventBridge,
-    pub active_cancel:
-        Mutex<Option<(String, tokio_util::sync::CancellationToken)>>,
 }
 
 pub fn build_router(state: AppState, ui_dist_path: &str) -> Router {
@@ -113,6 +105,8 @@ pub fn build_router(state: AppState, ui_dist_path: &str) -> Router {
             "/api/mcp-servers/{id}",
             put(mcp_api::update).delete(mcp_api::delete),
         )
+        // Ask-user answer endpoint
+        .route("/api/chat/answer", post(chat::answer_question))
         // Tools
         .route("/api/tools", get(list_tools))
         // SSE events
@@ -137,7 +131,7 @@ async fn health() -> Json<serde_json::Value> {
 async fn list_tools(
     State(state): State<Arc<AppState>>,
 ) -> Json<serde_json::Value> {
-    let mcp = state.mcp.read().await;
+    let mcp = state.mcp.mcp.read().await;
     let tools = mcp.tools();
     Json(serde_json::json!({ "tools": tools }))
 }

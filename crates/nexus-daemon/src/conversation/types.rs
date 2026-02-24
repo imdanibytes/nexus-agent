@@ -123,99 +123,6 @@ impl Conversation {
             .collect()
     }
 
-    /// Normalize legacy format: merge tool results from user messages into
-    /// the preceding assistant message's ToolCall parts, then drop those
-    /// tool-result-only user messages.  The Anthropic API uses separate user
-    /// messages for tool results, but our storage/display format keeps tool
-    /// calls self-contained on assistant messages (AG-UI style).
-    pub fn normalize_tool_calls(&mut self) {
-        let mut i = 0;
-        while i < self.messages.len() {
-            if self.messages[i].role != MessageRole::User {
-                i += 1;
-                continue;
-            }
-
-            // Collect tool results from this user message
-            let tool_results: Vec<(String, String, bool)> = self.messages[i]
-                .parts
-                .iter()
-                .filter_map(|p| match p {
-                    MessagePart::ToolCall {
-                        tool_call_id,
-                        result: Some(res),
-                        is_error,
-                        ..
-                    } => Some((tool_call_id.clone(), res.clone(), *is_error)),
-                    _ => None,
-                })
-                .collect();
-
-            if tool_results.is_empty() {
-                i += 1;
-                continue;
-            }
-
-            // Merge into preceding assistant message
-            if let Some(asst) = self.messages[..i]
-                .iter_mut()
-                .rev()
-                .find(|m| m.role == MessageRole::Assistant)
-            {
-                for (tc_id, res, is_err) in &tool_results {
-                    for part in asst.parts.iter_mut() {
-                        if let MessagePart::ToolCall {
-                            tool_call_id,
-                            result: ref mut slot,
-                            is_error: ref mut err_slot,
-                            ..
-                        } = part
-                        {
-                            if tool_call_id == tc_id && slot.is_none() {
-                                *slot = Some(res.clone());
-                                *err_slot = *is_err;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Remove if user message has no text
-            let has_text = self.messages[i]
-                .parts
-                .iter()
-                .any(|p| matches!(p, MessagePart::Text { text } if !text.is_empty()));
-
-            if !has_text {
-                let removed_id = self.messages[i].id.clone();
-                let removed_parent = self.messages[i].parent_id.clone();
-                self.messages.remove(i);
-
-                // Fix parent_id chain + active_path
-                for m in self.messages.iter_mut() {
-                    if m.parent_id.as_deref() == Some(&removed_id) {
-                        m.parent_id = removed_parent.clone();
-                    }
-                }
-                self.active_path.retain(|id| id != &removed_id);
-                continue;
-            }
-
-            i += 1;
-        }
-    }
-
-    /// Compute branch_info: maps parent_id → list of child message IDs.
-    pub fn branch_info(&self) -> HashMap<String, Vec<String>> {
-        let mut info: HashMap<String, Vec<String>> = HashMap::new();
-        for msg in &self.messages {
-            let key = msg.parent_id.clone().unwrap_or_default();
-            info.entry(key).or_default().push(msg.id.clone());
-        }
-        // Only keep entries with more than one child (actual branch points)
-        info.retain(|_, children| children.len() > 1);
-        info
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -252,8 +159,17 @@ pub enum MessagePart {
         #[serde(rename = "toolName")]
         tool_name: String,
         args: serde_json::Value,
+        /// Legacy: inline result from merged format. New conversations use
+        /// separate `ToolResult` parts on user messages instead.
         #[serde(skip_serializing_if = "Option::is_none")]
         result: Option<String>,
+        #[serde(default)]
+        is_error: bool,
+    },
+    ToolResult {
+        #[serde(rename = "toolCallId")]
+        tool_call_id: String,
+        result: String,
         #[serde(default)]
         is_error: bool,
     },

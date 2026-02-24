@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use aws_sdk_bedrockruntime::primitives::Blob;
 use aws_sdk_bedrockruntime::Client as BedrockClient;
@@ -6,6 +6,7 @@ use futures::stream::BoxStream;
 use futures::StreamExt;
 
 use crate::anthropic::types::{Message, StreamEvent, Tool};
+use crate::provider::error::ProviderError;
 use crate::provider::InferenceProvider;
 
 pub struct BedrockProvider {
@@ -73,7 +74,10 @@ impl InferenceProvider for BedrockProvider {
             .body(Blob::new(body_bytes))
             .send()
             .await
-            .map_err(|e| anyhow!("Bedrock invoke error: {:?}", e))?;
+            .map_err(|e| {
+                let msg = format!("{:?}", e);
+                ProviderError::from_bedrock(&msg)
+            })?;
 
         let event_stream = output.body;
 
@@ -101,10 +105,9 @@ impl InferenceProvider for BedrockProvider {
                     }
                     Ok(None) => return None,
                     Err(e) => {
-                        return Some((
-                            Err(anyhow!("Bedrock stream error: {}", e)),
-                            receiver,
-                        ));
+                        let msg = format!("{}", e);
+                        let err = ProviderError::from_bedrock(&msg);
+                        return Some((Err(err.into()), receiver));
                     }
                 }
             }
@@ -188,11 +191,14 @@ fn parse_bedrock_chunk(bytes: &[u8]) -> Result<Option<StreamEvent>> {
         "message_stop" => Ok(Some(StreamEvent::MessageStop)),
         "ping" => Ok(Some(StreamEvent::Ping)),
         "error" => {
+            let error_type = json["error"]["type"]
+                .as_str()
+                .map(|s| s.to_string());
             let msg = json["error"]["message"]
                 .as_str()
                 .unwrap_or("Unknown error")
                 .to_string();
-            Ok(Some(StreamEvent::Error { message: msg }))
+            Ok(Some(StreamEvent::Error { error_type, message: msg }))
         }
         _ => Ok(None),
     }

@@ -30,7 +30,14 @@ export type ToolCallPart = {
   status?: ToolCallStatus;
 };
 
-export type MessagePart = TextPart | ThinkingPart | ToolCallPart;
+export type ToolResultPart = {
+  type: "tool-result";
+  toolCallId: string;
+  result: string;
+  isError?: boolean;
+};
+
+export type MessagePart = TextPart | ThinkingPart | ToolCallPart | ToolResultPart;
 
 export interface TimingSpan {
   id: string;
@@ -43,6 +50,14 @@ export interface TimingSpan {
   markers?: Array<{ label: string; timeMs: number }>;
 }
 
+export interface ProviderErrorDetails {
+  kind: string;
+  message: string;
+  status_code?: number;
+  retryable: boolean;
+  provider: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
@@ -52,6 +67,7 @@ export interface ChatMessage {
     type: "complete" | "incomplete" | "streaming";
     reason?: string;
     error?: unknown;
+    providerError?: ProviderErrorDetails;
   };
   metadata?: {
     timingSpans?: TimingSpan[];
@@ -177,6 +193,13 @@ function toClientMessage(m: {
       if (p.type === "text") return { type: "text", text: p.text as string };
       if (p.type === "thinking")
         return { type: "thinking", thinking: p.thinking as string };
+      if (p.type === "tool-result")
+        return {
+          type: "tool-result",
+          toolCallId: (p.toolCallId ?? p.tool_call_id) as string,
+          result: p.result as string,
+          isError: (p.is_error ?? p.isError) as boolean | undefined,
+        };
       return {
         type: "tool-call",
         toolCallId: (p.toolCallId ?? p.tool_call_id) as string,

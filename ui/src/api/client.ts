@@ -16,7 +16,6 @@ export interface ConversationFull {
   title: string;
   messages: ServerMessage[];
   active_path: string[];
-  branch_info?: Record<string, string[]>;
   usage?: ConversationUsage;
   agent_id?: string;
   created_at: string;
@@ -42,13 +41,19 @@ export type ServerPart =
       args: Record<string, unknown>;
       result?: string;
       is_error?: boolean;
+    }
+  | {
+      type: "tool-result";
+      toolCallId: string;
+      result: string;
+      is_error?: boolean;
     };
 
 // ── Conversations ──
 
 export async function fetchConversations(): Promise<ConversationMeta[]> {
   const res = await fetch("/api/conversations");
-  if (!res.ok) return [];
+  if (!res.ok) throw new Error(`Failed to load conversations (${res.status})`);
   return res.json();
 }
 
@@ -166,6 +171,21 @@ export async function switchPath(
   return res.json();
 }
 
+// ── Ask User ──
+
+export async function answerQuestion(
+  conversationId: string,
+  questionId: string,
+  value: unknown,
+): Promise<void> {
+  const res = await fetch("/api/chat/answer", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ conversationId, questionId, value }),
+  });
+  if (!res.ok) throw new Error(`Answer question failed (${res.status})`);
+}
+
 // ── Providers ──
 
 export type ProviderType = "anthropic" | "bedrock";
@@ -193,7 +213,7 @@ export interface CreateProviderRequest {
 
 export async function fetchProviders(): Promise<ProviderPublic[]> {
   const res = await fetch("/api/providers");
-  if (!res.ok) return [];
+  if (!res.ok) throw new Error(`Failed to load providers (${res.status})`);
   return res.json();
 }
 
@@ -273,7 +293,7 @@ export interface CreateAgentRequest {
 
 export async function fetchAgents(): Promise<AgentConfig[]> {
   const res = await fetch("/api/agents");
-  if (!res.ok) return [];
+  if (!res.ok) throw new Error(`Failed to load agents (${res.status})`);
   return res.json();
 }
 
@@ -346,7 +366,7 @@ export interface CreateMcpServerRequest {
 
 export async function fetchMcpServers(): Promise<McpServerConfig[]> {
   const res = await fetch("/api/mcp-servers");
-  if (!res.ok) return [];
+  if (!res.ok) throw new Error(`Failed to load MCP servers (${res.status})`);
   return res.json();
 }
 

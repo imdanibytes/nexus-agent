@@ -77,6 +77,8 @@ pub enum AgUiEvent {
         #[serde(rename = "runId")]
         run_id: String,
         message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        details: Option<serde_json::Value>,
     },
     #[serde(rename = "CUSTOM")]
     Custom {

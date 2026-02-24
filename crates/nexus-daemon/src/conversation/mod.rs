@@ -67,9 +67,7 @@ impl ConversationStore {
             return Ok(None);
         }
         let content = fs::read_to_string(&path)?;
-        let mut conv: Conversation = serde_json::from_str(&content)?;
-        // Normalize legacy format (tool results as separate user messages)
-        conv.normalize_tool_calls();
+        let conv: Conversation = serde_json::from_str(&content)?;
         Ok(Some(conv))
     }
 

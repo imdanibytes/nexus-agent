@@ -30,7 +30,8 @@ export const useMcpStore = create<McpState>((set) => ({
     try {
       const servers = await fetchMcpServers();
       set({ servers, isLoading: false });
-    } catch {
+    } catch (err) {
+      console.error("Failed to load MCP servers:", err);
       set({ isLoading: false });
     }
   },

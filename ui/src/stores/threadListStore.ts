@@ -44,7 +44,8 @@ export const useThreadListStore = create<ThreadListState>((set, get) => ({
       const convos = await fetchConversations();
       convos.sort(sortByDate);
       set({ threads: convos, isLoading: false });
-    } catch {
+    } catch (err) {
+      console.error("Failed to load conversations:", err);
       set({ isLoading: false });
     }
   },

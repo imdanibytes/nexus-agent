@@ -43,7 +43,8 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         fetchActiveAgent(),
       ]);
       set({ agents, activeAgentId: activeId, isLoading: false });
-    } catch {
+    } catch (err) {
+      console.error("Failed to load agents:", err);
       set({ isLoading: false });
     }
   },

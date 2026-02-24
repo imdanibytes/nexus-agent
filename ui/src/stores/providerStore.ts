@@ -32,7 +32,8 @@ export const useProviderStore = create<ProviderState>((set) => ({
     try {
       const providers = await fetchProviders();
       set({ providers, isLoading: false });
-    } catch {
+    } catch (err) {
+      console.error("Failed to load providers:", err);
       set({ isLoading: false });
     }
   },
