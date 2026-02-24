@@ -28,11 +28,10 @@ pub async fn create(
             body.endpoint,
             body.api_key,
             body.aws_region,
-            body.aws_access_key_id,
-            body.aws_secret_access_key,
-            body.aws_session_token,
+            body.aws_profile,
         )
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
 
     let public = ProviderPublic::from(&provider);
     Ok((
@@ -66,9 +65,7 @@ pub async fn update(
         endpoint: body.endpoint,
         api_key: body.api_key,
         aws_region: body.aws_region,
-        aws_access_key_id: body.aws_access_key_id,
-        aws_secret_access_key: body.aws_secret_access_key,
-        aws_session_token: body.aws_session_token,
+        aws_profile: body.aws_profile,
     };
 
     match store
@@ -122,7 +119,7 @@ pub async fn test_connection(
 
             let model = match provider.provider_type {
                 ProviderType::Anthropic => "claude-haiku-4-5-20251001",
-                ProviderType::Bedrock => "anthropic.claude-3-haiku-20240307-v1:0",
+                ProviderType::Bedrock => "us.anthropic.claude-3-haiku-20240307-v1:0",
             };
 
             match client
@@ -198,40 +195,107 @@ pub async fn list_models(
             let mut config_loader =
                 aws_config::from_env().region(aws_config::Region::new(region.to_string()));
 
-            if let (Some(key), Some(secret)) = (
-                provider.aws_access_key_id.as_deref(),
-                provider.aws_secret_access_key.as_deref(),
-            ) {
-                let creds = aws_sdk_bedrockruntime::config::Credentials::new(
-                    key,
-                    secret,
-                    provider.aws_session_token.clone(),
-                    None,
-                    "nexus",
-                );
-                config_loader = config_loader.credentials_provider(creds);
+            if let Some(profile_name) = provider.aws_profile.as_deref() {
+                config_loader = config_loader.profile_name(profile_name);
             }
 
             let sdk_config = config_loader.load().await;
             let client = aws_sdk_bedrock::Client::new(&sdk_config);
 
-            let resp = client
-                .list_foundation_models()
-                .by_inference_type(aws_sdk_bedrock::types::InferenceType::OnDemand)
-                .send()
-                .await
-                .map_err(|_| StatusCode::BAD_GATEWAY)?;
+            // Only use inference profiles — they cover all models including
+            // newer ones (Claude 4+) that aren't in list_foundation_models.
+            let mut models: Vec<serde_json::Value> = Vec::new();
+            let mut stream = client
+                .list_inference_profiles()
+                .type_equals(
+                    aws_sdk_bedrock::types::InferenceProfileType::SystemDefined,
+                )
+                .into_paginator()
+                .items()
+                .send();
 
-            let models: Vec<serde_json::Value> = resp
-                .model_summaries()
-                .iter()
-                .map(|m| {
-                    serde_json::json!({
-                        "id": m.model_id(),
-                        "name": m.model_name().unwrap_or(m.model_id()),
+            // Non-LLM model prefixes to filter out (after the region prefix)
+            let non_llm = ["stability.", "twelvelabs.", "cohere.embed"];
+
+            // Map provider prefix in profile ID → display group name
+            let group_of = |model_part: &str| -> &'static str {
+                if model_part.starts_with("anthropic.") {
+                    "Anthropic"
+                } else if model_part.starts_with("amazon.") {
+                    "Amazon"
+                } else if model_part.starts_with("meta.") {
+                    "Meta"
+                } else if model_part.starts_with("mistral.") {
+                    "Mistral"
+                } else if model_part.starts_with("deepseek.") {
+                    "DeepSeek"
+                } else if model_part.starts_with("writer.") {
+                    "Writer"
+                } else if model_part.starts_with("cohere.") {
+                    "Cohere"
+                } else if model_part.starts_with("ai21.") {
+                    "AI21 Labs"
+                } else {
+                    "Other"
+                }
+            };
+
+            while let Some(Ok(p)) = stream.next().await {
+                if *p.status() != aws_sdk_bedrock::types::InferenceProfileStatus::Active
+                {
+                    continue;
+                }
+                let id = p.inference_profile_id();
+                // Profile IDs are "{region}.{provider}.{model}" — strip the
+                // region prefix to check the model family.
+                let model_part = id.split_once('.').map(|(_, rest)| rest).unwrap_or(id);
+                if non_llm.iter().any(|prefix| model_part.starts_with(prefix)) {
+                    continue;
+                }
+                models.push(serde_json::json!({
+                    "id": id,
+                    "name": p.inference_profile_name(),
+                    "group": group_of(model_part),
+                }));
+            }
+
+            // Two-layer stable sort:
+            //   1) Group: Anthropic → Amazon → everything else (alphabetical)
+            //   2) Within group: by embedded release date desc (newest first),
+            //      then undated entries in alphanumeric order
+            models.sort_by(|a, b| {
+                let id_a = a["id"].as_str().unwrap_or("");
+                let id_b = b["id"].as_str().unwrap_or("");
+                let name_a = a["name"].as_str().unwrap_or("");
+                let name_b = b["name"].as_str().unwrap_or("");
+                let group_a = a["group"].as_str().unwrap_or("");
+                let group_b = b["group"].as_str().unwrap_or("");
+
+                let group_ord = |g: &str| -> u8 {
+                    match g {
+                        "Anthropic" => 0,
+                        "Amazon" => 1,
+                        _ => 2,
+                    }
+                };
+
+                // Extract YYYYMMDD date embedded in profile ID
+                let date_of = |id: &str| -> Option<u32> {
+                    id.split(|c: char| !c.is_ascii_digit())
+                        .find(|s| s.len() == 8 && s.starts_with("20"))
+                        .and_then(|s| s.parse().ok())
+                };
+
+                group_ord(group_a)
+                    .cmp(&group_ord(group_b))
+                    .then_with(|| group_a.cmp(group_b))
+                    .then_with(|| match (date_of(id_a), date_of(id_b)) {
+                        (Some(da), Some(db)) => db.cmp(&da),
+                        (Some(_), None) => std::cmp::Ordering::Less,
+                        (None, Some(_)) => std::cmp::Ordering::Greater,
+                        (None, None) => name_a.cmp(name_b),
                     })
-                })
-                .collect();
+            });
 
             Ok(Json(serde_json::json!({ "models": models })))
         }
@@ -246,9 +310,7 @@ pub struct CreateProviderRequest {
     pub endpoint: Option<String>,
     pub api_key: Option<String>,
     pub aws_region: Option<String>,
-    pub aws_access_key_id: Option<String>,
-    pub aws_secret_access_key: Option<String>,
-    pub aws_session_token: Option<String>,
+    pub aws_profile: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -257,7 +319,5 @@ pub struct UpdateProviderRequest {
     pub endpoint: Option<String>,
     pub api_key: Option<String>,
     pub aws_region: Option<String>,
-    pub aws_access_key_id: Option<String>,
-    pub aws_secret_access_key: Option<String>,
-    pub aws_session_token: Option<String>,
+    pub aws_profile: Option<String>,
 }

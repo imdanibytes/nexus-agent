@@ -13,6 +13,8 @@ pub struct AgentEntry {
     pub temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    #[serde(default = "chrono::Utc::now")]
     pub created_at: DateTime<Utc>,
+    #[serde(default = "chrono::Utc::now")]
     pub updated_at: DateTime<Utc>,
 }

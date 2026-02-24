@@ -1,44 +1,21 @@
 use anyhow::Result;
 use chrono::Utc;
-use std::fs;
-use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use super::types::AgentEntry;
+use crate::config::NexusConfig;
 
 pub struct AgentStore {
-    path: PathBuf,
-    active_path: PathBuf,
     agents: Vec<AgentEntry>,
     active_agent_id: Option<String>,
 }
 
 impl AgentStore {
-    pub fn load(nexus_dir: &Path) -> Result<Self> {
-        let path = nexus_dir.join("agents.json");
-        let active_path = nexus_dir.join("active_agent.json");
-
-        let agents: Vec<AgentEntry> = if path.exists() {
-            let content = fs::read_to_string(&path)?;
-            serde_json::from_str(&content)?
-        } else {
-            Vec::new()
-        };
-
-        let active_agent_id: Option<String> = if active_path.exists() {
-            let content = fs::read_to_string(&active_path)?;
-            let val: serde_json::Value = serde_json::from_str(&content)?;
-            val["agent_id"].as_str().map(|s| s.to_string())
-        } else {
-            None
-        };
-
-        Ok(Self {
-            path,
-            active_path,
+    pub fn new(agents: Vec<AgentEntry>, active_agent_id: Option<String>) -> Self {
+        Self {
             agents,
             active_agent_id,
-        })
+        }
     }
 
     pub fn list(&self) -> &[AgentEntry] {
@@ -55,8 +32,7 @@ impl AgentStore {
 
     pub fn set_active(&mut self, id: Option<String>) -> Result<()> {
         self.active_agent_id = id;
-        self.save_active()?;
-        Ok(())
+        self.save()
     }
 
     pub fn create(
@@ -122,7 +98,6 @@ impl AgentStore {
             // Clear active if deleted agent was active
             if self.active_agent_id.as_deref() == Some(id) {
                 self.active_agent_id = None;
-                self.save_active()?;
             }
             self.save()?;
             Ok(true)
@@ -132,18 +107,10 @@ impl AgentStore {
     }
 
     fn save(&self) -> Result<()> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let content = serde_json::to_string_pretty(&self.agents)?;
-        fs::write(&self.path, content)?;
-        Ok(())
-    }
-
-    fn save_active(&self) -> Result<()> {
-        let content = serde_json::json!({ "agent_id": self.active_agent_id });
-        fs::write(&self.active_path, serde_json::to_string_pretty(&content)?)?;
-        Ok(())
+        let mut config = NexusConfig::load()?;
+        config.agents = self.agents.clone();
+        config.active_agent_id = self.active_agent_id.clone();
+        config.save()
     }
 }
 

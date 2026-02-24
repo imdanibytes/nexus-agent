@@ -47,13 +47,8 @@ impl ProviderFactory {
                     .as_ref()
                     .ok_or_else(|| anyhow!("Bedrock provider '{}' has no AWS region", provider.name))?
                     .clone();
-                let bedrock = BedrockProvider::new(
-                    &region,
-                    provider.aws_access_key_id.as_deref(),
-                    provider.aws_secret_access_key.as_deref(),
-                    provider.aws_session_token.as_deref(),
-                )
-                .await?;
+                let bedrock =
+                    BedrockProvider::new(&region, provider.aws_profile.as_deref()).await?;
                 Arc::new(bedrock)
             }
         };

@@ -1,10 +1,14 @@
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Deserialize)]
+use crate::agent_config::types::AgentEntry;
+use crate::provider::types::Provider;
+
+/// Main nexus configuration — persisted to ~/.nexus/nexus.json
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NexusConfig {
     #[serde(default)]
     pub api: ApiConfig,
@@ -13,10 +17,14 @@ pub struct NexusConfig {
     #[serde(default)]
     pub agent: AgentConfig,
     #[serde(default)]
-    pub mcp_servers: Vec<McpServerConfig>,
+    pub providers: Vec<Provider>,
+    #[serde(default)]
+    pub agents: Vec<AgentEntry>,
+    #[serde(default)]
+    pub active_agent_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiConfig {
     #[serde(default = "default_model")]
     pub model: String,
@@ -24,7 +32,7 @@ pub struct ApiConfig {
     pub max_tokens: u32,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
     #[serde(default = "default_host")]
     pub host: String,
@@ -32,12 +40,13 @@ pub struct ServerConfig {
     pub port: u16,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
     pub system_prompt: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+/// MCP server configuration — persisted to ~/.nexus/mcp.json
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerConfig {
     pub id: String,
     pub command: String,
@@ -92,7 +101,9 @@ impl Default for NexusConfig {
             api: ApiConfig::default(),
             server: ServerConfig::default(),
             agent: AgentConfig::default(),
-            mcp_servers: Vec::new(),
+            providers: Vec::new(),
+            agents: Vec::new(),
+            active_agent_id: None,
         }
     }
 }
@@ -104,46 +115,56 @@ impl NexusConfig {
             .join(".nexus")
     }
 
-    pub fn config_path() -> PathBuf {
-        Self::nexus_dir().join("config.toml")
+    fn config_path() -> PathBuf {
+        Self::nexus_dir().join("nexus.json")
+    }
+
+    fn mcp_path() -> PathBuf {
+        Self::nexus_dir().join("mcp.json")
     }
 
     pub fn load() -> Result<Self> {
         let path = Self::config_path();
+        let dir = Self::nexus_dir();
+        fs::create_dir_all(&dir)?;
 
         if path.exists() {
             let content = fs::read_to_string(&path)
                 .with_context(|| format!("Failed to read config from {}", path.display()))?;
-            let config: NexusConfig = toml::from_str(&content)
+            let config: NexusConfig = serde_json::from_str(&content)
                 .with_context(|| format!("Failed to parse config at {}", path.display()))?;
             Ok(config)
         } else {
             let config = Self::default();
-            // Create directory and write default config
-            let dir = Self::nexus_dir();
-            fs::create_dir_all(&dir)?;
-            let default_toml = r#"# Nexus configuration
-# API key is read from ANTHROPIC_API_KEY environment variable
-
-[api]
-model = "claude-sonnet-4-20250514"
-max_tokens = 8192
-
-[server]
-host = "127.0.0.1"
-port = 9600
-
-# [agent]
-# system_prompt = "You are a helpful coding assistant."
-
-# [[mcp_servers]]
-# id = "filesystem"
-# command = "npx"
-# args = ["-y", "@modelcontextprotocol/server-filesystem", "/Users/you/projects"]
-"#;
-            fs::write(&path, default_toml)?;
+            config.save()?;
             tracing::info!("Created default config at {}", path.display());
             Ok(config)
         }
+    }
+
+    pub fn load_mcp_servers() -> Result<Vec<McpServerConfig>> {
+        let path = Self::mcp_path();
+        if path.exists() {
+            let content = fs::read_to_string(&path)
+                .with_context(|| format!("Failed to read MCP config from {}", path.display()))?;
+            let servers: Vec<McpServerConfig> = serde_json::from_str(&content)
+                .with_context(|| format!("Failed to parse MCP config at {}", path.display()))?;
+            Ok(servers)
+        } else {
+            // Write empty array as scaffold
+            fs::write(&path, "[]")?;
+            Ok(Vec::new())
+        }
+    }
+
+    pub fn save(&self) -> Result<()> {
+        let path = Self::config_path();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let content = serde_json::to_string_pretty(self)?;
+        fs::write(&path, content)
+            .with_context(|| format!("Failed to write config to {}", path.display()))?;
+        Ok(())
     }
 }

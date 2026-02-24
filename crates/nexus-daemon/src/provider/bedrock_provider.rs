@@ -13,26 +13,12 @@ pub struct BedrockProvider {
 }
 
 impl BedrockProvider {
-    pub async fn new(
-        region: &str,
-        access_key_id: Option<&str>,
-        secret_access_key: Option<&str>,
-        session_token: Option<&str>,
-    ) -> Result<Self> {
-        let mut config_loader = aws_config::from_env().region(
-            aws_config::Region::new(region.to_string()),
-        );
+    pub async fn new(region: &str, profile: Option<&str>) -> Result<Self> {
+        let mut config_loader =
+            aws_config::from_env().region(aws_config::Region::new(region.to_string()));
 
-        // Use explicit credentials if provided, otherwise fall back to default chain
-        if let (Some(key), Some(secret)) = (access_key_id, secret_access_key) {
-            let creds = aws_sdk_bedrockruntime::config::Credentials::new(
-                key,
-                secret,
-                session_token.map(|s| s.to_string()),
-                None,
-                "nexus-provider",
-            );
-            config_loader = config_loader.credentials_provider(creds);
+        if let Some(profile_name) = profile {
+            config_loader = config_loader.profile_name(profile_name);
         }
 
         let config = config_loader.load().await;

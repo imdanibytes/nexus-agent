@@ -1,26 +1,17 @@
 use anyhow::Result;
 use chrono::Utc;
-use std::fs;
-use std::path::PathBuf;
 use uuid::Uuid;
 
 use super::types::{Provider, ProviderType};
+use crate::config::NexusConfig;
 
 pub struct ProviderStore {
-    path: PathBuf,
     providers: Vec<Provider>,
 }
 
 impl ProviderStore {
-    pub fn load(nexus_dir: &std::path::Path) -> Result<Self> {
-        let path = nexus_dir.join("providers.json");
-        let providers = if path.exists() {
-            let content = fs::read_to_string(&path)?;
-            serde_json::from_str(&content)?
-        } else {
-            Vec::new()
-        };
-        Ok(Self { path, providers })
+    pub fn new(providers: Vec<Provider>) -> Self {
+        Self { providers }
     }
 
     pub fn list(&self) -> &[Provider] {
@@ -38,9 +29,7 @@ impl ProviderStore {
         endpoint: Option<String>,
         api_key: Option<String>,
         aws_region: Option<String>,
-        aws_access_key_id: Option<String>,
-        aws_secret_access_key: Option<String>,
-        aws_session_token: Option<String>,
+        aws_profile: Option<String>,
     ) -> Result<Provider> {
         let now = Utc::now();
         let provider = Provider {
@@ -50,9 +39,7 @@ impl ProviderStore {
             endpoint,
             api_key,
             aws_region,
-            aws_access_key_id,
-            aws_secret_access_key,
-            aws_session_token,
+            aws_profile,
             created_at: now,
             updated_at: now,
         };
@@ -90,21 +77,11 @@ impl ProviderStore {
                 Some(region)
             };
         }
-        if let Some(key) = updates.aws_access_key_id {
-            provider.aws_access_key_id = if key.is_empty() { None } else { Some(key) };
-        }
-        if let Some(secret) = updates.aws_secret_access_key {
-            provider.aws_secret_access_key = if secret.is_empty() {
+        if let Some(profile) = updates.aws_profile {
+            provider.aws_profile = if profile.is_empty() {
                 None
             } else {
-                Some(secret)
-            };
-        }
-        if let Some(token) = updates.aws_session_token {
-            provider.aws_session_token = if token.is_empty() {
-                None
-            } else {
-                Some(token)
+                Some(profile)
             };
         }
         provider.updated_at = Utc::now();
@@ -126,12 +103,9 @@ impl ProviderStore {
     }
 
     fn save(&self) -> Result<()> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let content = serde_json::to_string_pretty(&self.providers)?;
-        fs::write(&self.path, content)?;
-        Ok(())
+        let mut config = NexusConfig::load()?;
+        config.providers = self.providers.clone();
+        config.save()
     }
 }
 
@@ -140,7 +114,5 @@ pub struct ProviderUpdate {
     pub endpoint: Option<String>,
     pub api_key: Option<String>,
     pub aws_region: Option<String>,
-    pub aws_access_key_id: Option<String>,
-    pub aws_secret_access_key: Option<String>,
-    pub aws_session_token: Option<String>,
+    pub aws_profile: Option<String>,
 }

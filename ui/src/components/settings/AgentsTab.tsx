@@ -1,6 +1,6 @@
 import { type FC, useState, useEffect } from "react";
 import { PlusIcon, TrashIcon, CheckIcon, Loader2Icon } from "lucide-react";
-import { Select, SelectItem } from "@heroui/react";
+import { Select, SelectItem, SelectSection } from "@heroui/react";
 import { useAgentStore } from "../../stores/agentStore";
 import { useProviderStore } from "../../stores/providerStore";
 import { fetchProviderModels, type ModelInfo } from "../../api/client";
@@ -231,14 +231,32 @@ const AgentEditor: FC<{
               value: "text-xs",
             }}
           >
-            {discoveredModels.map((m) => (
-              <SelectItem key={m.id} textValue={m.name}>
-                <div className="flex flex-col">
-                  <span className="text-xs">{m.name}</span>
-                  <span className="text-[10px] text-default-400">{m.id}</span>
-                </div>
-              </SelectItem>
-            ))}
+            {(() => {
+              const groups: { label: string; items: typeof discoveredModels }[] = [];
+              for (const m of discoveredModels) {
+                const label = m.group ?? "Other";
+                let group = groups.find((g) => g.label === label);
+                if (!group) {
+                  group = { label, items: [] };
+                  groups.push(group);
+                }
+                group.items.push(m);
+              }
+              return groups.map((g) => (
+                <SelectSection key={g.label} title={g.label}>
+                  {g.items.map((m) => (
+                    <SelectItem key={m.id} textValue={m.name}>
+                      <div className="flex flex-col">
+                        <span className="text-xs">{m.name}</span>
+                        <span className="text-[10px] text-default-400">
+                          {m.id}
+                        </span>
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectSection>
+              ));
+            })()}
           </Select>
         ) : (
           <input

@@ -34,11 +34,13 @@ async fn main() -> Result<()> {
         .init();
 
     let config = NexusConfig::load()?;
-    let nexus_dir = NexusConfig::nexus_dir();
+    let mcp_servers = NexusConfig::load_mcp_servers()?;
 
-    // Load stores
-    let mut provider_store = ProviderStore::load(&nexus_dir)?;
-    let mut agent_store = AgentStore::load(&nexus_dir)?;
+    let mut provider_store = ProviderStore::new(config.providers.clone());
+    let mut agent_store = AgentStore::new(
+        config.agents.clone(),
+        config.active_agent_id.clone(),
+    );
 
     // Title generation client (optional — from env var)
     let title_client = std::env::var("ANTHROPIC_API_KEY")
@@ -54,8 +56,6 @@ async fn main() -> Result<()> {
                 ProviderType::Anthropic,
                 None,
                 Some(api_key),
-                None,
-                None,
                 None,
                 None,
             )?;
@@ -80,6 +80,7 @@ async fn main() -> Result<()> {
         }
     }
 
+    let nexus_dir = NexusConfig::nexus_dir();
     let conversations_dir = nexus_dir.join("conversations");
     let conversations = ConversationStore::load(conversations_dir)?;
 
@@ -89,11 +90,11 @@ async fn main() -> Result<()> {
     tracing::info!(
         providers = provider_store.list().len(),
         agents = agent_store.list().len(),
-        mcp_servers = config.mcp_servers.len(),
+        mcp_servers = mcp_servers.len(),
         "Nexus daemon starting"
     );
 
-    let mcp = McpManager::from_configs(&config.mcp_servers).await;
+    let mcp = McpManager::from_configs(&mcp_servers).await;
     let factory = Arc::new(ProviderFactory::new());
 
     let state = AppState {

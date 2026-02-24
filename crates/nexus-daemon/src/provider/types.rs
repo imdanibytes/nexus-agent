@@ -23,14 +23,12 @@ pub struct Provider {
     /// AWS region for Bedrock
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aws_region: Option<String>,
-    /// AWS access key ID (optional — falls back to default credential chain)
+    /// AWS CLI profile name (e.g. "default", "my-bedrock-profile")
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub aws_access_key_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub aws_secret_access_key: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub aws_session_token: Option<String>,
+    pub aws_profile: Option<String>,
+    #[serde(default = "chrono::Utc::now")]
     pub created_at: DateTime<Utc>,
+    #[serde(default = "chrono::Utc::now")]
     pub updated_at: DateTime<Utc>,
 }
 
@@ -46,7 +44,8 @@ pub struct ProviderPublic {
     pub has_api_key: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aws_region: Option<String>,
-    pub has_aws_credentials: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aws_profile: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -60,7 +59,7 @@ impl From<&Provider> for ProviderPublic {
             endpoint: p.endpoint.clone(),
             has_api_key: p.api_key.is_some(),
             aws_region: p.aws_region.clone(),
-            has_aws_credentials: p.aws_access_key_id.is_some(),
+            aws_profile: p.aws_profile.clone(),
             created_at: p.created_at,
             updated_at: p.updated_at,
         }

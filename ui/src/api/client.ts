@@ -176,7 +176,7 @@ export interface ProviderPublic {
   endpoint?: string;
   has_api_key: boolean;
   aws_region?: string;
-  has_aws_credentials: boolean;
+  aws_profile?: string;
   created_at: string;
   updated_at: string;
 }
@@ -187,9 +187,7 @@ export interface CreateProviderRequest {
   endpoint?: string;
   api_key?: string;
   aws_region?: string;
-  aws_access_key_id?: string;
-  aws_secret_access_key?: string;
-  aws_session_token?: string;
+  aws_profile?: string;
 }
 
 export async function fetchProviders(): Promise<ProviderPublic[]> {
@@ -318,6 +316,7 @@ export async function setActiveAgent(
 export interface ModelInfo {
   id: string;
   name: string;
+  group?: string;
 }
 
 export async function fetchProviderModels(

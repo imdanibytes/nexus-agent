@@ -58,7 +58,7 @@ export const ProvidersTab: FC = () => {
               {p.type === "anthropic" && (p.endpoint ?? "api.anthropic.com")}
               {p.type === "bedrock" && (p.aws_region ?? "no region")}
               {p.has_api_key && " · Key set"}
-              {p.has_aws_credentials && " · AWS creds set"}
+              {p.aws_profile && ` · Profile: ${p.aws_profile}`}
             </div>
           </div>
           <button
@@ -102,9 +102,7 @@ const ProviderEditor: FC<{
   const [endpoint, setEndpoint] = useState(provider?.endpoint ?? "");
   const [apiKey, setApiKey] = useState("");
   const [awsRegion, setAwsRegion] = useState(provider?.aws_region ?? "us-east-1");
-  const [awsAccessKeyId, setAwsAccessKeyId] = useState("");
-  const [awsSecretAccessKey, setAwsSecretAccessKey] = useState("");
-  const [awsSessionToken, setAwsSessionToken] = useState("");
+  const [awsProfile, setAwsProfile] = useState(provider?.aws_profile ?? "");
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{
@@ -123,13 +121,7 @@ const ProviderEditor: FC<{
         ...(type === "bedrock"
           ? {
               aws_region: awsRegion,
-              ...(awsAccessKeyId ? { aws_access_key_id: awsAccessKeyId } : {}),
-              ...(awsSecretAccessKey
-                ? { aws_secret_access_key: awsSecretAccessKey }
-                : {}),
-              ...(awsSessionToken
-                ? { aws_session_token: awsSessionToken }
-                : {}),
+              ...(awsProfile ? { aws_profile: awsProfile } : {}),
             }
           : {}),
       };
@@ -227,33 +219,11 @@ const ProviderEditor: FC<{
               className="input-field"
             />
           </Field>
-          <Field label="AWS Access Key ID (optional)">
+          <Field label="AWS Profile (optional)">
             <input
-              type="password"
-              value={awsAccessKeyId}
-              onChange={(e) => setAwsAccessKeyId(e.target.value)}
-              placeholder={
-                isEdit && provider?.has_aws_credentials ? "••••••••" : "AKIA..."
-              }
-              className="input-field"
-            />
-          </Field>
-          <Field label="AWS Secret Access Key (optional)">
-            <input
-              type="password"
-              value={awsSecretAccessKey}
-              onChange={(e) => setAwsSecretAccessKey(e.target.value)}
-              placeholder={
-                isEdit && provider?.has_aws_credentials ? "••••••••" : ""
-              }
-              className="input-field"
-            />
-          </Field>
-          <Field label="AWS Session Token (optional)">
-            <input
-              type="password"
-              value={awsSessionToken}
-              onChange={(e) => setAwsSessionToken(e.target.value)}
+              value={awsProfile}
+              onChange={(e) => setAwsProfile(e.target.value)}
+              placeholder={provider?.aws_profile ?? "default"}
               className="input-field"
             />
           </Field>
