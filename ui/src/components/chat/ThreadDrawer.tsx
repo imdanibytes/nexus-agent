@@ -89,7 +89,7 @@ export const ThreadDrawer: FC<ThreadDrawerProps> = ({ isOpen, onClose }) => {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
-            className="absolute inset-0 z-40 bg-black/30 dark:bg-black/40"
+            className="absolute inset-0 z-40 bg-black/30 dark:bg-black/40 backdrop-blur-sm"
             onClick={onClose}
           />
 
@@ -98,7 +98,7 @@ export const ThreadDrawer: FC<ThreadDrawerProps> = ({ isOpen, onClose }) => {
             animate={{ x: 0 }}
             exit={{ x: "-100%" }}
             transition={{ type: "spring", damping: 30, stiffness: 300 }}
-            className="absolute inset-y-0 left-0 z-50 flex w-72 flex-col bg-white/95 dark:bg-default-50/60 backdrop-blur-2xl border-r border-default-200 dark:border-default-200/50 rounded-l-2xl"
+            className="absolute inset-y-0 left-0 z-50 flex w-72 flex-col bg-white/95 dark:bg-default-50/80 backdrop-blur-3xl border-r border-default-200 dark:border-default-200/50 rounded-l-2xl"
           >
             {/* Header */}
             <div className="flex items-center justify-between px-3 pt-3 pb-2">

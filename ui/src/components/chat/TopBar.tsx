@@ -2,6 +2,7 @@ import type { FC } from "react";
 import { MenuIcon, SettingsIcon } from "lucide-react";
 import { useThreadListStore } from "../../stores/threadListStore";
 import { useUIStore } from "../../stores/uiStore";
+import { AgentSwitcher } from "../agent/AgentSwitcher";
 
 interface TopBarProps {
   onMenuPress: () => void;
@@ -26,12 +27,16 @@ export const TopBar: FC<TopBarProps> = ({ onMenuPress }) => {
       </button>
 
       {title ? (
-        <span className="flex-1 min-w-0 truncate px-2 text-[13px] font-semibold text-foreground">
+        <span className="min-w-0 truncate px-2 text-[13px] font-semibold text-foreground">
           {title}
         </span>
       ) : (
-        <span className="flex-1" />
+        <span />
       )}
+
+      <span className="flex-1" />
+
+      <AgentSwitcher />
 
       <button
         onClick={() => setSettingsOpen(true)}

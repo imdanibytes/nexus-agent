@@ -1,25 +1,33 @@
+pub mod agent_api;
 pub mod chat;
 pub mod conversations;
+pub mod providers;
 pub mod sse;
 
 use axum::extract::State;
-use axum::routing::{get, patch, post};
+use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
+use crate::agent_config::AgentStore;
 use crate::anthropic::AnthropicClient;
 use crate::config::NexusConfig;
 use crate::conversation::ConversationStore;
 use crate::mcp::McpManager;
+use crate::provider::{ProviderFactory, ProviderStore};
 use sse::{AgentEventBridge, SseHub};
 
 pub struct AppState {
-    pub client: AnthropicClient,
     pub config: NexusConfig,
     pub conversations: RwLock<ConversationStore>,
+    pub providers: RwLock<ProviderStore>,
+    pub agents: RwLock<AgentStore>,
+    pub factory: Arc<ProviderFactory>,
+    /// Anthropic client used only for title generation (from ANTHROPIC_API_KEY env)
+    pub title_client: Option<AnthropicClient>,
     pub mcp: McpManager,
     pub sse_hub: SseHub,
     pub event_bridge: AgentEventBridge,
@@ -50,6 +58,40 @@ pub fn build_router(state: AppState, ui_dist_path: &str) -> Router {
         .route(
             "/api/conversations/{id}/path",
             patch(conversations::switch_path),
+        )
+        // Providers
+        .route(
+            "/api/providers",
+            get(providers::list).post(providers::create),
+        )
+        .route(
+            "/api/providers/{id}",
+            get(providers::get)
+                .put(providers::update)
+                .delete(providers::delete),
+        )
+        .route(
+            "/api/providers/{id}/test",
+            post(providers::test_connection),
+        )
+        .route(
+            "/api/providers/{id}/models",
+            get(providers::list_models),
+        )
+        // Agents — /active must come before /{id}
+        .route(
+            "/api/agents/active",
+            get(agent_api::get_active).put(agent_api::set_active),
+        )
+        .route(
+            "/api/agents",
+            get(agent_api::list).post(agent_api::create),
+        )
+        .route(
+            "/api/agents/{id}",
+            get(agent_api::get)
+                .put(agent_api::update)
+                .delete(agent_api::delete),
         )
         // Tools
         .route("/api/tools", get(list_tools))

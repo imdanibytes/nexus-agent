@@ -9,8 +9,8 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::anthropic::types::*;
-use crate::anthropic::AnthropicClient;
 use crate::mcp::McpManager;
+use crate::provider::InferenceProvider;
 use events::AgUiEvent;
 
 const MAX_ROUNDS: usize = 50;
@@ -34,13 +34,14 @@ pub struct AgentTurnResult {
 
 /// Runs a single agent turn: inference → tool calls → loop.
 pub async fn run_agent_turn(
-    client: &AnthropicClient,
+    provider: &dyn InferenceProvider,
     conversation_id: &str,
     messages: Vec<Message>,
     tools: Vec<Tool>,
     system_prompt: Option<String>,
     model: &str,
     max_tokens: u32,
+    temperature: Option<f32>,
     mcp: &McpManager,
     tx: &broadcast::Sender<AgUiEvent>,
     cancel: CancellationToken,
@@ -70,15 +71,6 @@ pub async fn run_agent_turn(
 
         tracing::debug!(round, tools = tools.len(), "Starting inference round");
 
-        let request = MessagesRequest {
-            model: model.to_string(),
-            max_tokens,
-            system: system_prompt.clone(),
-            messages: messages.clone(),
-            tools: tools.clone(),
-            stream: true,
-        };
-
         let round_span_id = format!("t-round-{}", round);
         let round_start = Instant::now();
         let round_start_ms = turn_start.elapsed().as_millis() as u64;
@@ -86,7 +78,17 @@ pub async fn run_agent_turn(
         let inference_start = Instant::now();
         let inference_start_ms = turn_start.elapsed().as_millis() as u64;
 
-        let stream = match client.create_message_stream(request).await {
+        let stream = match provider
+            .create_message_stream(
+                model,
+                max_tokens,
+                system_prompt.clone(),
+                temperature,
+                messages.clone(),
+                tools.clone(),
+            )
+            .await
+        {
             Ok(s) => s,
             Err(e) => {
                 let _ = tx.send(AgUiEvent::RunError {
@@ -246,16 +248,14 @@ pub async fn run_agent_turn(
     })
 }
 
-/// Consume the Anthropic SSE stream, emit AG-UI events, return accumulated content.
-async fn consume_stream<S>(
-    mut stream: crate::anthropic::stream::SseStream<S>,
+/// Consume the provider stream, emit AG-UI events, return accumulated content.
+async fn consume_stream(
+    mut stream: futures::stream::BoxStream<'static, Result<StreamEvent>>,
     conversation_id: &str,
     run_id: &str,
     tx: &broadcast::Sender<AgUiEvent>,
     cancel: &CancellationToken,
 ) -> Result<(Vec<ContentBlock>, Option<StopReason>, Vec<PendingToolCall>, u32, u32)>
-where
-    S: futures::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Unpin,
 {
     let mut content_blocks: Vec<ContentBlock> = Vec::new();
     let mut stop_reason = None;

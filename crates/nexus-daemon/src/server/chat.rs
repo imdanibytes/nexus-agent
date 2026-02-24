@@ -10,7 +10,9 @@ use crate::agent;
 use crate::agent::events::AgUiEvent;
 use crate::agent::AgentTurnResult;
 use crate::anthropic::types::{ContentBlock, Message, MessagesRequest, Role};
-use crate::conversation::types::{ChatMessage, Conversation, ConversationUsage, MessagePart, MessageRole};
+use crate::conversation::types::{
+    ChatMessage, Conversation, ConversationUsage, MessagePart, MessageRole,
+};
 use crate::server::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -291,25 +293,78 @@ fn spawn_agent_turn(
     cancel: tokio_util::sync::CancellationToken,
     assistant_message_id: Option<String>,
 ) {
-    let client = state.client.clone();
     let agent_tx = state.event_bridge.agent_tx();
-    let model = state.config.api.model.clone();
-    let max_tokens = state.config.api.max_tokens;
-    let system_prompt = state.config.agent.system_prompt.clone();
     let state_clone = Arc::clone(&state);
 
     let needs_title = conv.title == "New Chat";
     let last_active_id = conv.active_path.last().cloned();
 
     tokio::spawn(async move {
+        // Resolve active agent → provider
+        let (provider_record, model, max_tokens, system_prompt, temperature) = {
+            let agents = state_clone.agents.read().await;
+            let providers = state_clone.providers.read().await;
+
+            let active_id = agents.active_agent_id().map(|s| s.to_string());
+            let agent = active_id.as_deref().and_then(|id| agents.get(id));
+
+            match agent {
+                Some(a) => {
+                    let provider = providers.get(&a.provider_id).cloned();
+                    match provider {
+                        Some(p) => (
+                            p,
+                            a.model.clone(),
+                            a.max_tokens.unwrap_or(8192),
+                            a.system_prompt.clone(),
+                            a.temperature,
+                        ),
+                        None => {
+                            let _ = agent_tx.send(AgUiEvent::RunError {
+                                thread_id: conversation_id.clone(),
+                                run_id: String::new(),
+                                message: format!(
+                                    "Provider '{}' not found for agent '{}'",
+                                    a.provider_id, a.name
+                                ),
+                            });
+                            return;
+                        }
+                    }
+                }
+                None => {
+                    let _ = agent_tx.send(AgUiEvent::RunError {
+                        thread_id: conversation_id.clone(),
+                        run_id: String::new(),
+                        message: "No active agent configured. Create one in Settings → Agents."
+                            .to_string(),
+                    });
+                    return;
+                }
+            }
+        };
+
+        let provider = match state_clone.factory.get(&provider_record).await {
+            Ok(p) => p,
+            Err(e) => {
+                let _ = agent_tx.send(AgUiEvent::RunError {
+                    thread_id: conversation_id.clone(),
+                    run_id: String::new(),
+                    message: format!("Failed to create provider client: {}", e),
+                });
+                return;
+            }
+        };
+
         let result = agent::run_agent_turn(
-            &client,
+            provider.as_ref(),
             &conversation_id,
             api_messages,
             tools,
             system_prompt,
             &model,
             max_tokens,
+            temperature,
             &state_clone.mcp,
             &agent_tx,
             cancel,
@@ -471,9 +526,15 @@ async fn generate_title(
         }],
         tools: Vec::new(),
         stream: false,
+        temperature: None,
     };
 
-    match state.client.create_message(request).await {
+    let Some(ref title_client) = state.title_client else {
+        tracing::debug!("No title client configured, skipping title generation");
+        return;
+    };
+
+    match title_client.create_message(request).await {
         Ok(response) => {
             let title = response
                 .content

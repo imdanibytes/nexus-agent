@@ -431,3 +431,26 @@ body {
   -webkit-text-fill-color: transparent;
   animation: tool-text-shimmer 3s linear infinite;
 }
+
+/* ============================================
+   Form Input Fields
+   ============================================ */
+
+.input-field {
+  width: 100%;
+  padding: 0.375rem 0.5rem;
+  font-size: 0.75rem;
+  line-height: 1.25rem;
+  border-radius: 0.375rem;
+  border: 1px solid hsl(var(--heroui-default-200));
+  background: hsl(var(--heroui-default-50) / 0.5);
+  color: hsl(var(--heroui-foreground));
+  outline: none;
+  transition: border-color 0.15s;
+}
+.input-field:focus {
+  border-color: hsl(var(--heroui-primary));
+}
+.input-field::placeholder {
+  color: hsl(var(--heroui-default-400));
+}

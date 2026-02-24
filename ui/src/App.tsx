@@ -4,6 +4,8 @@ import { TopBar } from "./components/chat/TopBar";
 import { ThreadDrawer } from "./components/chat/ThreadDrawer";
 import { SettingsModal } from "./components/settings/SettingsModal";
 import { useThreadListStore } from "./stores/threadListStore";
+import { useProviderStore } from "./stores/providerStore";
+import { useAgentStore } from "./stores/agentStore";
 import { useUIStore, applyTheme } from "./stores/uiStore";
 import { eventBus } from "./runtime/event-bus";
 
@@ -12,9 +14,13 @@ export default function App() {
   const theme = useUIStore((s) => s.theme);
 
   useEffect(() => {
-    // Connect SSE and load threads on mount
+    // Connect SSE and load all data on mount
     eventBus.connect();
-    useThreadListStore.getState().loadThreads().then(() => {
+    Promise.all([
+      useThreadListStore.getState().loadThreads(),
+      useProviderStore.getState().loadProviders(),
+      useAgentStore.getState().loadAgents(),
+    ]).then(() => {
       // Restore active thread from URL path: /c/{conversationId}
       const match = window.location.pathname.match(/^\/c\/(.+)/);
       if (match) {

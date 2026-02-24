@@ -6,10 +6,14 @@ import {
   SunIcon,
   MoonIcon,
   MonitorIcon,
+  CloudIcon,
+  CpuIcon,
 } from "lucide-react";
 import { LazyMotion, domAnimation, m, AnimatePresence } from "framer-motion";
 import { useUIStore, type Theme } from "../../stores/uiStore";
 import { cn } from "../../lib/utils";
+import { ProvidersTab } from "./ProvidersTab";
+import { AgentsTab } from "./AgentsTab";
 
 interface SettingsTab {
   id: string;
@@ -19,6 +23,8 @@ interface SettingsTab {
 
 const TABS: SettingsTab[] = [
   { id: "general", label: "General", icon: BotIcon },
+  { id: "providers", label: "Providers", icon: CloudIcon },
+  { id: "agents", label: "Agents", icon: CpuIcon },
   { id: "mcp", label: "MCP Servers", icon: ServerIcon },
 ];
 
@@ -59,15 +65,8 @@ const GeneralTab: FC = () => {
         </div>
       </div>
       <div>
-        <h3 className="text-sm font-medium text-foreground mb-1">Model</h3>
-        <p className="text-xs text-default-500">
-          Configure in <code className="text-[11px] px-1 py-0.5 rounded bg-default-200/50">~/.nexus/config.toml</code>
-        </p>
-      </div>
-      <div>
-        <h3 className="text-sm font-medium text-foreground mb-1">System Prompt</h3>
-        <p className="text-xs text-default-500">
-          Custom instructions for the agent.
+        <p className="text-xs text-default-400">
+          Configure providers and agents in their respective tabs.
         </p>
       </div>
     </div>
@@ -87,6 +86,8 @@ const McpTab: FC = () => (
 
 const TAB_COMPONENTS: Record<string, FC> = {
   general: GeneralTab,
+  providers: ProvidersTab,
+  agents: AgentsTab,
   mcp: McpTab,
 };
 
@@ -135,7 +136,7 @@ export const SettingsModal: FC = () => {
               transition={{ duration: 0.25, ease: "easeOut" }}
             >
               {/* Nav */}
-              <nav className="w-[180px] shrink-0 rounded-xl bg-white/90 dark:bg-default-50/40 backdrop-blur-xl border border-default-200/50 shadow-sm dark:shadow-none p-4 flex flex-col gap-1">
+              <nav className="w-[180px] shrink-0 rounded-xl bg-white/95 dark:bg-default-50/80 backdrop-blur-2xl border border-default-200/50 shadow-sm dark:shadow-none p-4 flex flex-col gap-1">
                 <div className="flex items-center justify-between mb-3">
                   <h2 className="text-sm font-semibold text-foreground">
                     Settings
@@ -184,7 +185,7 @@ export const SettingsModal: FC = () => {
               </nav>
 
               {/* Content */}
-              <div className="flex-1 min-h-0 rounded-xl bg-white/90 dark:bg-default-50/40 backdrop-blur-xl border border-default-200/50 shadow-sm dark:shadow-none overflow-y-auto p-8">
+              <div className="flex-1 min-h-0 rounded-xl bg-white/95 dark:bg-default-50/80 backdrop-blur-2xl border border-default-200/50 shadow-sm dark:shadow-none overflow-y-auto p-8">
                 <AnimatePresence mode="wait">
                   <m.div
                     key={activeTab}

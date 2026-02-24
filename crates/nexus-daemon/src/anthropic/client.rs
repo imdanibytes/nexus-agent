@@ -19,6 +19,14 @@ impl AnthropicClient {
         }
     }
 
+    pub fn with_base_url(api_key: String, base_url: String) -> Self {
+        Self {
+            http: reqwest::Client::new(),
+            api_key,
+            base_url,
+        }
+    }
+
     /// Send a non-streaming Messages API request. Returns the full response.
     pub async fn create_message(
         &self,

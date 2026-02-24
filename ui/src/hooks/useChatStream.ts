@@ -205,7 +205,6 @@ async function consumeStream(
         }
 
         case EventType.RUN_ERROR: {
-          if (!currentRunId) break;
           console.error("Stream error:", event.message);
           useThreadStore.getState().finalizeStreaming(conversationId, {
             type: "incomplete",
