@@ -1,0 +1,428 @@
+pub mod events;
+
+use std::time::Instant;
+
+use anyhow::Result;
+use futures::StreamExt;
+use tokio::sync::broadcast;
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
+
+use crate::anthropic::types::*;
+use crate::anthropic::AnthropicClient;
+use crate::mcp::McpManager;
+use events::AgUiEvent;
+
+const MAX_ROUNDS: usize = 50;
+
+/// Accumulated tool call from streaming
+#[derive(Debug)]
+struct PendingToolCall {
+    id: String,
+    name: String,
+    args_json: String,
+}
+
+/// Result of a completed agent turn: new messages + timing spans + usage.
+pub struct AgentTurnResult {
+    pub messages: Vec<Message>,
+    pub timing_spans: Vec<serde_json::Value>,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    pub context_window: u32,
+}
+
+/// Runs a single agent turn: inference → tool calls → loop.
+pub async fn run_agent_turn(
+    client: &AnthropicClient,
+    conversation_id: &str,
+    messages: Vec<Message>,
+    tools: Vec<Tool>,
+    system_prompt: Option<String>,
+    model: &str,
+    max_tokens: u32,
+    mcp: &McpManager,
+    tx: &broadcast::Sender<AgUiEvent>,
+    cancel: CancellationToken,
+) -> Result<AgentTurnResult> {
+    let run_id = Uuid::new_v4().to_string();
+
+    let _ = tx.send(AgUiEvent::RunStarted {
+        thread_id: conversation_id.to_string(),
+        run_id: run_id.clone(),
+    });
+
+    let mut messages = messages;
+    let mut new_messages = Vec::new();
+    let turn_start = Instant::now();
+    let mut round_count: usize = 0;
+    let mut timing_spans: Vec<serde_json::Value> = Vec::new();
+    let turn_span_id = "t-turn".to_string();
+    let mut cumulative_input: u32 = 0;
+    let mut cumulative_output: u32 = 0;
+    let context_window = context_window_for_model(model);
+
+    for round in 0..MAX_ROUNDS {
+        if cancel.is_cancelled() {
+            tracing::info!(round, "Agent turn cancelled");
+            break;
+        }
+
+        tracing::debug!(round, tools = tools.len(), "Starting inference round");
+
+        let request = MessagesRequest {
+            model: model.to_string(),
+            max_tokens,
+            system: system_prompt.clone(),
+            messages: messages.clone(),
+            tools: tools.clone(),
+            stream: true,
+        };
+
+        let round_span_id = format!("t-round-{}", round);
+        let round_start = Instant::now();
+        let round_start_ms = turn_start.elapsed().as_millis() as u64;
+
+        let inference_start = Instant::now();
+        let inference_start_ms = turn_start.elapsed().as_millis() as u64;
+
+        let stream = match client.create_message_stream(request).await {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = tx.send(AgUiEvent::RunError {
+                    thread_id: conversation_id.to_string(),
+                    run_id: run_id.clone(),
+                    message: e.to_string(),
+                });
+                return Err(e);
+            }
+        };
+
+        // Consume the stream, emitting AG-UI events
+        let (assistant_blocks, stop_reason, tool_calls, round_input_tokens, round_output_tokens) =
+            consume_stream(stream, conversation_id, &run_id, tx, &cancel).await?;
+
+        let inference_duration = inference_start.elapsed().as_millis() as u64;
+        let llm_span_id = format!("t-llm-{}", round);
+        timing_spans.push(serde_json::json!({
+            "id": llm_span_id,
+            "name": "llm_call",
+            "parentId": round_span_id,
+            "startMs": inference_start_ms,
+            "endMs": inference_start_ms + inference_duration,
+            "durationMs": inference_duration,
+        }));
+
+        // Accumulate and emit usage
+        cumulative_input = round_input_tokens; // Latest call's input = full context
+        cumulative_output += round_output_tokens;
+        let _ = tx.send(AgUiEvent::Custom {
+            thread_id: conversation_id.to_string(),
+            name: "usage_update".to_string(),
+            value: serde_json::json!({
+                "inputTokens": cumulative_input,
+                "outputTokens": cumulative_output,
+                "contextWindow": context_window,
+            }),
+        });
+
+        // Build assistant message from accumulated blocks
+        let assistant_msg = Message {
+            role: Role::Assistant,
+            content: assistant_blocks,
+        };
+        messages.push(assistant_msg.clone());
+        new_messages.push(assistant_msg);
+
+        round_count = round + 1;
+
+        match stop_reason {
+            Some(StopReason::ToolUse) if !tool_calls.is_empty() => {
+                let mut result_blocks = Vec::new();
+                let tool_exec_start_ms = turn_start.elapsed().as_millis() as u64;
+                let tool_exec_span_id = format!("t-toolexec-{}", round);
+                let tool_exec_start = Instant::now();
+
+                for tc in &tool_calls {
+                    let tool_start_ms = turn_start.elapsed().as_millis() as u64;
+                    let tool_start = Instant::now();
+                    let (content, is_error): (String, bool) = mcp.call_tool(&tc.name, &tc.args_json).await;
+                    let tool_duration = tool_start.elapsed().as_millis() as u64;
+
+                    let _ = tx.send(AgUiEvent::ToolCallResult {
+                        thread_id: conversation_id.to_string(),
+                        run_id: run_id.clone(),
+                        tool_call_id: tc.id.clone(),
+                        content: content.clone(),
+                        is_error,
+                    });
+
+                    timing_spans.push(serde_json::json!({
+                        "id": format!("t-tool-{}", tc.id),
+                        "name": format!("tool:{}", tc.name),
+                        "parentId": tool_exec_span_id,
+                        "startMs": tool_start_ms,
+                        "endMs": tool_start_ms + tool_duration,
+                        "durationMs": tool_duration,
+                    }));
+
+                    result_blocks.push(ContentBlock::ToolResult {
+                        tool_use_id: tc.id.clone(),
+                        content,
+                        is_error: Some(is_error),
+                    });
+                }
+
+                let tool_exec_duration = tool_exec_start.elapsed().as_millis() as u64;
+                timing_spans.push(serde_json::json!({
+                    "id": tool_exec_span_id,
+                    "name": "tool_execution",
+                    "parentId": round_span_id,
+                    "startMs": tool_exec_start_ms,
+                    "endMs": tool_exec_start_ms + tool_exec_duration,
+                    "durationMs": tool_exec_duration,
+                }));
+
+                let tool_results_msg = Message {
+                    role: Role::User,
+                    content: result_blocks,
+                };
+                messages.push(tool_results_msg.clone());
+                new_messages.push(tool_results_msg);
+            }
+            _ => {
+                // end_turn, max_tokens, or no tool calls — we're done
+                let round_duration = round_start.elapsed().as_millis() as u64;
+                timing_spans.push(serde_json::json!({
+                    "id": round_span_id,
+                    "name": format!("round:{}", round + 1),
+                    "parentId": turn_span_id,
+                    "startMs": round_start_ms,
+                    "endMs": round_start_ms + round_duration,
+                    "durationMs": round_duration,
+                }));
+                break;
+            }
+        }
+
+        let round_duration = round_start.elapsed().as_millis() as u64;
+        timing_spans.push(serde_json::json!({
+            "id": round_span_id,
+            "name": format!("round:{}", round + 1),
+            "parentId": turn_span_id,
+            "startMs": round_start_ms,
+            "endMs": round_start_ms + round_duration,
+            "durationMs": round_duration,
+        }));
+    }
+
+    let turn_duration = turn_start.elapsed().as_millis() as u64;
+    timing_spans.insert(0, serde_json::json!({
+        "id": turn_span_id,
+        "name": "turn",
+        "parentId": serde_json::Value::Null,
+        "startMs": 0,
+        "endMs": turn_duration,
+        "durationMs": turn_duration,
+    }));
+
+    let _ = tx.send(AgUiEvent::Custom {
+        thread_id: conversation_id.to_string(),
+        name: "timing".to_string(),
+        value: serde_json::json!({ "spans": timing_spans }),
+    });
+
+    let _ = tx.send(AgUiEvent::RunFinished {
+        thread_id: conversation_id.to_string(),
+        run_id,
+    });
+
+    Ok(AgentTurnResult {
+        messages: new_messages,
+        timing_spans,
+        input_tokens: cumulative_input,
+        output_tokens: cumulative_output,
+        context_window,
+    })
+}
+
+/// Consume the Anthropic SSE stream, emit AG-UI events, return accumulated content.
+async fn consume_stream<S>(
+    mut stream: crate::anthropic::stream::SseStream<S>,
+    conversation_id: &str,
+    run_id: &str,
+    tx: &broadcast::Sender<AgUiEvent>,
+    cancel: &CancellationToken,
+) -> Result<(Vec<ContentBlock>, Option<StopReason>, Vec<PendingToolCall>, u32, u32)>
+where
+    S: futures::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Unpin,
+{
+    let mut content_blocks: Vec<ContentBlock> = Vec::new();
+    let mut stop_reason = None;
+    let mut pending_tool_calls: Vec<PendingToolCall> = Vec::new();
+    let mut input_tokens: u32 = 0;
+    let mut output_tokens: u32 = 0;
+
+    // Track current content blocks by index
+    let mut current_text: Option<(usize, String)> = None;
+    let mut current_tool: Option<(usize, PendingToolCall)> = None;
+    let mut current_thinking: Option<(usize, String)> = None;
+    let mut message_id = String::new();
+
+    while let Some(event) = stream.next().await {
+        if cancel.is_cancelled() {
+            break;
+        }
+
+        let event = event?;
+
+        match event {
+            StreamEvent::MessageStart {
+                message_id: mid,
+                usage: u,
+                ..
+            } => {
+                message_id = mid;
+                if let Some(u) = u {
+                    input_tokens = u.input_tokens;
+                }
+            }
+            StreamEvent::ContentBlockStart {
+                index,
+                content_block,
+            } => match content_block {
+                ContentBlockInfo::Text => {
+                    let _ = tx.send(AgUiEvent::TextMessageStart {
+                        thread_id: conversation_id.to_string(),
+                        run_id: run_id.to_string(),
+                        message_id: message_id.clone(),
+                    });
+                    current_text = Some((index, String::new()));
+                }
+                ContentBlockInfo::ToolUse { id, name } => {
+                    let _ = tx.send(AgUiEvent::ToolCallStart {
+                        thread_id: conversation_id.to_string(),
+                        run_id: run_id.to_string(),
+                        tool_call_id: id.clone(),
+                        tool_call_name: name.clone(),
+                    });
+                    current_tool = Some((
+                        index,
+                        PendingToolCall {
+                            id,
+                            name,
+                            args_json: String::new(),
+                        },
+                    ));
+                }
+                ContentBlockInfo::Thinking => {
+                    let _ = tx.send(AgUiEvent::Custom {
+                        thread_id: conversation_id.to_string(),
+                        name: "thinking_start".to_string(),
+                        value: serde_json::json!({}),
+                    });
+                    current_thinking = Some((index, String::new()));
+                }
+            },
+            StreamEvent::ContentBlockDelta { index, delta } => match delta {
+                Delta::TextDelta { text } => {
+                    if let Some((idx, ref mut buf)) = current_text {
+                        if idx == index {
+                            buf.push_str(&text);
+                            let _ = tx.send(AgUiEvent::TextMessageContent {
+                                thread_id: conversation_id.to_string(),
+                                run_id: run_id.to_string(),
+                                message_id: message_id.clone(),
+                                delta: text,
+                            });
+                        }
+                    }
+                }
+                Delta::InputJsonDelta { partial_json } => {
+                    if let Some((idx, ref mut tc)) = current_tool {
+                        if idx == index {
+                            tc.args_json.push_str(&partial_json);
+                            let _ = tx.send(AgUiEvent::ToolCallArgs {
+                                thread_id: conversation_id.to_string(),
+                                run_id: run_id.to_string(),
+                                tool_call_id: tc.id.clone(),
+                                delta: partial_json,
+                            });
+                        }
+                    }
+                }
+                Delta::ThinkingDelta { thinking } => {
+                    if let Some((idx, ref mut buf)) = current_thinking {
+                        if idx == index {
+                            buf.push_str(&thinking);
+                            let _ = tx.send(AgUiEvent::Custom {
+                                thread_id: conversation_id.to_string(),
+                                name: "thinking_delta".to_string(),
+                                value: serde_json::json!({ "delta": thinking }),
+                            });
+                        }
+                    }
+                }
+            },
+            StreamEvent::ContentBlockStop { index } => {
+                if let Some((idx, text)) = current_text.take() {
+                    if idx == index {
+                        content_blocks.push(ContentBlock::Text { text });
+                    } else {
+                        current_text = Some((idx, text));
+                    }
+                }
+                if let Some((idx, tc)) = current_tool.take() {
+                    if idx == index {
+                        let input: serde_json::Value =
+                            serde_json::from_str(&tc.args_json).unwrap_or_default();
+                        content_blocks.push(ContentBlock::ToolUse {
+                            id: tc.id.clone(),
+                            name: tc.name.clone(),
+                            input,
+                        });
+                        pending_tool_calls.push(tc);
+                    } else {
+                        current_tool = Some((idx, tc));
+                    }
+                }
+                if let Some((idx, thinking)) = current_thinking.take() {
+                    if idx == index {
+                        content_blocks.push(ContentBlock::Thinking { thinking });
+                        let _ = tx.send(AgUiEvent::Custom {
+                            thread_id: conversation_id.to_string(),
+                            name: "thinking_end".to_string(),
+                            value: serde_json::json!({}),
+                        });
+                    } else {
+                        current_thinking = Some((idx, thinking));
+                    }
+                }
+            }
+            StreamEvent::MessageDelta {
+                stop_reason: sr,
+                usage: u,
+            } => {
+                stop_reason = sr;
+                if let Some(u) = u {
+                    output_tokens = u.output_tokens;
+                }
+            }
+            StreamEvent::MessageStop => break,
+            StreamEvent::Error { message } => {
+                return Err(anyhow::anyhow!("Anthropic stream error: {}", message));
+            }
+            StreamEvent::Ping => {}
+        }
+    }
+
+    Ok((content_blocks, stop_reason, pending_tool_calls, input_tokens, output_tokens))
+}
+
+fn context_window_for_model(model: &str) -> u32 {
+    if model.contains("opus") || model.contains("sonnet") || model.contains("haiku") {
+        200_000
+    } else {
+        200_000
+    }
+}

@@ -1,0 +1,79 @@
+use anyhow::{anyhow, Result};
+
+use super::stream::SseStream;
+use super::types::*;
+
+#[derive(Clone)]
+pub struct AnthropicClient {
+    http: reqwest::Client,
+    api_key: String,
+    base_url: String,
+}
+
+impl AnthropicClient {
+    pub fn new(api_key: String) -> Self {
+        Self {
+            http: reqwest::Client::new(),
+            api_key,
+            base_url: "https://api.anthropic.com".to_string(),
+        }
+    }
+
+    /// Send a non-streaming Messages API request. Returns the full response.
+    pub async fn create_message(
+        &self,
+        request: MessagesRequest,
+    ) -> Result<MessagesResponse> {
+        let resp = self
+            .http
+            .post(format!("{}/v1/messages", self.base_url))
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", "2023-06-01")
+            .header("content-type", "application/json")
+            .json(&request)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "Anthropic API error ({}): {}",
+                status,
+                body
+            ));
+        }
+
+        let response: MessagesResponse = resp.json().await?;
+        Ok(response)
+    }
+
+    /// Send a streaming Messages API request. Returns a stream of parsed SSE events.
+    pub async fn create_message_stream(
+        &self,
+        request: MessagesRequest,
+    ) -> Result<SseStream<impl futures::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Unpin>>
+    {
+        let resp = self
+            .http
+            .post(format!("{}/v1/messages", self.base_url))
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", "2023-06-01")
+            .header("content-type", "application/json")
+            .json(&request)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "Anthropic API error ({}): {}",
+                status,
+                body
+            ));
+        }
+
+        Ok(SseStream::new(resp.bytes_stream()))
+    }
+}

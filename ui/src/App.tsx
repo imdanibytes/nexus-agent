@@ -1,12 +1,50 @@
+import { useEffect, useState } from "react";
+import { Thread } from "./components/chat/Thread";
+import { TopBar } from "./components/chat/TopBar";
+import { ThreadDrawer } from "./components/chat/ThreadDrawer";
+import { SettingsModal } from "./components/settings/SettingsModal";
+import { useThreadListStore } from "./stores/threadListStore";
+import { useUIStore, applyTheme } from "./stores/uiStore";
+import { eventBus } from "./runtime/event-bus";
+
 export default function App() {
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const theme = useUIStore((s) => s.theme);
+
+  useEffect(() => {
+    // Connect SSE and load threads on mount
+    eventBus.connect();
+    useThreadListStore.getState().loadThreads().then(() => {
+      // Restore active thread from URL path: /c/{conversationId}
+      const match = window.location.pathname.match(/^\/c\/(.+)/);
+      if (match) {
+        useThreadListStore.getState().switchThread(match[1]);
+      }
+    });
+    return () => eventBus.disconnect();
+  }, []);
+
+  // Apply theme on mount and react to system preference changes
+  useEffect(() => {
+    applyTheme(theme);
+    if (theme !== "system") return;
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = () => applyTheme("system");
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, [theme]);
+
   return (
-    <div className="relative flex h-full flex-col overflow-hidden rounded-2xl bg-default-100/60 dark:bg-default-50/40 backdrop-blur-xl border border-default-200 dark:border-default-200/50">
-      <div className="flex items-center h-9 shrink-0 border-b border-default-200/50 px-3">
-        <span className="text-xs font-semibold text-default-500">Nexus</span>
+    <div className="relative flex h-full flex-col overflow-hidden rounded-2xl bg-white/80 dark:bg-default-50/40 backdrop-blur-xl border border-default-200 dark:border-default-200/50 shadow-sm dark:shadow-none">
+      <TopBar onMenuPress={() => setDrawerOpen(true)} />
+      <div className="relative flex-1 min-h-0">
+        <Thread />
+        <ThreadDrawer
+          isOpen={drawerOpen}
+          onClose={() => setDrawerOpen(false)}
+        />
       </div>
-      <div className="flex-1 flex items-center justify-center min-h-0">
-        <p className="text-sm text-default-400">Ready.</p>
-      </div>
+      <SettingsModal />
     </div>
   );
 }

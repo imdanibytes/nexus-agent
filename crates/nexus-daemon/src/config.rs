@@ -139,7 +139,7 @@ port = 9600
 # [[mcp_servers]]
 # id = "filesystem"
 # command = "npx"
-# args = ["-y", "@anthropic/mcp-filesystem", "/Users/you/projects"]
+# args = ["-y", "@modelcontextprotocol/server-filesystem", "/Users/you/projects"]
 "#;
             fs::write(&path, default_toml)?;
             tracing::info!("Created default config at {}", path.display());
