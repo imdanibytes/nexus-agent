@@ -92,10 +92,14 @@ const TAB_COMPONENTS: Record<string, FC> = {
 };
 
 export const SettingsModal: FC = () => {
-  const { settingsOpen, setSettingsOpen } = useUIStore();
+  const { settingsOpen, settingsTab, closeSettings } = useUIStore();
   const [activeTab, setActiveTab] = useState("general");
 
-  const onClose = useCallback(() => setSettingsOpen(false), [setSettingsOpen]);
+  useEffect(() => {
+    if (settingsOpen && settingsTab) setActiveTab(settingsTab);
+  }, [settingsOpen, settingsTab]);
+
+  const onClose = useCallback(() => closeSettings(), [closeSettings]);
 
   useEffect(() => {
     if (!settingsOpen) return;

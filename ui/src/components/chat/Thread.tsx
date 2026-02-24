@@ -43,6 +43,7 @@ import { ToolFallback } from "../ui/ToolFallback";
 import { TooltipIconButton } from "../ui/TooltipIconButton";
 import { ContextRing } from "../ui/ContextRing";
 import { Composer } from "../ui/Composer";
+import { AgentSwitcher } from "../agent/AgentSwitcher";
 import { TimingWaterfall } from "../ui/TimingWaterfall";
 
 // ── Thread ──
@@ -164,13 +165,16 @@ const ComposerLeftSlot: FC = () => {
     activeThreadId ? s.usage[activeThreadId] : undefined,
   );
 
-  if (!usage || usage.contextWindow <= 0) return null;
-
   return (
-    <ContextRing
-      contextTokens={usage.inputTokens + usage.outputTokens}
-      contextWindow={usage.contextWindow}
-    />
+    <div className="flex items-center gap-1.5">
+      <AgentSwitcher />
+      {usage && usage.contextWindow > 0 && (
+        <ContextRing
+          contextTokens={usage.inputTokens + usage.outputTokens}
+          contextWindow={usage.contextWindow}
+        />
+      )}
+    </div>
   );
 };
 

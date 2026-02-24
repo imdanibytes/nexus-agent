@@ -80,7 +80,7 @@ impl InferenceProvider for BedrockProvider {
             .body(Blob::new(body_bytes))
             .send()
             .await
-            .map_err(|e| anyhow!("Bedrock invoke error: {}", e))?;
+            .map_err(|e| anyhow!("Bedrock invoke error: {:?}", e))?;
 
         let event_stream = output.body;
 

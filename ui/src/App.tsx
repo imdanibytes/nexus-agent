@@ -21,10 +21,18 @@ export default function App() {
       useProviderStore.getState().loadProviders(),
       useAgentStore.getState().loadAgents(),
     ]).then(() => {
+      const path = window.location.pathname;
+
+      // Deep link: /settings/{tab}
+      const settingsMatch = path.match(/\/settings(?:\/(\w+))?/);
+      if (settingsMatch) {
+        useUIStore.getState().openSettings(settingsMatch[1] || "general");
+      }
+
       // Restore active thread from URL path: /c/{conversationId}
-      const match = window.location.pathname.match(/^\/c\/(.+)/);
-      if (match) {
-        useThreadListStore.getState().switchThread(match[1]);
+      const threadMatch = path.replace(/\/settings.*/, "").match(/^\/c\/(.+)/);
+      if (threadMatch) {
+        useThreadListStore.getState().switchThread(threadMatch[1]);
       }
     });
     return () => eventBus.disconnect();

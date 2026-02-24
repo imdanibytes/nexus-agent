@@ -24,6 +24,9 @@ export function applyTheme(theme: Theme): void {
 
 interface UIState {
   settingsOpen: boolean;
+  settingsTab: string | null;
+  openSettings: (tab?: string) => void;
+  closeSettings: () => void;
   setSettingsOpen: (open: boolean) => void;
   theme: Theme;
   setTheme: (theme: Theme) => void;
@@ -31,7 +34,10 @@ interface UIState {
 
 export const useUIStore = create<UIState>((set) => ({
   settingsOpen: false,
-  setSettingsOpen: (open) => set({ settingsOpen: open }),
+  settingsTab: null,
+  openSettings: (tab) => set({ settingsOpen: true, settingsTab: tab ?? null }),
+  closeSettings: () => set({ settingsOpen: false, settingsTab: null }),
+  setSettingsOpen: (open) => set(open ? { settingsOpen: true } : { settingsOpen: false, settingsTab: null }),
   theme: getStoredTheme(),
   setTheme: (theme) => {
     localStorage.setItem(STORAGE_KEY, theme);
