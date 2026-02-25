@@ -230,19 +230,23 @@ pub fn directory_tree(
 
     let mut output = format!("{}/\n", name);
     let mut entry_count: usize = 0;
+    const MAX_ENTRIES: usize = 5_000;
+    const MAX_DEPTH: usize = 10;
+    const MAX_PER_DIR: usize = 100;
     build_tree(
         &resolved,
         "",
         exclude_patterns,
         &mut output,
         0,
-        10,
+        MAX_DEPTH,
         &mut entry_count,
-        10_000,
+        MAX_ENTRIES,
+        MAX_PER_DIR,
     );
 
-    if entry_count >= 10_000 {
-        output.push_str("\n... (truncated at 10,000 entries)\n");
+    if entry_count >= MAX_ENTRIES {
+        output.push_str("\n... (truncated at 5,000 entries)\n");
     }
 
     Ok(output)
@@ -467,6 +471,7 @@ fn build_tree(
     max_depth: usize,
     entry_count: &mut usize,
     max_entries: usize,
+    max_per_dir: usize,
 ) {
     if depth >= max_depth || *entry_count >= max_entries {
         return;
@@ -483,14 +488,17 @@ fn build_tree(
     entries.sort_by_key(|e| e.file_name());
 
     let total = entries.len();
-    for (i, entry) in entries.iter().enumerate() {
+    let truncated = total > max_per_dir;
+    let visible = if truncated { max_per_dir } else { total };
+
+    for (i, entry) in entries.iter().take(visible).enumerate() {
         if *entry_count >= max_entries {
             return;
         }
         *entry_count += 1;
 
+        let is_last = i == visible - 1 && !truncated;
         let name = entry.file_name().to_string_lossy().to_string();
-        let is_last = i == total - 1;
         let connector = if is_last { "└── " } else { "├── " };
         let child_prefix = if is_last { "    " } else { "│   " };
         let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
@@ -508,8 +516,17 @@ fn build_tree(
                 max_depth,
                 entry_count,
                 max_entries,
+                max_per_dir,
             );
         }
+    }
+
+    if truncated {
+        let omitted = total - visible;
+        output.push_str(&format!(
+            "{}└── ... ({} more entries)\n",
+            prefix, omitted
+        ));
     }
 }
 
