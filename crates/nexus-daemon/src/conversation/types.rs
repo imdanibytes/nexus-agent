@@ -16,6 +16,10 @@ pub struct ConversationMeta {
 pub struct ConversationUsage {
     pub input_tokens: u32,
     pub output_tokens: u32,
+    #[serde(default)]
+    pub cache_read_input_tokens: u32,
+    #[serde(default)]
+    pub cache_creation_input_tokens: u32,
     pub context_window: u32,
     /// Cumulative cost in USD across the entire conversation lifetime.
     /// This value only ever increases — it is never reset by compaction

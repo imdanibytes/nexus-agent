@@ -19,6 +19,8 @@ export function useStreamBroadcasts(): void {
       const val = event.value as {
         inputTokens?: number;
         outputTokens?: number;
+        cacheReadInputTokens?: number;
+        cacheCreationInputTokens?: number;
         contextWindow?: number;
         totalCost?: number;
       };
@@ -27,6 +29,8 @@ export function useStreamBroadcasts(): void {
         useUsageStore.getState().setUsage(threadId, {
           inputTokens: val.inputTokens ?? 0,
           outputTokens: val.outputTokens ?? 0,
+          cacheReadInputTokens: val.cacheReadInputTokens ?? 0,
+          cacheCreationInputTokens: val.cacheCreationInputTokens ?? 0,
           contextWindow: val.contextWindow ?? 200_000,
           totalCost: val.totalCost ?? 0,
         });

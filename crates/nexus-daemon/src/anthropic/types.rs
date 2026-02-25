@@ -136,8 +136,10 @@ pub struct Usage {
 /// 2. Last tool definition
 /// 3. Last cacheable content block of the last message
 ///
-/// This ensures within-turn tool-use rounds get progressive cache hits on the
-/// growing message prefix. Cross-turn cache hits depend on system prompt stability.
+/// The system prompt is built once per turn and cloned for each tool-use round,
+/// so it's stable within a turn and benefits from caching across multi-round
+/// tool use. Cross-turn cache misses on system are expected (datetime changes)
+/// but the write cost is amortized by within-turn read hits.
 pub fn inject_cache_control(body: &mut serde_json::Value) {
     let cc = serde_json::json!({"type": "ephemeral"});
 

@@ -17,12 +17,16 @@ export interface ContextRingProps {
   contextTokens: number;
   contextWindow: number;
   totalCost?: number;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
 }
 
 export const ContextRing: FC<ContextRingProps> = ({
   contextTokens,
   contextWindow,
   totalCost,
+  cacheReadInputTokens,
+  cacheCreationInputTokens,
 }) => {
   if (contextWindow === 0) return null;
 
@@ -30,7 +34,12 @@ export const ContextRing: FC<ContextRingProps> = ({
   const color = percent > 90 ? "danger" : percent > 70 ? "warning" : "primary";
 
   const costInfo = totalCost != null && totalCost > 0 ? ` · ${formatCost(totalCost)}` : "";
-  const tooltip = `Context: ${Math.round(percent)}% (${formatTokens(contextTokens)} / ${formatTokens(contextWindow)} tokens)${costInfo}`;
+  const cacheRead = cacheReadInputTokens ?? 0;
+  const cacheWrite = cacheCreationInputTokens ?? 0;
+  const cacheInfo = cacheRead > 0 || cacheWrite > 0
+    ? `\nCache: ${formatTokens(cacheRead)} read · ${formatTokens(cacheWrite)} write`
+    : "";
+  const tooltip = `Context: ${Math.round(percent)}% (${formatTokens(contextTokens)} / ${formatTokens(contextWindow)} tokens)${costInfo}${cacheInfo}`;
 
   return (
     <Tooltip content={tooltip} placement="top" className="text-xs">

@@ -153,6 +153,8 @@ const ComposerLeftSlot: FC = () => {
           contextTokens={usage.inputTokens + usage.outputTokens}
           contextWindow={usage.contextWindow}
           totalCost={usage.totalCost}
+          cacheReadInputTokens={usage.cacheReadInputTokens}
+          cacheCreationInputTokens={usage.cacheCreationInputTokens}
         />
       )}
     </div>

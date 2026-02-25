@@ -201,6 +201,8 @@ pub async fn run_agent_turn(
             value: serde_json::json!({
                 "inputTokens": cumulative_input,
                 "outputTokens": cumulative_output,
+                "cacheReadInputTokens": cumulative_cache_read,
+                "cacheCreationInputTokens": cumulative_cache_creation,
                 "contextWindow": context_window,
                 "totalCost": prior_cost + turn_cost,
             }),

@@ -3,6 +3,8 @@ import { create } from "zustand";
 export interface ConversationUsage {
   inputTokens: number;
   outputTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
   contextWindow: number;
   totalCost: number;
 }

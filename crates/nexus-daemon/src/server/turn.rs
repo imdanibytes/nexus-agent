@@ -210,6 +210,8 @@ pub fn spawn_agent_turn(
                 timing_spans,
                 input_tokens,
                 output_tokens,
+                cache_read_input_tokens,
+                cache_creation_input_tokens,
                 context_window,
                 turn_cost,
                 error: turn_error,
@@ -269,6 +271,8 @@ pub fn spawn_agent_turn(
                     conv.usage = Some(ConversationUsage {
                         input_tokens,
                         output_tokens,
+                        cache_read_input_tokens,
+                        cache_creation_input_tokens,
                         context_window,
                         total_cost: prior_cost + turn_cost,
                     });
