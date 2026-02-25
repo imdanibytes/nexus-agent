@@ -8,9 +8,6 @@ use super::store::{TaskStateStore, derive_mode};
 use super::types::{Plan, Task, TaskStatus};
 
 /// Check if a tool name is a built-in task tool.
-///
-/// `task_approve_plan` is callable by the model, but only AFTER getting user
-/// confirmation via `ask_user`. The system prompt enforces this ordering.
 pub fn is_builtin(tool_name: &str) -> bool {
     matches!(
         tool_name,
@@ -20,6 +17,13 @@ pub fn is_builtin(tool_name: &str) -> bool {
             | "task_update"
             | "task_list"
     )
+}
+
+/// Tools that are client-only: hidden from the model's tool list but
+/// executable via the `POST /api/chat/tool-invoke` endpoint.
+/// Inspired by MCP Apps `visibility: ["app"]` pattern.
+pub fn is_client_only(_tool_name: &str) -> bool {
+    false // No client-only tools currently — all tools visible to model
 }
 
 /// Return Anthropic Tool definitions for all built-in task tools.

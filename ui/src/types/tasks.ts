@@ -1,6 +1,6 @@
 export type TaskStatus = "pending" | "in_progress" | "completed" | "failed";
 
-export type AgentMode = "general" | "discovery" | "planning" | "execution" | "review";
+export type AgentMode = "general" | "discovery" | "planning" | "execution" | "validation";
 
 export interface Task {
   id: string;

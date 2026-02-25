@@ -97,18 +97,60 @@ pub fn spawn_agent_turn(
             }
         };
 
-        // Merge built-in tools with MCP tools
+        // Assemble all tools (MCP + built-in task tools + ask_user)
         let mut tools = tools;
         tools.extend(crate::tasks::tools::definitions());
         tools.push(crate::ask_user::tool_definition());
 
-        // Derive agent mode from task state
-        let mode = {
+        // Derive agent mode + current task info from task state
+        let (mode, mode_enum, current_task) = {
+            use crate::system_prompt::CurrentTaskInfo;
+            use crate::tasks::types::{AgentMode, TaskStatus};
+
             let ts = state_clone.chat.task_store.read().await;
-            ts.get(&conversation_id)
-                .map(|s| s.mode.to_string())
-                .unwrap_or_else(|| "general".to_string())
+            match ts.get(&conversation_id) {
+                Some(state) => {
+                    let mode_enum = state.mode;
+                    let mode = state.mode.to_string();
+                    let task_info = state.plan.as_ref().and_then(|plan| {
+                        // Find the first in-progress task, or the first pending one
+                        let current = plan.task_ids.iter()
+                            .filter_map(|id| state.tasks.get(id))
+                            .find(|t| matches!(t.status, TaskStatus::InProgress))
+                            .or_else(|| {
+                                plan.task_ids.iter()
+                                    .filter_map(|id| state.tasks.get(id))
+                                    .find(|t| matches!(t.status, TaskStatus::Pending))
+                            })?;
+                        let completed = state.tasks.values()
+                            .filter(|t| matches!(t.status, TaskStatus::Completed))
+                            .count();
+                        Some(CurrentTaskInfo {
+                            plan_title: plan.title.clone(),
+                            task_id: current.id.clone(),
+                            task_title: current.title.clone(),
+                            task_description: current.description.clone(),
+                            completed_count: completed,
+                            total_count: state.tasks.len(),
+                        })
+                    });
+                    (mode, mode_enum, task_info)
+                }
+                None => ("general".to_string(), AgentMode::General, None),
+            }
         };
+
+        // Apply composable tool filter chain
+        let filter_ctx = crate::tool_filter::ToolFilterContext {
+            mode: mode_enum,
+            plan: None, // PlanSnapshot available for future filters
+        };
+        let tools = crate::tool_filter::ToolFilterChain::default_chain().apply(&filter_ctx, tools);
+        tracing::debug!(
+            mode = %mode,
+            tool_count = tools.len(),
+            "Tool filter applied"
+        );
 
         // Build composable system prompt
         let context_window = crate::agent::context_window_for_model(&model);
@@ -125,6 +167,7 @@ pub fn spawn_agent_turn(
             input_tokens: 0,
             context_window,
             mode,
+            current_task,
         });
 
         let mcp_guard = state_clone.mcp.mcp.read().await;

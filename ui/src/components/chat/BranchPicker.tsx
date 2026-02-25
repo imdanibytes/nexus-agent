@@ -1,17 +1,24 @@
-import type { FC } from "react";
+import { memo, type FC } from "react";
 import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
-import { useThreadStore, EMPTY_CONV } from "../../stores/threadStore";
+import { useThreadStore } from "../../stores/threadStore";
 import { useThreadListStore } from "../../stores/threadListStore";
 import { getBranchInfo } from "../../lib/message-tree";
+import type { MessageNode } from "../../lib/message-tree";
 
-export const BranchPicker: FC<{ messageId: string }> = ({ messageId }) => {
+const EMPTY_REPO: MessageNode[] = [];
+const EMPTY_CHILDREN: Record<string, string[]> = {};
+
+const BranchPickerImpl: FC<{ messageId: string }> = ({ messageId }) => {
   const activeId = useThreadListStore((s) => s.activeThreadId);
-  const conv = useThreadStore(
-    (s) => s.conversations[activeId ?? ""] ?? EMPTY_CONV,
+  const repository = useThreadStore(
+    (s) => s.conversations[activeId ?? ""]?.repository ?? EMPTY_REPO,
+  );
+  const childrenMap = useThreadStore(
+    (s) => s.conversations[activeId ?? ""]?.childrenMap ?? EMPTY_CHILDREN,
   );
   const navigateBranch = useThreadStore((s) => s.navigateBranch);
 
-  const info = getBranchInfo(messageId, conv.repository, conv.childrenMap);
+  const info = getBranchInfo(messageId, repository, childrenMap);
   if (!info || info.count <= 1) return null;
 
   return (
@@ -42,3 +49,5 @@ export const BranchPicker: FC<{ messageId: string }> = ({ messageId }) => {
     </div>
   );
 };
+
+export const BranchPicker = memo(BranchPickerImpl);

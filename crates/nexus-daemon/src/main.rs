@@ -9,6 +9,7 @@ mod provider;
 mod server;
 mod system_prompt;
 mod tasks;
+mod tool_filter;
 
 use anyhow::Result;
 use std::sync::Arc;

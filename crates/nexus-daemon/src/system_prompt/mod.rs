@@ -2,6 +2,16 @@ mod providers;
 
 pub use providers::*;
 
+/// Snapshot of the current task for system prompt injection.
+pub struct CurrentTaskInfo {
+    pub plan_title: String,
+    pub task_id: String,
+    pub task_title: String,
+    pub task_description: Option<String>,
+    pub completed_count: usize,
+    pub total_count: usize,
+}
+
 /// Context passed to each provider so it can decide what to emit.
 pub struct SystemPromptContext {
     pub conversation_title: String,
@@ -12,6 +22,7 @@ pub struct SystemPromptContext {
     pub input_tokens: u32,
     pub context_window: u32,
     pub mode: String,
+    pub current_task: Option<CurrentTaskInfo>,
 }
 
 /// A composable section of the system prompt.
@@ -55,6 +66,7 @@ impl SystemPromptBuilder {
             .register(WorkflowProvider)
             .register(CorePromptProvider)
             .register(DatetimeProvider)
+            .register(TaskContextProvider)
             .register(ConversationContextProvider)
     }
 }

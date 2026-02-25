@@ -1,4 +1,4 @@
-import { type FC, useCallback, useState } from "react";
+import { memo, type FC, useCallback, useMemo, useState } from "react";
 import { Button, Textarea, Chip } from "@heroui/react";
 import {
   CheckIcon,
@@ -17,28 +17,33 @@ interface AskUserCardProps {
   conversationId: string;
 }
 
-export const AskUserCard: FC<AskUserCardProps> = ({
+const AskUserCardImpl: FC<AskUserCardProps> = ({
   toolCall,
   conversationId,
 }) => {
-  // If there's a result, the question was already answered
+  const pending = useQuestionStore((s) => s.questions[toolCall.toolCallId]);
+
   if (toolCall.result !== undefined) {
     return <AnsweredCard toolCall={toolCall} />;
   }
 
-  // Check for pending question in the store
-  const pending = useQuestionStore((s) => s.questions[toolCall.toolCallId]);
   if (!pending) {
-    // No result and no pending question — likely dismissed/cancelled
     return <DismissedCard />;
   }
 
   return <PendingCard pending={pending} conversationId={conversationId} />;
 };
 
+export const AskUserCard = memo(AskUserCardImpl);
+
 // ── Pending (interactive) ──
 
-const PendingCard: FC<{
+const TEXTAREA_CLASS_NAMES = {
+  inputWrapper:
+    "bg-default-50/40 dark:bg-default-100/20 border border-default-200 dark:border-default-200/50",
+};
+
+const PendingCardImpl: FC<{
   pending: PendingQuestion;
   conversationId: string;
 }> = ({ pending, conversationId }) => {
@@ -60,6 +65,11 @@ const PendingCard: FC<{
     [conversationId, pending.questionId],
   );
 
+  const placeholder = useMemo(
+    () => pending.placeholder ?? "Type your answer...",
+    [pending.placeholder],
+  );
+
   return (
     <div className="my-3 rounded-xl border-l-3 border-primary bg-white/60 dark:bg-default-50/30 backdrop-blur-xl border border-default-200 dark:border-default-200/50 shadow-sm dark:shadow-none overflow-hidden animate-fade-in">
       {/* Context block */}
@@ -73,9 +83,9 @@ const PendingCard: FC<{
         {/* Question */}
         <div className="flex items-start gap-2">
           <MessageSquareIcon className="size-4 text-primary mt-0.5 shrink-0" />
-          <p className="text-sm font-semibold text-default-900">
-            {pending.question}
-          </p>
+          <div className="text-sm font-semibold text-default-900">
+            <MarkdownText text={pending.question} />
+          </div>
         </div>
 
         {/* Input area */}
@@ -210,14 +220,11 @@ const PendingCard: FC<{
             <Textarea
               value={textValue}
               onValueChange={setTextValue}
-              placeholder={pending.placeholder ?? "Type your answer..."}
+              placeholder={placeholder}
               minRows={2}
               maxRows={6}
               isDisabled={submitting}
-              classNames={{
-                inputWrapper:
-                  "bg-default-50/40 dark:bg-default-100/20 border border-default-200 dark:border-default-200/50",
-              }}
+              classNames={TEXTAREA_CLASS_NAMES}
             />
             <Button
               color="primary"
@@ -233,6 +240,8 @@ const PendingCard: FC<{
     </div>
   );
 };
+
+const PendingCard = memo(PendingCardImpl);
 
 // ── Answered (collapsed) ──
 

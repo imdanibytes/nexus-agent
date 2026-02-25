@@ -171,6 +171,22 @@ export async function switchPath(
   return res.json();
 }
 
+// ── Client-initiated tool invocation ──
+
+export async function invokeToolCall(
+  conversationId: string,
+  toolName: string,
+  args: Record<string, unknown>,
+  assistantMessageId?: string,
+): Promise<void> {
+  const res = await fetch("/api/chat/tool-invoke", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ conversationId, toolName, args, assistantMessageId }),
+  });
+  if (!res.ok) throw new Error(`Tool invoke failed (${res.status})`);
+}
+
 // ── Ask User ──
 
 export async function answerQuestion(

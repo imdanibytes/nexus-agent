@@ -7,6 +7,7 @@ export function useAutoScroll() {
   const sentinelRef = useRef<HTMLDivElement>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const isFollowingRef = useRef(true);
+  const lastValueRef = useRef(true);
 
   const checkBottom = useCallback(() => {
     const el = containerRef.current;
@@ -14,7 +15,11 @@ export function useAutoScroll() {
     const nearBottom =
       el.scrollHeight - el.scrollTop - el.clientHeight < THRESHOLD;
     isFollowingRef.current = nearBottom;
-    setIsAtBottom(nearBottom);
+    // Only call setState when the value actually changes
+    if (lastValueRef.current !== nearBottom) {
+      lastValueRef.current = nearBottom;
+      setIsAtBottom(nearBottom);
+    }
   }, []);
 
   useEffect(() => {

@@ -279,6 +279,117 @@ pub async fn regenerate_turn(
     ))
 }
 
+// ── Client-initiated tool invocation ──
+//
+// Adapted from MCP Apps `visibility: ["app"]` pattern — tools hidden from
+// the model but callable by the UI. The server executes the tool, injects
+// a synthetic assistant ToolCall + result into the conversation, then starts
+// a new agent turn so the model processes the result naturally.
+
+#[derive(Debug, Deserialize)]
+pub struct ToolInvokeRequest {
+    #[serde(rename = "conversationId")]
+    pub conversation_id: String,
+    #[serde(rename = "toolName")]
+    pub tool_name: String,
+    pub args: serde_json::Value,
+    /// Client-generated Snowflake ID for the assistant response that follows
+    #[serde(rename = "assistantMessageId")]
+    pub assistant_message_id: Option<String>,
+}
+
+pub async fn tool_invoke(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<ToolInvokeRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let conversation_id = body.conversation_id.clone();
+
+    // Only client-only and built-in task tools are allowed through this endpoint
+    if !crate::tasks::tools::is_builtin(&body.tool_name) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let cancel = cancel_existing_turn(&state, &conversation_id).await;
+
+    let (conv, api_messages, tools) = {
+        let mut store = state.chat.conversations.write().await;
+
+        let mut conv = store
+            .get(&conversation_id)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .ok_or(StatusCode::NOT_FOUND)?;
+
+        // Execute the tool
+        let tx = state.chat.event_bridge.agent_tx();
+        let (content, is_error) = crate::tasks::tools::handle_builtin(
+            &body.tool_name,
+            &body.args,
+            &conversation_id,
+            &state.chat.task_store,
+            &tx,
+        )
+        .await;
+
+        // Create synthetic assistant message with the tool call + inline result
+        let tool_call_id = uuid::Uuid::new_v4().to_string();
+        let parent_id = conv.active_path.last().cloned();
+
+        let synthetic_msg = ChatMessage {
+            id: uuid::Uuid::new_v4().to_string(),
+            role: MessageRole::Assistant,
+            parts: vec![MessagePart::ToolCall {
+                tool_call_id,
+                tool_name: body.tool_name.clone(),
+                args: body.args.clone(),
+                result: Some(content),
+                is_error,
+            }],
+            timestamp: chrono::Utc::now(),
+            parent_id,
+            metadata: None,
+        };
+
+        conv.active_path.push(synthetic_msg.id.clone());
+        conv.messages.push(synthetic_msg);
+        conv.updated_at = chrono::Utc::now();
+
+        store
+            .save(&conv)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        let api_messages = build_api_messages(&conv.active_messages());
+
+        let tools = {
+            let mcp = state.mcp.mcp.read().await;
+            let agents = state.agents.agents.read().await;
+            let active_id = agents.active_agent_id().map(|s| s.to_string());
+            let agent = active_id.as_deref().and_then(|id| agents.get(id));
+            match agent.and_then(|a| a.mcp_server_ids.as_ref()) {
+                Some(ids) => mcp.tools_for(Some(ids)),
+                None => mcp.tools(),
+            }
+        };
+
+        (conv, api_messages, tools)
+    };
+
+    // Start agent turn — model will see the tool result and continue naturally
+    spawn_agent_turn(
+        state,
+        conv,
+        api_messages,
+        tools,
+        conversation_id.clone(),
+        cancel,
+        body.assistant_message_id,
+    );
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "conversationId": conversation_id,
+    })))
+}
+
 pub async fn abort_turn(
     State(state): State<Arc<AppState>>,
     Json(body): Json<AbortRequest>,

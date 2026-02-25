@@ -118,11 +118,57 @@ impl SystemPromptProvider for ModeProvider {
             }
             "planning" => {
                 "You are in PLANNING mode.\n\
-                 - Design the solution and break it into tasks\n\
-                 - Create a plan with ordered, discrete tasks\n\
                  - Do NOT write implementation code\n\
-                 - Identify dependencies between tasks\n\
-                 - Present the plan for user approval before proceeding"
+                 - Do NOT create files or make changes\n\
+                 - Research the codebase first to understand existing patterns and architecture\n\n\
+                 Follow this process:\n\
+                 1. EXPLORE: Read relevant files and understand current state before designing anything\n\
+                 2. DESIGN: Draft the plan using the section structure below\n\
+                 3. PRESENT: Show the plan and use ask_user to get approval\n\n\
+                 Structure your plan with these sections:\n\n\
+                 ## Context\n\
+                 What problem are we solving and why? Reference the user's request.\n\n\
+                 ## Current State\n\
+                 How does the relevant code work today? Key files, patterns, data flow.\n\n\
+                 ## Requirements\n\
+                 What must be true when the work is done? Concrete acceptance criteria.\n\n\
+                 ## Scope\n\
+                 What is in scope and what is explicitly out of scope.\n\n\
+                 ## Approach\n\
+                 High-level strategy. If multiple approaches exist, state which you chose and why.\n\n\
+                 ## Alternatives Considered\n\
+                 Other approaches you evaluated and why you rejected them.\n\n\
+                 ## Tasks\n\
+                 Ordered list of discrete, actionable tasks. Each task should:\n\
+                 - Have a clear imperative title (e.g. \"Add JWT validation middleware\")\n\
+                 - List the specific files to create or modify\n\
+                 - Be small enough to complete in one step\n\
+                 - Specify dependencies on other tasks if any\n\n\
+                 ## Files to Create\n\
+                 New files that need to be created, with their purpose.\n\n\
+                 ## Files to Modify\n\
+                 Existing files that will be changed and what changes are needed.\n\n\
+                 ## API & Interface Changes\n\
+                 Any changes to public APIs, type signatures, or interfaces. Note breaking changes.\n\n\
+                 ## Data Model Changes\n\
+                 Schema changes, new types, migrations, or storage format changes.\n\n\
+                 ## Dependencies\n\
+                 New packages, crates, or external dependencies needed.\n\n\
+                 ## Risks & Edge Cases\n\
+                 What could go wrong? Breaking changes, backwards compatibility, race conditions.\n\n\
+                 ## Security Considerations\n\
+                 Any security implications — input validation, auth, data exposure.\n\n\
+                 ## Performance Considerations\n\
+                 Impact on latency, memory, or throughput. Only if relevant.\n\n\
+                 ## Testing Strategy\n\
+                 What tests to write, what to test manually, what edge cases to cover.\n\n\
+                 ## Verification\n\
+                 How to verify the work is correct — commands to run, behavior to check.\n\n\
+                 ## Migration & Rollback\n\
+                 If the change requires migration or could need rollback, describe the path.\n\n\
+                 Omit sections that are not relevant to the current task. \
+                 Small plans may only need Context, Approach, Tasks, and Verification. \
+                 After presenting the plan, use ask_user to get approval before proceeding."
             }
             "execution" => {
                 "You are in EXECUTION mode.\n\
@@ -131,12 +177,12 @@ impl SystemPromptProvider for ModeProvider {
                  - Do NOT skip tasks or change the plan without approval\n\
                  - Report progress after completing each task"
             }
-            "review" => {
-                "You are in REVIEW mode.\n\
-                 - Audit the completed work against the original requirements\n\
-                 - Check for issues, missing edge cases, and quality\n\
-                 - Do NOT write new features or implementation code\n\
-                 - Report findings and recommendations"
+            "validation" => {
+                "You are in VALIDATION mode.\n\
+                 - Validate the completed work against the original requirements\n\
+                 - Run tests, check outputs, verify behavior\n\
+                 - Do NOT create new plans or add new tasks\n\
+                 - Report findings and mark tasks as validated or failed"
             }
             _ => return None, // "general" — no constraints
         };
@@ -187,7 +233,34 @@ impl SystemPromptProvider for WorkflowProvider {
     }
 }
 
-// ── 7. Datetime ──
+// ── 7. Task Context ──
+
+pub struct TaskContextProvider;
+
+impl SystemPromptProvider for TaskContextProvider {
+    fn name(&self) -> &str {
+        "task_context"
+    }
+
+    fn provide(&self, ctx: &SystemPromptContext) -> Option<String> {
+        let task = ctx.current_task.as_ref()?;
+        let mut lines = vec![
+            format!(
+                "You are executing plan \"{}\" — task {}/{}: {}",
+                task.plan_title, task.completed_count + 1, task.total_count, task.task_title,
+            ),
+            format!("Task ID: {}", task.task_id),
+        ];
+        if let Some(desc) = &task.task_description {
+            lines.push(format!("Description: {}", desc));
+        }
+        lines.push("Update this task's status with task_update as you work.".to_string());
+
+        Some(format!("<current_task>\n{}\n</current_task>", lines.join("\n")))
+    }
+}
+
+// ── 8. Datetime ──
 
 pub struct DatetimeProvider;
 

@@ -177,6 +177,87 @@ function patchConv(
   };
 }
 
+/**
+ * Merge consecutive assistant messages from a single agent turn into one.
+ * Tool results from intermediate user messages (API plumbing) are folded
+ * back into the assistant's ToolCall parts, matching the streaming format
+ * where a single message accumulates all parts across rounds.
+ */
+function mergeAssistantTurns(messages: ChatMessage[]): ChatMessage[] {
+  const result: ChatMessage[] = [];
+  let i = 0;
+
+  while (i < messages.length) {
+    const msg = messages[i];
+
+    if (msg.role !== "assistant") {
+      result.push(msg);
+      i++;
+      continue;
+    }
+
+    // Start accumulating an assistant turn
+    const mergedParts: MessagePart[] = [...msg.parts];
+    let metadata = msg.metadata;
+    let j = i + 1;
+
+    while (j < messages.length) {
+      const next = messages[j];
+
+      // User message with only tool-result parts → fold results into tool calls
+      if (
+        next.role === "user" &&
+        next.parts.length > 0 &&
+        next.parts.every((p) => p.type === "tool-result")
+      ) {
+        for (const part of next.parts) {
+          if (part.type === "tool-result") {
+            const tr = part as ToolResultPart;
+            const tcIdx = mergedParts.findIndex(
+              (p) =>
+                p.type === "tool-call" &&
+                (p as ToolCallPart).toolCallId === tr.toolCallId,
+            );
+            if (tcIdx !== -1) {
+              const tc = mergedParts[tcIdx] as ToolCallPart;
+              mergedParts[tcIdx] = {
+                ...tc,
+                result: tr.result,
+                isError: tr.isError,
+                status: { type: "complete" },
+              };
+            }
+          }
+        }
+        j++;
+        continue;
+      }
+
+      // Another assistant message → next round in same turn, append its parts
+      if (next.role === "assistant") {
+        mergedParts.push(...next.parts);
+        if (next.metadata) {
+          metadata = { ...metadata, ...next.metadata };
+        }
+        j++;
+        continue;
+      }
+
+      // Real user message (has text content) → turn boundary
+      break;
+    }
+
+    result.push({
+      ...msg,
+      parts: mergedParts,
+      metadata,
+    });
+    i = j;
+  }
+
+  return result;
+}
+
 /** Convert server message to client ChatMessage */
 function toClientMessage(m: {
   id: string;
@@ -282,7 +363,9 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         }
       }
 
-      const messages = resolveActiveBranch(repo, childrenMap, selections);
+      const messages = mergeAssistantTurns(
+        resolveActiveBranch(repo, childrenMap, selections),
+      );
 
       hydrateUsage(convId, conv);
 
@@ -406,10 +489,8 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       ...conv.branchSelections,
       [info.parentKey]: newIndex,
     };
-    const messages = resolveActiveBranch(
-      conv.repository,
-      conv.childrenMap,
-      newSelections,
+    const messages = mergeAssistantTurns(
+      resolveActiveBranch(conv.repository, conv.childrenMap, newSelections),
     );
     set((s) =>
       patchConv(s, convId, { branchSelections: newSelections, messages }),
@@ -448,7 +529,9 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
 
       // Server selections take precedence (correct branch after regeneration)
       const mergedSelections = { ...conv.branchSelections, ...selections };
-      const resolved = resolveActiveBranch(repo, childrenMap, mergedSelections);
+      const resolved = mergeAssistantTurns(
+        resolveActiveBranch(repo, childrenMap, mergedSelections),
+      );
 
       // Check if the displayed messages match (same IDs in same order).
       // With client-generated Snowflake IDs, the server uses the same IDs —

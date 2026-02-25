@@ -39,6 +39,7 @@ pub fn build_router(state: AppState, ui_dist_path: &str) -> Router {
         .route("/api/chat/branch", post(chat::branch_turn))
         .route("/api/chat/regenerate", post(chat::regenerate_turn))
         .route("/api/chat/abort", post(chat::abort_turn))
+        .route("/api/chat/tool-invoke", post(chat::tool_invoke))
         // Conversations
         .route(
             "/api/conversations",

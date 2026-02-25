@@ -242,7 +242,7 @@ export async function consumeStream(
             providerError: details ?? undefined,
           };
           // Persist partial messages from completed rounds before finalizing
-          if (turnCtx) {
+          if (turnCtx && parts.length > 0) {
             persistTurnMessages(turnCtx, parts, errorStatus, metadata);
           }
           useThreadStore.getState().finalizeStreaming(conversationId, errorStatus, metadata);
@@ -254,8 +254,8 @@ export async function consumeStream(
 
     if (drainTimeout) clearTimeout(drainTimeout);
     if (signal.aborted) {
-      // Persist partial messages before finalizing
-      if (turnCtx) {
+      // Persist partial messages before finalizing (skip if nothing produced)
+      if (turnCtx && parts.length > 0) {
         persistTurnMessages(turnCtx, parts, {
           type: "incomplete",
           reason: "aborted",

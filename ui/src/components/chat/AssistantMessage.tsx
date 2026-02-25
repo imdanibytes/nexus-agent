@@ -1,4 +1,4 @@
-import { useCallback, useState, type FC } from "react";
+import { memo, useCallback, useState, type FC } from "react";
 import {
   BrainIcon,
   BugIcon,
@@ -255,11 +255,12 @@ const AssistantActionBar: FC<{
 
 // ── Assistant Message ──
 
-export const AssistantMessage: FC<{
+const AssistantMessageImpl: FC<{
   message: ChatMessage;
   isStreaming: boolean;
-  onReload: () => void;
-}> = ({ message, isStreaming, onReload }) => {
+  regenId?: string;
+  onRegenerate: (userMessageId: string) => void;
+}> = ({ message, isStreaming, regenId, onRegenerate }) => {
   const hasError =
     message.status?.type === "incomplete" &&
     message.status.reason !== "aborted";
@@ -270,6 +271,10 @@ export const AssistantMessage: FC<{
   const activeConvId = useThreadListStore((s) => s.activeThreadId);
   const activity = useThreadStore(
     (s) => s.conversations[activeConvId ?? ""]?.activity ?? null,
+  );
+  const onReload = useCallback(
+    () => regenId && onRegenerate(regenId),
+    [regenId, onRegenerate],
   );
 
   const timingSpans = message.metadata?.timingSpans;
@@ -380,3 +385,5 @@ export const AssistantMessage: FC<{
     </div>
   );
 };
+
+export const AssistantMessage = memo(AssistantMessageImpl);

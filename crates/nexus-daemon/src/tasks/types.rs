@@ -19,7 +19,7 @@ pub enum AgentMode {
     Discovery,
     Planning,
     Execution,
-    Review,
+    Validation,
 }
 
 impl fmt::Display for AgentMode {
@@ -29,7 +29,7 @@ impl fmt::Display for AgentMode {
             AgentMode::Discovery => write!(f, "discovery"),
             AgentMode::Planning => write!(f, "planning"),
             AgentMode::Execution => write!(f, "execution"),
-            AgentMode::Review => write!(f, "review"),
+            AgentMode::Validation => write!(f, "validation"),
         }
     }
 }

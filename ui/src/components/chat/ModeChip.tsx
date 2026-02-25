@@ -10,7 +10,7 @@ const MODE_CONFIG: Record<
   discovery: { label: "Discovery", color: "warning" },
   planning: { label: "Planning", color: "primary" },
   execution: { label: "Executing", color: "success" },
-  review: { label: "Review", color: "secondary" },
+  validation: { label: "Validating", color: "secondary" },
 };
 
 export const ModeChip: FC<{ mode: AgentMode }> = ({ mode }) => {

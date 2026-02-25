@@ -66,7 +66,7 @@ impl TaskStateStore {
 /// - No plan → General
 /// - Plan not yet approved (None) or rejected (false) → Planning
 /// - Plan approved, tasks remaining → Execution
-/// - Plan approved, all tasks completed → Review
+/// - Plan approved, all tasks completed → Validation
 pub fn derive_mode(state: &TaskState) -> AgentMode {
     let plan = match &state.plan {
         Some(p) => p,
@@ -84,7 +84,7 @@ pub fn derive_mode(state: &TaskState) -> AgentMode {
                 .values()
                 .all(|t| matches!(t.status, TaskStatus::Completed | TaskStatus::Failed));
             if all_done {
-                AgentMode::Review
+                AgentMode::Validation
             } else {
                 AgentMode::Execution
             }
@@ -163,7 +163,7 @@ mod tests {
     }
 
     #[test]
-    fn approved_all_completed_is_review() {
+    fn approved_all_completed_is_validation() {
         let mut tasks = HashMap::new();
         tasks.insert("t1".into(), make_task("t1", TaskStatus::Completed));
         tasks.insert("t2".into(), make_task("t2", TaskStatus::Completed));
@@ -172,7 +172,7 @@ mod tests {
             tasks,
             mode: AgentMode::General,
         };
-        assert_eq!(derive_mode(&state), AgentMode::Review);
+        assert_eq!(derive_mode(&state), AgentMode::Validation);
     }
 
     #[test]

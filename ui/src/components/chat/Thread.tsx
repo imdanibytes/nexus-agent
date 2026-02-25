@@ -1,4 +1,4 @@
-import { useEffect, type FC } from "react";
+import { useCallback, useEffect, type FC } from "react";
 import { ArrowDownIcon } from "lucide-react";
 import { useThreadStore, EMPTY_CONV } from "../../stores/threadStore";
 import { useThreadListStore } from "../../stores/threadListStore";
@@ -78,30 +78,34 @@ export const Thread: FC = () => {
               return null;
             }
 
-            return msg.role === "user" ? (
-              <UserMessage
-                key={msg.id}
-                message={msg}
-                isStreaming={isStreaming}
-                onBranch={branchMessage}
-              />
-            ) : (
+            if (msg.role === "user") {
+              return (
+                <UserMessage
+                  key={msg.id}
+                  message={msg}
+                  isStreaming={isStreaming}
+                  onBranch={branchMessage}
+                />
+              );
+            }
+
+            // Find the preceding user message for regeneration
+            let regenId: string | undefined;
+            for (let j = idx - 1; j >= 0; j--) {
+              const m = messages[j];
+              if (m.role === "user" && m.parts.some((p) => p.type === "text")) {
+                regenId = m.id;
+                break;
+              }
+            }
+
+            return (
               <AssistantMessage
                 key={msg.id}
                 message={msg}
                 isStreaming={isStreaming}
-                onReload={() => {
-                  for (let j = idx - 1; j >= 0; j--) {
-                    const m = messages[j];
-                    if (
-                      m.role === "user" &&
-                      m.parts.some((p) => p.type === "text")
-                    ) {
-                      regenerate(m.id);
-                      return;
-                    }
-                  }
-                }}
+                regenId={regenId}
+                onRegenerate={regenerate}
               />
             );
           })}
