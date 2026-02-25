@@ -34,7 +34,14 @@ pub async fn get(
     let store = state.chat.conversations.read().await;
     match store.get(&id) {
         Ok(Some(conv)) => {
-            Ok(Json(serde_json::to_value(&conv).unwrap()))
+            let mut value = serde_json::to_value(&conv).unwrap();
+            // Include task state (triggers lazy disk load via get_or_default)
+            let mut task_store = state.chat.task_store.write().await;
+            let task_state = task_store.get_or_default(&id);
+            if task_state.plan.is_some() {
+                value["task_state"] = serde_json::to_value(&*task_state).unwrap();
+            }
+            Ok(Json(value))
         }
         Ok(None) => Err(StatusCode::NOT_FOUND),
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),

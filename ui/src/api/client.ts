@@ -18,6 +18,11 @@ export interface ConversationFull {
   active_path: string[];
   usage?: ConversationUsage;
   agent_id?: string;
+  task_state?: {
+    plan: import("../types/tasks").Plan | null;
+    tasks: Record<string, import("../types/tasks").Task>;
+    mode?: import("../types/tasks").AgentMode;
+  };
   created_at: string;
   updated_at: string;
 }

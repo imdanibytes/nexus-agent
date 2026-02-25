@@ -8,6 +8,7 @@ import {
   type MessageNode,
 } from "../lib/message-tree";
 import { snowflake } from "../lib/snowflake";
+import { useTaskStore } from "./taskStore";
 import { useUsageStore } from "./usageStore";
 
 // ── Types ──
@@ -327,6 +328,17 @@ function hydrateUsage(convId: string, conv: ConversationFull): void {
   }
 }
 
+/** Populate the task store from server conversation data */
+function hydrateTaskState(convId: string, conv: ConversationFull): void {
+  if (conv.task_state) {
+    useTaskStore.getState().setTaskState(convId, {
+      plan: conv.task_state.plan,
+      tasks: conv.task_state.tasks,
+      mode: conv.task_state.mode ?? "general",
+    });
+  }
+}
+
 export const useThreadStore = create<ThreadState>((set, get) => ({
   conversations: {},
 
@@ -368,6 +380,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       );
 
       hydrateUsage(convId, conv);
+      hydrateTaskState(convId, conv);
 
       set((s) =>
         patchConv(s, convId, {
