@@ -4,6 +4,8 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::ask_user::{self, AskUserArgs, PendingQuestion, PendingQuestionStore, UserAnswer};
+use crate::config::FetchConfig;
+use crate::fetch;
 use crate::mcp::McpManager;
 use crate::tasks;
 use crate::tasks::store::TaskStateStore;
@@ -163,6 +165,49 @@ impl ToolHandler for TaskToolHandler<'_> {
             ctx.tool_name, &args, ctx.conversation_id, self.task_store, ctx.tx,
         ).await;
         ToolResult { content, is_error }
+    }
+}
+
+// ── FetchHandler ──
+
+pub struct FetchHandler<'a> {
+    pub fetch_config: &'a FetchConfig,
+}
+
+#[async_trait]
+impl ToolHandler for FetchHandler<'_> {
+    fn can_handle(&self, tool_name: &str) -> bool {
+        fetch::is_fetch(tool_name)
+    }
+
+    async fn handle(&self, ctx: &ToolContext<'_>) -> ToolResult {
+        let args: fetch::FetchArgs = match serde_json::from_str(ctx.args_json) {
+            Ok(a) => a,
+            Err(e) => {
+                return ToolResult {
+                    content: format!("Invalid fetch arguments: {e}"),
+                    is_error: true,
+                };
+            }
+        };
+
+        // Emit activity update
+        let _ = ctx.tx.send(AgUiEvent::Custom {
+            thread_id: ctx.conversation_id.to_string(),
+            name: "activity_update".to_string(),
+            value: serde_json::json!({ "activity": format!("Fetching {}...", args.url) }),
+        });
+
+        match fetch::execute_fetch(&args, self.fetch_config).await {
+            Ok(content) => ToolResult {
+                content,
+                is_error: false,
+            },
+            Err(e) => ToolResult {
+                content: e,
+                is_error: true,
+            },
+        }
     }
 }
 

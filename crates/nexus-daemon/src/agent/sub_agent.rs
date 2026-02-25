@@ -3,6 +3,7 @@ use serde::Deserialize;
 
 use crate::anthropic::types::{ContentBlock, Message, Role, Tool};
 use crate::ask_user::PendingQuestionStore;
+use crate::config::FetchConfig;
 use crate::mcp::McpManager;
 use crate::provider::InferenceProvider;
 use crate::tasks::store::TaskStateStore;
@@ -228,6 +229,7 @@ pub struct SubAgentHandler<'a> {
     pub max_tokens: u32,
     pub temperature: Option<f32>,
     pub mcp: &'a McpManager,
+    pub fetch_config: &'a FetchConfig,
     pub task_store: &'a tokio::sync::RwLock<TaskStateStore>,
     pub pending_questions: &'a tokio::sync::RwLock<PendingQuestionStore>,
     pub parent_messages: &'a [Message],
@@ -306,6 +308,7 @@ impl ToolHandler for SubAgentHandler<'_> {
             self.max_tokens,
             self.temperature,
             self.mcp,
+            self.fetch_config,
             self.task_store,
             self.pending_questions,
             ctx.tx,

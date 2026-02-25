@@ -102,6 +102,9 @@ pub fn spawn_agent_turn(
         tools.extend(crate::tasks::tools::definitions());
         tools.push(crate::ask_user::tool_definition());
         tools.push(crate::agent::sub_agent::tool_definition());
+        if state_clone.config.fetch.enabled {
+            tools.push(crate::fetch::tool_definition());
+        }
 
         // Derive agent mode + current task info from task state
         let (mode, mode_enum, current_task) = {
@@ -182,6 +185,7 @@ pub fn spawn_agent_turn(
             max_tokens,
             temperature,
             &mcp_guard,
+            &state_clone.config.fetch,
             &state_clone.chat.task_store,
             &state_clone.chat.pending_questions,
             &agent_tx,

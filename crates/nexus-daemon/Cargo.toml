@@ -27,6 +27,7 @@ tokio-util = { version = "0.7", features = ["codec"] }
 rmcp = { version = "0.16", features = ["client", "transport-child-process"] }
 dotenvy = "0.15"
 async-trait = "0.1"
+url = "2"
 aws-config = { version = "1", features = ["behavior-version-latest", "credentials-login"] }
 aws-sdk-bedrock = "1"
 aws-sdk-bedrockruntime = "1"

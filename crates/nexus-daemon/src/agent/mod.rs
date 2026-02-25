@@ -13,13 +13,14 @@ use uuid::Uuid;
 use crate::anthropic::types::*;
 use crate::ask_user::PendingQuestionStore;
 use crate::mcp::McpManager;
+use crate::config::FetchConfig;
 use crate::provider::InferenceProvider;
 use crate::system_prompt::fence_tool_result;
 use crate::tasks::store::TaskStateStore;
 use events::AgUiEvent;
 use sub_agent::SubAgentHandler;
 use tool_dispatch::{
-    AskUserHandler, McpToolHandler, TaskToolHandler, ToolContext,
+    AskUserHandler, FetchHandler, McpToolHandler, TaskToolHandler, ToolContext,
 };
 
 const MAX_ROUNDS: usize = 50;
@@ -58,6 +59,7 @@ pub async fn run_agent_turn(
     max_tokens: u32,
     temperature: Option<f32>,
     mcp: &McpManager,
+    fetch_config: &FetchConfig,
     task_store: &tokio::sync::RwLock<TaskStateStore>,
     pending_questions: &tokio::sync::RwLock<PendingQuestionStore>,
     tx: &broadcast::Sender<AgUiEvent>,
@@ -189,12 +191,14 @@ pub async fn run_agent_turn(
 
                 let ask_handler = AskUserHandler { pending_questions };
                 let task_handler = TaskToolHandler { task_store };
+                let fetch_handler = FetchHandler { fetch_config };
                 let sub_agent_handler = SubAgentHandler {
                     provider,
                     model,
                     max_tokens,
                     temperature,
                     mcp,
+                    fetch_config,
                     task_store,
                     pending_questions,
                     parent_messages: &messages,
@@ -202,7 +206,7 @@ pub async fn run_agent_turn(
                 };
                 let mcp_handler = McpToolHandler { mcp };
                 let mut handlers: Vec<&dyn tool_dispatch::ToolHandler> =
-                    vec![&ask_handler, &task_handler];
+                    vec![&ask_handler, &task_handler, &fetch_handler];
                 if depth == 0 {
                     handlers.push(&sub_agent_handler);
                 }

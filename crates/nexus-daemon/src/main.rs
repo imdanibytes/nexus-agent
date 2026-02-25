@@ -4,6 +4,7 @@ mod anthropic;
 mod ask_user;
 mod config;
 mod conversation;
+mod fetch;
 mod mcp;
 mod mechanics;
 mod provider;

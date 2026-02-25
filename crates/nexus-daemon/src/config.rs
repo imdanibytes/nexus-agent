@@ -17,6 +17,8 @@ pub struct NexusConfig {
     #[serde(default)]
     pub agent: AgentConfig,
     #[serde(default)]
+    pub fetch: FetchConfig,
+    #[serde(default)]
     pub providers: Vec<Provider>,
     #[serde(default)]
     pub agents: Vec<AgentEntry>,
@@ -45,6 +47,27 @@ pub struct AgentConfig {
     pub system_prompt: Option<String>,
 }
 
+/// Fetch tool configuration — controls the built-in HTTP fetch tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FetchConfig {
+    /// Whether the fetch tool is available at all.
+    #[serde(default = "default_fetch_enabled")]
+    pub enabled: bool,
+    /// If set, only these domains (and their subdomains) are allowed.
+    /// `None` means no allowlist filtering (all domains permitted unless denied).
+    #[serde(default)]
+    pub allow_domains: Option<Vec<String>>,
+    /// Domains that are always blocked, regardless of the allow list.
+    #[serde(default)]
+    pub deny_domains: Vec<String>,
+    /// Maximum response body size in bytes (default 1 MB).
+    #[serde(default = "default_max_response_bytes")]
+    pub max_response_bytes: usize,
+    /// HTTP request timeout in seconds (default 30).
+    #[serde(default = "default_timeout_secs")]
+    pub timeout_secs: u32,
+}
+
 /// MCP server configuration — persisted to ~/.nexus/mcp.json
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerConfig {
@@ -63,6 +86,15 @@ fn default_model() -> String {
 }
 fn default_max_tokens() -> u32 {
     8192
+}
+fn default_fetch_enabled() -> bool {
+    true
+}
+fn default_max_response_bytes() -> usize {
+    1_048_576 // 1 MB
+}
+fn default_timeout_secs() -> u32 {
+    30
 }
 fn default_host() -> String {
     "127.0.0.1".to_string()
@@ -97,12 +129,25 @@ impl Default for AgentConfig {
     }
 }
 
+impl Default for FetchConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_fetch_enabled(),
+            allow_domains: None,
+            deny_domains: Vec::new(),
+            max_response_bytes: default_max_response_bytes(),
+            timeout_secs: default_timeout_secs(),
+        }
+    }
+}
+
 impl Default for NexusConfig {
     fn default() -> Self {
         Self {
             api: ApiConfig::default(),
             server: ServerConfig::default(),
             agent: AgentConfig::default(),
+            fetch: FetchConfig::default(),
             providers: Vec::new(),
             agents: Vec::new(),
             active_agent_id: None,

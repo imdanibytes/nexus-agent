@@ -133,6 +133,7 @@ mod tests {
             tool("task_list"),
             tool("ask_user"),
             tool("sub_agent"),
+            tool("fetch"),
             tool("mcp_read_file"),
             tool("mcp_write_file"),
             tool("mcp_run_tests"),
@@ -142,13 +143,13 @@ mod tests {
     #[test]
     fn general_mode_allows_all() {
         let result = apply(AgentMode::General, all_tools());
-        assert_eq!(result.len(), 10);
+        assert_eq!(result.len(), 11);
     }
 
     #[test]
     fn execution_mode_allows_all() {
         let result = apply(AgentMode::Execution, all_tools());
-        assert_eq!(result.len(), 10);
+        assert_eq!(result.len(), 11);
     }
 
     #[test]
@@ -181,6 +182,7 @@ mod tests {
         assert!(result.contains(&"task_list".to_string()));
         assert!(result.contains(&"ask_user".to_string()));
         assert!(result.contains(&"sub_agent".to_string()));
+        assert!(result.contains(&"fetch".to_string()));
         assert!(result.contains(&"mcp_read_file".to_string()));
         assert!(result.contains(&"mcp_run_tests".to_string()));
         assert!(!result.contains(&"task_create_plan".to_string()));
@@ -192,5 +194,23 @@ mod tests {
     fn discovery_mode_excludes_sub_agent() {
         let result = apply(AgentMode::Discovery, all_tools());
         assert!(!result.contains(&"sub_agent".to_string()));
+    }
+
+    #[test]
+    fn discovery_mode_excludes_fetch() {
+        let result = apply(AgentMode::Discovery, all_tools());
+        assert!(!result.contains(&"fetch".to_string()));
+    }
+
+    #[test]
+    fn planning_mode_excludes_fetch() {
+        let result = apply(AgentMode::Planning, all_tools());
+        assert!(!result.contains(&"fetch".to_string()));
+    }
+
+    #[test]
+    fn execution_mode_includes_fetch() {
+        let result = apply(AgentMode::Execution, all_tools());
+        assert!(result.contains(&"fetch".to_string()));
     }
 }
