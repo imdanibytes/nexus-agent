@@ -111,6 +111,9 @@ pub fn spawn_agent_turn(
         let effective_fs = state_clone.effective_fs_config.read().await.clone();
         tools.extend(crate::filesystem::tool_definitions(&effective_fs));
 
+        // Inject required "description" field into all tool schemas
+        crate::anthropic::types::inject_tool_description_field(&mut tools);
+
         // Derive agent mode + current task info from task state
         let (mode, mode_enum, current_task) = {
             use crate::system_prompt::CurrentTaskInfo;

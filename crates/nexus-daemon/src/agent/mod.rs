@@ -261,6 +261,20 @@ pub async fn run_agent_turn(
                 for tc in &tool_calls {
                     let tool_start_ms = turn_start.elapsed().as_millis() as u64;
                     let tool_start = Instant::now();
+
+                    // Extract the description field the model was required to fill out
+                    let tool_description = serde_json::from_str::<serde_json::Value>(&tc.args_json)
+                        .ok()
+                        .and_then(|v| v.get("description").and_then(|d| d.as_str()).map(|s| s.to_string()));
+
+                    if let Some(ref desc) = tool_description {
+                        let _ = tx.send(AgUiEvent::Custom {
+                            thread_id: conversation_id.to_string(),
+                            name: "activity_update".to_string(),
+                            value: serde_json::json!({ "activity": desc }),
+                        });
+                    }
+
                     let ctx = ToolContext {
                         tool_call_id: &tc.id,
                         tool_name: &tc.name,

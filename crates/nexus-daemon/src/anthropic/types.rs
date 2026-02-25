@@ -58,6 +58,40 @@ pub struct Tool {
     pub input_schema: serde_json::Value,
 }
 
+/// Inject a required `description` field into every tool's input_schema.
+///
+/// This forces the model to articulate its reasoning before acting,
+/// improving tool-use quality and providing an audit trail.
+/// Applied as post-processing so individual tool definitions stay clean.
+pub fn inject_tool_description_field(tools: &mut [Tool]) {
+    let desc_schema = serde_json::json!({
+        "type": "string",
+        "description": "Brief explanation of what you're doing and why (1-2 sentences)."
+    });
+
+    for tool in tools.iter_mut() {
+        if let Some(schema) = tool.input_schema.as_object_mut() {
+            // Add description to properties
+            if let Some(props) = schema.get_mut("properties").and_then(|p| p.as_object_mut()) {
+                props.insert("description".to_string(), desc_schema.clone());
+            }
+            // Add to required array
+            if let Some(required) = schema.get_mut("required").and_then(|r| r.as_array_mut()) {
+                let val = serde_json::Value::String("description".to_string());
+                if !required.contains(&val) {
+                    required.push(val);
+                }
+            } else {
+                // No required array yet — create one with description
+                schema.insert(
+                    "required".to_string(),
+                    serde_json::json!(["description"]),
+                );
+            }
+        }
+    }
+}
+
 // ── SSE event types (streaming response) ──
 
 #[derive(Debug, Clone)]
@@ -406,5 +440,73 @@ mod tests {
         let usage: Usage = serde_json::from_str(json).unwrap();
         assert_eq!(usage.cache_creation_input_tokens, 0);
         assert_eq!(usage.cache_read_input_tokens, 0);
+    }
+
+    #[test]
+    fn inject_tool_description_adds_required_field() {
+        let mut tools = vec![
+            Tool {
+                name: "read_file".into(),
+                description: "Read a file".into(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" }
+                    },
+                    "required": ["path"]
+                }),
+            },
+        ];
+        inject_tool_description_field(&mut tools);
+
+        let schema = &tools[0].input_schema;
+        // description property was added
+        assert!(schema["properties"]["description"]["type"].as_str() == Some("string"));
+        // description is in required array
+        let required = schema["required"].as_array().unwrap();
+        assert!(required.contains(&serde_json::json!("path")));
+        assert!(required.contains(&serde_json::json!("description")));
+    }
+
+    #[test]
+    fn inject_tool_description_no_duplicate() {
+        let mut tools = vec![
+            Tool {
+                name: "test".into(),
+                description: "Test".into(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "description": { "type": "string", "description": "custom" }
+                    },
+                    "required": ["description"]
+                }),
+            },
+        ];
+        inject_tool_description_field(&mut tools);
+
+        // Should not duplicate in required
+        let required = tools[0].input_schema["required"].as_array().unwrap();
+        let count = required.iter().filter(|v| v.as_str() == Some("description")).count();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn inject_tool_description_creates_required_array() {
+        let mut tools = vec![
+            Tool {
+                name: "list_things".into(),
+                description: "List things".into(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+            },
+        ];
+        inject_tool_description_field(&mut tools);
+
+        let required = tools[0].input_schema["required"].as_array().unwrap();
+        assert_eq!(required.len(), 1);
+        assert_eq!(required[0], "description");
     }
 }

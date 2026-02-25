@@ -86,6 +86,20 @@ const statusIconMap: Record<ToolStatusType, React.ElementType> = {
   incomplete: () => <StatusDot color="bg-danger" />,
 };
 
+/** Extract the model-provided description from tool args JSON. */
+function extractDescription(argsText?: string): string | undefined {
+  if (!argsText) return undefined;
+  try {
+    const parsed = JSON.parse(argsText);
+    if (parsed && typeof parsed === "object" && typeof parsed.description === "string") {
+      return parsed.description;
+    }
+  } catch {
+    /* not JSON */
+  }
+  return undefined;
+}
+
 function ToolFallbackTrigger({
   toolName,
   argsText,
@@ -104,7 +118,8 @@ function ToolFallbackTrigger({
     status?.type === "incomplete" && status.reason === "cancelled";
 
   const Icon = statusIconMap[statusType];
-  const description = formatToolDescription(toolName, argsText);
+  const modelDescription = extractDescription(argsText);
+  const fallbackDescription = formatToolDescription(toolName, argsText);
 
   return (
     <button
@@ -114,12 +129,19 @@ function ToolFallbackTrigger({
       <Icon className={cn("size-4 shrink-0", isCancelled && "text-default-400")} />
       <span
         className={cn(
-          "grow text-left leading-none",
+          "grow text-left",
           isCancelled && "text-default-400 line-through",
           isRunning && "tool-pulse motion-reduce:animate-none",
         )}
       >
-        {description}
+        {modelDescription ? (
+          <>
+            <span className="leading-none">{modelDescription}</span>
+            <span className="ml-2 text-xs text-default-400">{fallbackDescription}</span>
+          </>
+        ) : (
+          <span className="leading-none">{fallbackDescription}</span>
+        )}
       </span>
       {durationMs != null && statusType !== "running" && (
         <span className="shrink-0 text-[10px] font-mono text-default-400">
@@ -212,7 +234,9 @@ function ToolFallbackArgs({ argsText }: { argsText?: string }) {
   const parsed = parseArgs(argsText);
 
   if (parsed) {
-    const entries = Object.entries(parsed);
+    // Filter out the "description" field — it's already shown in the trigger header
+    const entries = Object.entries(parsed).filter(([key]) => key !== "description");
+    if (entries.length === 0) return null;
     return (
       <div className="px-4">
         <div className="mb-1 flex items-center justify-between">
