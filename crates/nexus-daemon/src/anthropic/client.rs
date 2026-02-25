@@ -77,4 +77,32 @@ impl AnthropicClient {
 
         Ok(SseStream::new(resp.bytes_stream()))
     }
+
+    /// Send a streaming request with a pre-built JSON body.
+    ///
+    /// Used when prompt caching injection modifies the serialized request
+    /// (e.g., converting system prompt to array format, adding cache_control).
+    pub async fn create_message_stream_json(
+        &self,
+        body: serde_json::Value,
+    ) -> Result<SseStream<impl futures::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Unpin>>
+    {
+        let resp = self
+            .http
+            .post(format!("{}/v1/messages", self.base_url))
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", "2023-06-01")
+            .header("content-type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(ProviderError::from_anthropic_http(status, &body).into());
+        }
+
+        Ok(SseStream::new(resp.bytes_stream()))
+    }
 }

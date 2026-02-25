@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 
-use crate::anthropic::types::{Message, MessagesRequest, StreamEvent, Tool};
+use crate::anthropic::types::{inject_cache_control, Message, MessagesRequest, StreamEvent, Tool};
 use crate::anthropic::AnthropicClient;
 use crate::provider::InferenceProvider;
 
@@ -33,20 +33,21 @@ impl InferenceProvider for AnthropicProvider {
         messages: Vec<Message>,
         tools: Vec<Tool>,
     ) -> Result<BoxStream<'static, Result<StreamEvent>>> {
-        let mut request = MessagesRequest {
+        let request = MessagesRequest {
             model: model.to_string(),
             max_tokens,
             system,
             messages,
             tools,
             stream: true,
-            temperature: None,
+            temperature,
         };
-        if let Some(t) = temperature {
-            request.temperature = Some(t);
-        }
 
-        let stream = self.client.create_message_stream(request).await?;
+        // Serialize to JSON, inject prompt caching breakpoints, send raw
+        let mut body = serde_json::to_value(&request)?;
+        inject_cache_control(&mut body);
+
+        let stream = self.client.create_message_stream_json(body).await?;
         Ok(stream.boxed())
     }
 }

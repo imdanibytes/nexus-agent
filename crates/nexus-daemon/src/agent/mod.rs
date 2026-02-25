@@ -41,6 +41,8 @@ pub struct AgentTurnResult {
     pub timing_spans: Vec<serde_json::Value>,
     pub input_tokens: u32,
     pub output_tokens: u32,
+    pub cache_read_input_tokens: u32,
+    pub cache_creation_input_tokens: u32,
     pub context_window: u32,
     /// Cost incurred during this turn only (USD).
     pub turn_cost: f64,
@@ -85,6 +87,8 @@ pub async fn run_agent_turn(
     let turn_span_id = "t-turn".to_string();
     let mut cumulative_input: u32 = 0;
     let mut cumulative_output: u32 = 0;
+    let mut cumulative_cache_creation: u32 = 0;
+    let mut cumulative_cache_read: u32 = 0;
     let context_window = context_window_for_model(model);
     let mut turn_error: Option<String> = None;
     let mut turn_error_details: Option<serde_json::Value> = None;
@@ -134,7 +138,7 @@ pub async fn run_agent_turn(
         };
 
         // Consume the stream, emitting AG-UI events
-        let (assistant_blocks, stop_reason, tool_calls, round_input_tokens, round_output_tokens) =
+        let stream_result =
             match consume_stream(stream, conversation_id, &run_id, tx, &cancel).await {
                 Ok(r) => r,
                 Err(e) => {
@@ -152,6 +156,13 @@ pub async fn run_agent_turn(
                     break;
                 }
             };
+        let assistant_blocks = stream_result.content_blocks;
+        let stop_reason = stream_result.stop_reason;
+        let tool_calls = stream_result.tool_calls;
+        let round_input_tokens = stream_result.input_tokens;
+        let round_output_tokens = stream_result.output_tokens;
+        let round_cache_creation = stream_result.cache_creation_input_tokens;
+        let round_cache_read = stream_result.cache_read_input_tokens;
 
         let inference_duration = inference_start.elapsed().as_millis() as u64;
         let llm_span_id = format!("t-llm-{}", round);
@@ -164,12 +175,24 @@ pub async fn run_agent_turn(
             "durationMs": inference_duration,
         }));
 
-        // Accumulate and emit usage
-        cumulative_input = round_input_tokens; // Latest call's input = full context
+        // Accumulate and emit usage.
+        // With prompt caching, the API's input_tokens only counts uncached tokens.
+        // Total input = input_tokens + cache_creation + cache_read.
+        let round_total_input =
+            round_input_tokens + round_cache_creation + round_cache_read;
+        cumulative_input = round_total_input; // Latest call's input = full context
         cumulative_output += round_output_tokens;
+        cumulative_cache_creation += round_cache_creation;
+        cumulative_cache_read += round_cache_read;
 
-        // Calculate cost for this round
-        let round_cost = crate::pricing::calculate_cost(model, round_input_tokens, round_output_tokens);
+        // Calculate cost for this round (cache-aware)
+        let round_cost = crate::pricing::calculate_cost_with_cache(
+            model,
+            round_input_tokens,
+            round_cache_creation,
+            round_cache_read,
+            round_output_tokens,
+        );
         turn_cost += round_cost;
 
         let _ = tx.send(AgUiEvent::Custom {
@@ -335,11 +358,24 @@ pub async fn run_agent_turn(
         timing_spans,
         input_tokens: cumulative_input,
         output_tokens: cumulative_output,
+        cache_creation_input_tokens: cumulative_cache_creation,
+        cache_read_input_tokens: cumulative_cache_read,
         context_window,
         turn_cost,
         error: turn_error,
         error_details: turn_error_details,
     })
+}
+
+/// Result of consuming a single inference stream.
+struct StreamResult {
+    content_blocks: Vec<ContentBlock>,
+    stop_reason: Option<StopReason>,
+    tool_calls: Vec<PendingToolCall>,
+    input_tokens: u32,
+    output_tokens: u32,
+    cache_creation_input_tokens: u32,
+    cache_read_input_tokens: u32,
 }
 
 /// Consume the provider stream, emit AG-UI events, return accumulated content.
@@ -349,13 +385,15 @@ async fn consume_stream(
     run_id: &str,
     tx: &broadcast::Sender<AgUiEvent>,
     cancel: &CancellationToken,
-) -> Result<(Vec<ContentBlock>, Option<StopReason>, Vec<PendingToolCall>, u32, u32)>
+) -> Result<StreamResult>
 {
     let mut content_blocks: Vec<ContentBlock> = Vec::new();
     let mut stop_reason = None;
     let mut pending_tool_calls: Vec<PendingToolCall> = Vec::new();
     let mut input_tokens: u32 = 0;
     let mut output_tokens: u32 = 0;
+    let mut cache_creation_input_tokens: u32 = 0;
+    let mut cache_read_input_tokens: u32 = 0;
 
     // Track current content blocks by index
     let mut current_text: Option<(usize, String)> = None;
@@ -379,6 +417,8 @@ async fn consume_stream(
                 message_id = mid;
                 if let Some(u) = u {
                     input_tokens = u.input_tokens;
+                    cache_creation_input_tokens = u.cache_creation_input_tokens;
+                    cache_read_input_tokens = u.cache_read_input_tokens;
                 }
             }
             StreamEvent::ContentBlockStart {
@@ -515,7 +555,15 @@ async fn consume_stream(
         }
     }
 
-    Ok((content_blocks, stop_reason, pending_tool_calls, input_tokens, output_tokens))
+    Ok(StreamResult {
+        content_blocks,
+        stop_reason,
+        tool_calls: pending_tool_calls,
+        input_tokens,
+        output_tokens,
+        cache_creation_input_tokens,
+        cache_read_input_tokens,
+    })
 }
 
 pub fn context_window_for_model(model: &str) -> u32 {

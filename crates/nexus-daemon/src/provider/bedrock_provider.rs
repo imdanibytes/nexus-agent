@@ -5,7 +5,7 @@ use aws_sdk_bedrockruntime::Client as BedrockClient;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 
-use crate::anthropic::types::{Message, StreamEvent, Tool};
+use crate::anthropic::types::{inject_cache_control, Message, StreamEvent, Tool};
 use crate::provider::error::ProviderError;
 use crate::provider::InferenceProvider;
 
@@ -56,6 +56,9 @@ impl InferenceProvider for BedrockProvider {
         if !tools.is_empty() {
             body["tools"] = serde_json::to_value(&tools)?;
         }
+
+        // Inject prompt caching breakpoints
+        inject_cache_control(&mut body);
 
         tracing::debug!(
             model = model,

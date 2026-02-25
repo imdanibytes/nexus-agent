@@ -89,12 +89,34 @@ pub fn lookup(model: &str) -> ModelPricing {
     FALLBACK
 }
 
-/// Calculate cost in USD for a given token count.
+/// Calculate cost in USD for a given token count (no caching).
 pub fn calculate_cost(model: &str, input_tokens: u32, output_tokens: u32) -> f64 {
+    calculate_cost_with_cache(model, input_tokens, 0, 0, output_tokens)
+}
+
+/// Calculate cost in USD with prompt caching breakdown.
+///
+/// When prompt caching is active, the API returns three categories of input tokens:
+/// - `input_tokens`: uncached tokens (after the last cache breakpoint) at base price
+/// - `cache_creation_input_tokens`: tokens written to cache at 1.25x base price
+/// - `cache_read_input_tokens`: tokens read from cache at 0.1x base price
+///
+/// Reference: https://platform.claude.com/docs/en/build-with-claude/prompt-caching#pricing
+pub fn calculate_cost_with_cache(
+    model: &str,
+    input_tokens: u32,
+    cache_creation_input_tokens: u32,
+    cache_read_input_tokens: u32,
+    output_tokens: u32,
+) -> f64 {
     let pricing = lookup(model);
-    let input_cost = (input_tokens as f64 / 1_000_000.0) * pricing.input_per_mtok;
+    let uncached_cost = (input_tokens as f64 / 1_000_000.0) * pricing.input_per_mtok;
+    let cache_write_cost =
+        (cache_creation_input_tokens as f64 / 1_000_000.0) * pricing.input_per_mtok * 1.25;
+    let cache_read_cost =
+        (cache_read_input_tokens as f64 / 1_000_000.0) * pricing.input_per_mtok * 0.1;
     let output_cost = (output_tokens as f64 / 1_000_000.0) * pricing.output_per_mtok;
-    input_cost + output_cost
+    uncached_cost + cache_write_cost + cache_read_cost + output_cost
 }
 
 /// Get the context window for a model.
@@ -239,6 +261,32 @@ mod tests {
     fn calculate_cost_zero_tokens() {
         let cost = calculate_cost("claude-opus-4-6", 0, 0);
         assert_eq!(cost, 0.0);
+    }
+
+    #[test]
+    fn calculate_cost_with_cache_savings() {
+        // Sonnet 4.6: $3/MTok input, $15/MTok output
+        // 50 uncached input + 10k cache write + 100k cache read + 1k output
+        // uncached: 50/1M * 3.0 = 0.00015
+        // cache write: 10_000/1M * 3.0 * 1.25 = 0.0375
+        // cache read: 100_000/1M * 3.0 * 0.1 = 0.03
+        // output: 1_000/1M * 15.0 = 0.015
+        // total = 0.08265
+        let cost = calculate_cost_with_cache(
+            "claude-sonnet-4-6",
+            50,
+            10_000,
+            100_000,
+            1_000,
+        );
+        assert!((cost - 0.08265).abs() < 1e-10);
+
+        // Compare: without caching, all 110k tokens are at base price
+        // input: 110_050/1M * 3.0 = 0.330150
+        // output: 1_000/1M * 15.0 = 0.015
+        // total = 0.345150
+        let no_cache = calculate_cost("claude-sonnet-4-6", 110_050, 1_000);
+        assert!(cost < no_cache, "cached cost should be cheaper");
     }
 
     #[test]
