@@ -82,20 +82,29 @@ impl AnthropicClient {
     ///
     /// Used when prompt caching injection modifies the serialized request
     /// (e.g., converting system prompt to array format, adding cache_control).
+    ///
+    /// `extra_headers` allows injecting additional headers (e.g., `anthropic-beta`
+    /// for extended thinking).
     pub async fn create_message_stream_json(
         &self,
         body: serde_json::Value,
+        extra_headers: Option<Vec<(&str, &str)>>,
     ) -> Result<SseStream<impl futures::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Unpin>>
     {
-        let resp = self
+        let mut req = self
             .http
             .post(format!("{}/v1/messages", self.base_url))
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
-            .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
+            .header("content-type", "application/json");
+
+        if let Some(headers) = extra_headers {
+            for (key, value) in headers {
+                req = req.header(key, value);
+            }
+        }
+
+        let resp = req.json(&body).send().await?;
 
         if !resp.status().is_success() {
             let status = resp.status();

@@ -12,6 +12,7 @@ mod mcp;
 mod mechanics;
 mod pricing;
 mod provider;
+mod retry;
 mod server;
 mod system_prompt;
 mod tasks;

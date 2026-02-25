@@ -34,7 +34,7 @@ pub fn spawn_agent_turn(
 
     tokio::spawn(async move {
         // Resolve active agent → provider
-        let (provider_record, model, max_tokens, system_prompt, temperature, agent_meta) = {
+        let (provider_record, model, max_tokens, system_prompt, temperature, thinking_budget, agent_meta) = {
             let agents = state_clone.agents.agents.read().await;
             let providers = state_clone.agents.providers.read().await;
 
@@ -51,6 +51,7 @@ pub fn spawn_agent_turn(
                             a.max_tokens.unwrap_or(8192),
                             a.system_prompt.clone(),
                             a.temperature,
+                            a.thinking_budget,
                             serde_json::json!({
                                 "agent_id": a.id,
                                 "agent_name": a.name,
@@ -189,7 +190,11 @@ pub fn spawn_agent_turn(
 
         // ── Context compaction ──
         let mut api_messages = api_messages;
-        let estimated_tokens = conv.usage.as_ref().map(|u| u.input_tokens).unwrap_or(0);
+        let estimated_tokens = crate::compaction::estimate_tokens(
+            &api_messages,
+            Some(prompt_parts.system.as_str()),
+            &tools,
+        );
 
         // Layer 1: Tool result pruning (mechanical, no LLM call)
         let prune_threshold = (context_window as f64 * crate::compaction::PRUNE_THRESHOLD_PCT) as u32;
@@ -251,6 +256,7 @@ pub fn spawn_agent_turn(
             &model,
             max_tokens,
             temperature,
+            thinking_budget,
             &mcp_guard,
             &state_clone.config.fetch,
             &effective_fs,

@@ -80,6 +80,8 @@ pub async fn update(
         set_temperature: body.set_temperature.unwrap_or(false),
         max_tokens: body.max_tokens,
         set_max_tokens: body.set_max_tokens.unwrap_or(false),
+        thinking_budget: body.thinking_budget,
+        set_thinking_budget: body.set_thinking_budget.unwrap_or(false),
         mcp_server_ids: body.mcp_server_ids,
         set_mcp_server_ids: body.set_mcp_server_ids.unwrap_or(false),
     };
@@ -153,6 +155,8 @@ pub struct UpdateAgentRequest {
     pub set_temperature: Option<bool>,
     pub max_tokens: Option<u32>,
     pub set_max_tokens: Option<bool>,
+    pub thinking_budget: Option<u32>,
+    pub set_thinking_budget: Option<bool>,
     pub mcp_server_ids: Option<Vec<String>>,
     pub set_mcp_server_ids: Option<bool>,
 }

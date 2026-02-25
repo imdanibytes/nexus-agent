@@ -123,7 +123,7 @@ pub async fn test_connection(
             };
 
             match client
-                .create_message_stream(model, 1, None, None, messages, vec![])
+                .create_message_stream(model, 1, None, None, None, messages, vec![])
                 .await
             {
                 Ok(_) => Ok(Json(serde_json::json!({ "ok": true }))),
@@ -174,7 +174,7 @@ pub async fn test_inline(
     }];
 
     match client
-        .create_message_stream(test_model, 1, None, None, messages, vec![])
+        .create_message_stream(test_model, 1, None, None, None, messages, vec![])
         .await
     {
         Ok(_) => Json(serde_json::json!({ "ok": true })),

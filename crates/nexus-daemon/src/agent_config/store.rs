@@ -66,6 +66,7 @@ impl AgentStore {
             system_prompt,
             temperature,
             max_tokens,
+            thinking_budget: None,
             mcp_server_ids,
             created_at: now,
             updated_at: now,
@@ -97,6 +98,9 @@ impl AgentStore {
         }
         if updates.set_max_tokens {
             agent.max_tokens = updates.max_tokens;
+        }
+        if updates.set_thinking_budget {
+            agent.thinking_budget = updates.thinking_budget;
         }
         if updates.set_mcp_server_ids {
             agent.mcp_server_ids = updates.mcp_server_ids;
@@ -140,6 +144,8 @@ pub struct AgentUpdate {
     pub set_temperature: bool,
     pub max_tokens: Option<u32>,
     pub set_max_tokens: bool,
+    pub thinking_budget: Option<u32>,
+    pub set_thinking_budget: bool,
     pub mcp_server_ids: Option<Vec<String>>,
     pub set_mcp_server_ids: bool,
 }

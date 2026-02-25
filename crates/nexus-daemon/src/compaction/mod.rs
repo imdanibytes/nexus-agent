@@ -13,7 +13,7 @@ use anyhow::Result;
 use chrono::Utc;
 use uuid::Uuid;
 
-use crate::anthropic::types::{ContentBlock, Message, MessagesRequest, Role};
+use crate::anthropic::types::{ContentBlock, Message, MessagesRequest, Role, Tool};
 use crate::anthropic::AnthropicClient;
 use crate::conversation::types::{ChatMessage, MessagePart, MessageRole};
 
@@ -29,6 +29,45 @@ pub const PRUNE_THRESHOLD_PCT: f64 = 0.5;
 
 /// Fraction of effective window above which summarization activates.
 pub const SUMMARIZE_THRESHOLD_PCT: f64 = 0.8;
+
+// ── Token Estimation ──
+
+/// Estimate token count from API messages, system prompt, and tools.
+///
+/// Uses a chars/3 heuristic. Slightly overestimates, which is desirable —
+/// better to trigger compaction a bit early than hit the context limit.
+pub fn estimate_tokens(
+    messages: &[Message],
+    system_prompt: Option<&str>,
+    tools: &[Tool],
+) -> u32 {
+    let mut chars: usize = 0;
+
+    if let Some(sp) = system_prompt {
+        chars += sp.len();
+    }
+
+    for msg in messages {
+        for block in &msg.content {
+            match block {
+                ContentBlock::Text { text } => chars += text.len(),
+                ContentBlock::ToolUse { name, input, .. } => {
+                    chars += name.len();
+                    chars += input.to_string().len();
+                }
+                ContentBlock::ToolResult { content, .. } => chars += content.len(),
+                ContentBlock::Thinking { thinking } => chars += thinking.len(),
+            }
+        }
+    }
+
+    for tool in tools {
+        chars += tool.name.len() + tool.description.len();
+        chars += tool.input_schema.to_string().len();
+    }
+
+    (chars / 3) as u32
+}
 
 // ── Layer 1: Tool Result Pruning ──
 
@@ -220,6 +259,7 @@ pub async fn summarize_messages(
         tools: Vec::new(),
         stream: false,
         temperature: Some(0.0),
+        thinking: None,
     };
 
     let response = client.create_message(request).await?;
@@ -417,6 +457,39 @@ mod tests {
             .unwrap();
 
         assert_eq!(first_input, serde_json::json!({}));
+    }
+
+    #[test]
+    fn estimate_tokens_basic() {
+        let messages = vec![
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text {
+                    text: "Hello world".to_string(), // 11 chars
+                }],
+            },
+            Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::Text {
+                    text: "Hi there, how can I help?".to_string(), // 25 chars
+                }],
+            },
+        ];
+        let tools = vec![Tool {
+            name: "read_file".to_string(), // 9 chars
+            description: "Read a file from disk".to_string(), // 21 chars
+            input_schema: serde_json::json!({"type": "object"}), // ~17 chars
+        }];
+
+        let estimate = estimate_tokens(&messages, Some("System prompt here"), &tools);
+        // (11 + 25 + 9 + 21 + ~17 + 18) / 3 ≈ 33
+        assert!(estimate > 0);
+        assert!(estimate < 200); // sanity bound
+    }
+
+    #[test]
+    fn estimate_tokens_empty() {
+        assert_eq!(estimate_tokens(&[], None, &[]), 0);
     }
 
     #[test]

@@ -98,6 +98,7 @@ async fn call_title_model(
         tools: Vec::new(),
         stream: false,
         temperature: None,
+        thinking: None,
     };
 
     let response = client

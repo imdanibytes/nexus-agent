@@ -64,6 +64,7 @@ pub async fn run_agent_turn(
     model: &str,
     max_tokens: u32,
     temperature: Option<f32>,
+    thinking_budget: Option<u32>,
     mcp: &McpManager,
     fetch_config: &FetchConfig,
     filesystem_config: &FilesystemConfig,
@@ -96,6 +97,7 @@ pub async fn run_agent_turn(
     let mut turn_error_details: Option<serde_json::Value> = None;
     let mut turn_cost: f64 = 0.0;
     let mut retried_after_prune = false;
+    let mut retry_count: u32 = 0;
 
     for round in 0..MAX_ROUNDS {
         if cancel.is_cancelled() {
@@ -143,6 +145,7 @@ pub async fn run_agent_turn(
                 max_tokens,
                 system_prompt.clone(),
                 temperature,
+                thinking_budget,
                 messages_for_api,
                 tools.clone(),
             )
@@ -159,6 +162,38 @@ pub async fn run_agent_turn(
                             crate::compaction::prune_tool_results(&mut messages, 1);
                             continue;
                         }
+                    }
+                }
+
+                // Retry transient errors with exponential backoff
+                if let Some(pe) = e.downcast_ref::<crate::provider::error::ProviderError>() {
+                    if pe.retryable && retry_count < crate::retry::MAX_RETRIES {
+                        retry_count += 1;
+                        let delay = crate::retry::backoff_delay(retry_count);
+                        tracing::warn!(
+                            attempt = retry_count,
+                            delay_ms = delay,
+                            error_kind = ?pe.kind,
+                            "Retrying after transient error"
+                        );
+                        let _ = tx.send(AgUiEvent::Custom {
+                            thread_id: conversation_id.to_string(),
+                            name: "retry".to_string(),
+                            value: serde_json::json!({
+                                "attempt": retry_count,
+                                "maxAttempts": crate::retry::MAX_RETRIES,
+                                "reason": format!("{:?}", pe.kind),
+                                "delayMs": delay,
+                            }),
+                        });
+                        tokio::select! {
+                            _ = tokio::time::sleep(std::time::Duration::from_millis(delay)) => {}
+                            _ = cancel.cancelled() => {
+                                turn_error = Some(e.to_string());
+                                break;
+                            }
+                        }
+                        continue;
                     }
                 }
 
@@ -180,8 +215,44 @@ pub async fn run_agent_turn(
         // Consume the stream, emitting AG-UI events
         let stream_result =
             match consume_stream(stream, conversation_id, &run_id, tx, &cancel).await {
-                Ok(r) => r,
+                Ok(r) => {
+                    // Successful stream consumption — reset retry counter
+                    retry_count = 0;
+                    r
+                }
                 Err(e) => {
+                    // Retry transient SSE errors by restarting the round
+                    if let Some(pe) = e.downcast_ref::<crate::provider::error::ProviderError>() {
+                        if pe.retryable && retry_count < crate::retry::MAX_RETRIES {
+                            retry_count += 1;
+                            let delay = crate::retry::backoff_delay(retry_count);
+                            tracing::warn!(
+                                attempt = retry_count,
+                                delay_ms = delay,
+                                error_kind = ?pe.kind,
+                                "Retrying after stream error"
+                            );
+                            let _ = tx.send(AgUiEvent::Custom {
+                                thread_id: conversation_id.to_string(),
+                                name: "retry".to_string(),
+                                value: serde_json::json!({
+                                    "attempt": retry_count,
+                                    "maxAttempts": crate::retry::MAX_RETRIES,
+                                    "reason": format!("{:?}", pe.kind),
+                                    "delayMs": delay,
+                                }),
+                            });
+                            tokio::select! {
+                                _ = tokio::time::sleep(std::time::Duration::from_millis(delay)) => {}
+                                _ = cancel.cancelled() => {
+                                    turn_error = Some(e.to_string());
+                                    break;
+                                }
+                            }
+                            continue;
+                        }
+                    }
+
                     let details = e
                         .downcast_ref::<crate::provider::error::ProviderError>()
                         .and_then(|pe| serde_json::to_value(pe).ok());

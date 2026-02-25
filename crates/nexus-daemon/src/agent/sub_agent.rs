@@ -312,6 +312,7 @@ impl ToolHandler for SubAgentHandler<'_> {
             self.model,
             self.max_tokens,
             self.temperature,
+            None, // sub-agents don't use extended thinking
             self.mcp,
             self.fetch_config,
             self.filesystem_config,

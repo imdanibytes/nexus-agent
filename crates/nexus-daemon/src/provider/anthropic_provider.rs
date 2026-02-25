@@ -3,9 +3,14 @@ use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 
-use crate::anthropic::types::{inject_cache_control, Message, MessagesRequest, StreamEvent, Tool};
+use crate::anthropic::types::{
+    inject_cache_control, Message, MessagesRequest, StreamEvent, ThinkingConfig, Tool,
+};
 use crate::anthropic::AnthropicClient;
 use crate::provider::InferenceProvider;
+
+/// Beta header required for extended thinking.
+const THINKING_BETA_HEADER: &str = "interleaved-thinking-2025-05-14";
 
 pub struct AnthropicProvider {
     client: AnthropicClient,
@@ -30,9 +35,22 @@ impl InferenceProvider for AnthropicProvider {
         max_tokens: u32,
         system: Option<String>,
         temperature: Option<f32>,
+        thinking_budget: Option<u32>,
         messages: Vec<Message>,
         tools: Vec<Tool>,
     ) -> Result<BoxStream<'static, Result<StreamEvent>>> {
+        // When thinking is enabled, temperature must be omitted (API requirement)
+        let (temperature, thinking) = match thinking_budget {
+            Some(budget) => (
+                None,
+                Some(ThinkingConfig {
+                    thinking_type: "enabled".to_string(),
+                    budget_tokens: budget,
+                }),
+            ),
+            None => (temperature, None),
+        };
+
         let request = MessagesRequest {
             model: model.to_string(),
             max_tokens,
@@ -41,13 +59,24 @@ impl InferenceProvider for AnthropicProvider {
             tools,
             stream: true,
             temperature,
+            thinking,
         };
 
         // Serialize to JSON, inject prompt caching breakpoints, send raw
         let mut body = serde_json::to_value(&request)?;
         inject_cache_control(&mut body);
 
-        let stream = self.client.create_message_stream_json(body).await?;
+        // Add beta header for extended thinking
+        let extra_headers = if thinking_budget.is_some() {
+            Some(vec![("anthropic-beta", THINKING_BETA_HEADER)])
+        } else {
+            None
+        };
+
+        let stream = self
+            .client
+            .create_message_stream_json(body, extra_headers)
+            .await?;
         Ok(stream.boxed())
     }
 }

@@ -24,6 +24,7 @@ pub trait InferenceProvider: Send + Sync {
         max_tokens: u32,
         system: Option<String>,
         temperature: Option<f32>,
+        thinking_budget: Option<u32>,
         messages: Vec<Message>,
         tools: Vec<Tool>,
     ) -> Result<BoxStream<'static, Result<StreamEvent>>>;
