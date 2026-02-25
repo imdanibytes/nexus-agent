@@ -29,7 +29,8 @@ export const ContextRing: FC<ContextRingProps> = ({
   const percent = Math.min(100, (contextTokens / contextWindow) * 100);
   const color = percent > 90 ? "danger" : percent > 70 ? "warning" : "primary";
 
-  const tooltip = `Context: ${Math.round(percent)}% (${formatTokens(contextTokens)} / ${formatTokens(contextWindow)} tokens)`;
+  const costInfo = totalCost != null && totalCost > 0 ? ` · ${formatCost(totalCost)}` : "";
+  const tooltip = `Context: ${Math.round(percent)}% (${formatTokens(contextTokens)} / ${formatTokens(contextWindow)} tokens)${costInfo}`;
 
   return (
     <Tooltip content={tooltip} placement="top" className="text-xs">

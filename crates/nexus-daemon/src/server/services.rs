@@ -32,3 +32,4 @@ pub struct McpService {
     pub mcp: RwLock<McpManager>,
     pub configs: RwLock<McpServerStore>,
 }
+

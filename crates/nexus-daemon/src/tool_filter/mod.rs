@@ -134,6 +134,9 @@ mod tests {
             tool("ask_user"),
             tool("sub_agent"),
             tool("fetch"),
+            tool("read_text_file"),
+            tool("write_file"),
+            tool("list_directory"),
             tool("mcp_read_file"),
             tool("mcp_write_file"),
             tool("mcp_run_tests"),
@@ -143,13 +146,13 @@ mod tests {
     #[test]
     fn general_mode_allows_all() {
         let result = apply(AgentMode::General, all_tools());
-        assert_eq!(result.len(), 11);
+        assert_eq!(result.len(), 14);
     }
 
     #[test]
     fn execution_mode_allows_all() {
         let result = apply(AgentMode::Execution, all_tools());
-        assert_eq!(result.len(), 11);
+        assert_eq!(result.len(), 14);
     }
 
     #[test]

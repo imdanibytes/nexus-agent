@@ -105,6 +105,9 @@ pub fn spawn_agent_turn(
         if state_clone.config.fetch.enabled {
             tools.push(crate::fetch::tool_definition());
         }
+        // Use effective filesystem config (workspaces + base allowed_directories)
+        let effective_fs = state_clone.effective_fs_config.read().await.clone();
+        tools.extend(crate::filesystem::tool_definitions(&effective_fs));
 
         // Derive agent mode + current task info from task state
         let (mode, mode_enum, current_task) = {
@@ -175,6 +178,10 @@ pub fn spawn_agent_turn(
         });
 
         let mcp_guard = state_clone.mcp.mcp.read().await;
+
+        // Load prior cumulative cost from the conversation (survives compaction)
+        let prior_cost = conv.usage.as_ref().map(|u| u.total_cost).unwrap_or(0.0);
+
         let result = agent::run_agent_turn(
             provider.as_ref(),
             &conversation_id,
@@ -186,11 +193,13 @@ pub fn spawn_agent_turn(
             temperature,
             &mcp_guard,
             &state_clone.config.fetch,
+            &effective_fs,
             &state_clone.chat.task_store,
             &state_clone.chat.pending_questions,
             &agent_tx,
             cancel,
             0, // depth=0: parent turn, sub_agent tool available
+            prior_cost,
         )
         .await;
         drop(mcp_guard);
@@ -202,6 +211,7 @@ pub fn spawn_agent_turn(
                 input_tokens,
                 output_tokens,
                 context_window,
+                turn_cost,
                 error: turn_error,
                 ..
             }) => {
@@ -260,6 +270,7 @@ pub fn spawn_agent_turn(
                         input_tokens,
                         output_tokens,
                         context_window,
+                        total_cost: prior_cost + turn_cost,
                     });
 
                     let mut store = state_clone.chat.conversations.write().await;

@@ -4,6 +4,7 @@ export interface ConversationUsage {
   inputTokens: number;
   outputTokens: number;
   contextWindow: number;
+  totalCost: number;
 }
 
 interface UsageState {

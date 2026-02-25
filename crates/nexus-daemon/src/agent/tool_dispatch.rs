@@ -4,8 +4,9 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::ask_user::{self, AskUserArgs, PendingQuestion, PendingQuestionStore, UserAnswer};
-use crate::config::FetchConfig;
+use crate::config::{FetchConfig, FilesystemConfig};
 use crate::fetch;
+use crate::filesystem;
 use crate::mcp::McpManager;
 use crate::tasks;
 use crate::tasks::store::TaskStateStore;
@@ -199,6 +200,47 @@ impl ToolHandler for FetchHandler<'_> {
         });
 
         match fetch::execute_fetch(&args, self.fetch_config).await {
+            Ok(content) => ToolResult {
+                content,
+                is_error: false,
+            },
+            Err(e) => ToolResult {
+                content: e,
+                is_error: true,
+            },
+        }
+    }
+}
+
+// ── FilesystemHandler ──
+
+pub struct FilesystemHandler {
+    pub validator: filesystem::PathValidator,
+}
+
+impl FilesystemHandler {
+    pub fn new(config: &FilesystemConfig) -> Self {
+        Self {
+            validator: filesystem::PathValidator::new(&config.allowed_directories),
+        }
+    }
+}
+
+#[async_trait]
+impl ToolHandler for FilesystemHandler {
+    fn can_handle(&self, tool_name: &str) -> bool {
+        filesystem::is_filesystem_tool(tool_name)
+    }
+
+    async fn handle(&self, ctx: &ToolContext<'_>) -> ToolResult {
+        // Activity update
+        let _ = ctx.tx.send(AgUiEvent::Custom {
+            thread_id: ctx.conversation_id.to_string(),
+            name: "activity_update".to_string(),
+            value: serde_json::json!({ "activity": format!("{}...", ctx.tool_name) }),
+        });
+
+        match filesystem::execute(ctx.tool_name, ctx.args_json, &self.validator) {
             Ok(content) => ToolResult {
                 content,
                 is_error: false,

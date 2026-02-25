@@ -5,13 +5,16 @@ mod ask_user;
 mod config;
 mod conversation;
 mod fetch;
+mod filesystem;
 mod mcp;
 mod mechanics;
+mod pricing;
 mod provider;
 mod server;
 mod system_prompt;
 mod tasks;
 mod tool_filter;
+mod workspace;
 
 use anyhow::Result;
 use std::sync::Arc;
@@ -25,6 +28,7 @@ use crate::mcp::McpManager;
 use crate::provider::{ProviderFactory, ProviderStore, ProviderType};
 use crate::server::sse::{AgentEventBridge, SseHub};
 use crate::server::{AppState, AgentService, ChatService, McpService};
+use crate::workspace::WorkspaceStore;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -42,6 +46,17 @@ async fn main() -> Result<()> {
 
     let config = NexusConfig::load()?;
     let mcp_servers = NexusConfig::load_mcp_servers()?;
+
+    // Load and apply corporate fetch policy (if any)
+    let fetch_policy = NexusConfig::load_fetch_policy();
+    let mut config = config;
+    config.fetch.apply_policy(&fetch_policy);
+    tracing::debug!(
+        fetch_enabled = config.fetch.enabled,
+        deny_domains = ?config.fetch.deny_domains,
+        allow_domains = ?config.fetch.allow_domains,
+        "Fetch config resolved (user + policy)"
+    );
 
     let mut provider_store = ProviderStore::new(config.providers.clone());
     let mut agent_store = AgentStore::new(
@@ -94,10 +109,16 @@ async fn main() -> Result<()> {
     let sse_hub = SseHub::new();
     let event_bridge = AgentEventBridge::new(sse_hub.clone());
 
+    // Workspaces + effective filesystem config
+    let workspace_store = WorkspaceStore::new(config.workspaces.clone());
+    let effective_fs = config.effective_filesystem_config();
+
     tracing::info!(
         providers = provider_store.list().len(),
         agents = agent_store.list().len(),
         mcp_servers = mcp_servers.len(),
+        workspaces = config.workspaces.len(),
+        allowed_dirs = effective_fs.allowed_directories.len(),
         "Nexus daemon starting"
     );
 
@@ -125,6 +146,9 @@ async fn main() -> Result<()> {
     });
 
     let state = AppState {
+        base_filesystem_config: config.filesystem.clone(),
+        effective_fs_config: tokio::sync::RwLock::new(effective_fs),
+        workspaces: tokio::sync::RwLock::new(workspace_store),
         config: config.clone(),
         chat,
         agents: agents_svc,

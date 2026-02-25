@@ -22,6 +22,7 @@ enum McpRequest {
 /// The actual service runs in a background task; we communicate via channels.
 pub struct McpServer {
     pub id: String,
+    pub name: String,
     tools: Vec<rmcp::model::Tool>,
     tx: mpsc::Sender<McpRequest>,
 }
@@ -94,6 +95,7 @@ impl McpServer {
 
         Ok(Self {
             id: config.id.clone(),
+            name: config.name.clone(),
             tools,
             tx,
         })

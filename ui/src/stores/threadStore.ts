@@ -324,6 +324,7 @@ function hydrateUsage(convId: string, conv: ConversationFull): void {
       inputTokens: conv.usage.input_tokens,
       outputTokens: conv.usage.output_tokens,
       contextWindow: conv.usage.context_window,
+      totalCost: conv.usage.total_cost ?? 0,
     });
   }
 }

@@ -152,6 +152,7 @@ const ComposerLeftSlot: FC = () => {
         <ContextRing
           contextTokens={usage.inputTokens + usage.outputTokens}
           contextWindow={usage.contextWindow}
+          totalCost={usage.totalCost}
         />
       )}
     </div>

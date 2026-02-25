@@ -9,6 +9,7 @@ export interface ConversationUsage {
   input_tokens: number;
   output_tokens: number;
   context_window: number;
+  total_cost?: number;
 }
 
 export interface ConversationFull {
@@ -431,6 +432,78 @@ export async function testMcpServerInline(
   if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
   return res.json();
 }
+
+// ── Workspaces ──
+
+export interface WorkspaceConfig {
+  id: string;
+  name: string;
+  path: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateWorkspaceRequest {
+  name: string;
+  path: string;
+}
+
+export async function fetchWorkspaces(): Promise<WorkspaceConfig[]> {
+  const res = await fetch("/api/workspaces");
+  if (!res.ok) throw new Error(`Failed to load workspaces (${res.status})`);
+  return res.json();
+}
+
+export async function createWorkspace(
+  data: CreateWorkspaceRequest,
+): Promise<WorkspaceConfig> {
+  const res = await fetch("/api/workspaces", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(`Create workspace failed (${res.status})`);
+  return res.json();
+}
+
+export async function updateWorkspace(
+  id: string,
+  data: Partial<CreateWorkspaceRequest>,
+): Promise<WorkspaceConfig> {
+  const res = await fetch(`/api/workspaces/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(`Update workspace failed (${res.status})`);
+  return res.json();
+}
+
+export async function deleteWorkspace(id: string): Promise<void> {
+  await fetch(`/api/workspaces/${id}`, { method: "DELETE" });
+}
+
+// ── Folder Picking ──
+
+export interface BrowseEntry {
+  name: string;
+  path: string;
+}
+
+export interface BrowseResult {
+  path: string;
+  parent: string | null;
+  entries: BrowseEntry[];
+}
+
+/** Browse directories on the server's filesystem. */
+export async function browseDirectory(path?: string): Promise<BrowseResult> {
+  const params = path ? `?path=${encodeURIComponent(path)}` : "";
+  const res = await fetch(`/api/browse${params}`);
+  if (!res.ok) throw new Error(`Browse failed (${res.status})`);
+  return res.json();
+}
+
 
 // ── Model Discovery ──
 

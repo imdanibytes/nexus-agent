@@ -20,6 +20,7 @@ export function useStreamBroadcasts(): void {
         inputTokens?: number;
         outputTokens?: number;
         contextWindow?: number;
+        totalCost?: number;
       };
       const threadId = event.threadId as string | undefined;
       if (threadId && val) {
@@ -27,6 +28,7 @@ export function useStreamBroadcasts(): void {
           inputTokens: val.inputTokens ?? 0,
           outputTokens: val.outputTokens ?? 0,
           contextWindow: val.contextWindow ?? 200_000,
+          totalCost: val.totalCost ?? 0,
         });
       }
     });

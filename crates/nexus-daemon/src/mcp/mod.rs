@@ -11,12 +11,39 @@ use server::McpServer;
 /// Manages all MCP server connections, routes tool calls.
 pub struct McpManager {
     servers: Vec<McpServer>,
-    /// Maps tool_name → server index in `servers`
-    tool_routing: HashMap<String, usize>,
+    /// Maps namespaced tool name → (server index, original tool name)
+    tool_routing: HashMap<String, (usize, String)>,
+}
+
+/// Sanitize a server name into a valid tool name component.
+/// Lowercase, replace non-alphanumeric with underscore, collapse runs.
+fn sanitize_name(name: &str) -> String {
+    let s: String = name
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+        .collect();
+    // Collapse consecutive underscores
+    let mut result = String::with_capacity(s.len());
+    let mut prev_underscore = false;
+    for c in s.chars() {
+        if c == '_' {
+            if !prev_underscore {
+                result.push(c);
+            }
+            prev_underscore = true;
+        } else {
+            result.push(c);
+            prev_underscore = false;
+        }
+    }
+    result.trim_matches('_').to_string()
 }
 
 impl McpManager {
     /// Spawn and connect to all configured MCP servers.
+    ///
+    /// All MCP tools are namespaced as `mcp_<server_name>__<tool_name>` to
+    /// avoid collisions with built-in tools or other MCP servers.
     pub async fn from_configs(configs: &[McpServerConfig]) -> Self {
         let mut servers = Vec::new();
         let mut tool_routing = HashMap::new();
@@ -25,25 +52,27 @@ impl McpManager {
             match McpServer::spawn(config).await {
                 Ok(srv) => {
                     let idx = servers.len();
+                    let prefix = sanitize_name(&config.name);
+
                     for tool in srv.tools() {
-                        let name = tool.name.to_string();
-                        if tool_routing.contains_key(&name) {
-                            let prefixed = format!("{}__{}", config.id, name);
+                        let original = tool.name.to_string();
+                        let namespaced = format!("mcp_{prefix}__{original}");
+
+                        if tool_routing.contains_key(&namespaced) {
                             tracing::warn!(
-                                tool = %name,
-                                server = %config.id,
-                                prefixed = %prefixed,
-                                "Tool name conflict, prefixing"
+                                tool = %original,
+                                namespaced = %namespaced,
+                                server = %config.name,
+                                "Duplicate namespaced tool name, skipping"
                             );
-                            tool_routing.insert(prefixed, idx);
                         } else {
-                            tool_routing.insert(name, idx);
+                            tool_routing.insert(namespaced, (idx, original));
                         }
                     }
                     servers.push(srv);
                 }
                 Err(e) => {
-                    tracing::error!(server = %config.id, error = %e, "Failed to start MCP server");
+                    tracing::error!(server = %config.name, error = %e, "Failed to start MCP server");
                 }
             }
         }
@@ -73,30 +102,26 @@ impl McpManager {
     }
 
     fn tools_inner(&self, server_ids: Option<&[String]>) -> Vec<AnthropicTool> {
-        let allowed: Option<HashSet<&str>> = server_ids.map(|ids| ids.iter().map(|s| s.as_str()).collect());
+        let allowed: Option<HashSet<&str>> =
+            server_ids.map(|ids| ids.iter().map(|s| s.as_str()).collect());
 
         let mut result = Vec::new();
 
-        for (routed_name, &server_idx) in &self.tool_routing {
-            let server = &self.servers[server_idx];
+        for (namespaced_name, (server_idx, original_name)) in &self.tool_routing {
+            let server = &self.servers[*server_idx];
 
-            // Filter by allowed server IDs if specified
             if let Some(ref allowed_set) = allowed {
                 if !allowed_set.contains(server.id.as_str()) {
                     continue;
                 }
             }
 
-            let original_name = routed_name
-                .strip_prefix(&format!("{server_id}__", server_id = server.id))
-                .unwrap_or(routed_name);
-
-            if let Some(tool) = server.tools().iter().find(|t| t.name == original_name) {
+            if let Some(tool) = server.tools().iter().find(|t| t.name == *original_name) {
                 let schema = serde_json::to_value(&tool.input_schema)
                     .unwrap_or_else(|_| serde_json::json!({"type": "object"}));
 
                 result.push(AnthropicTool {
-                    name: routed_name.clone(),
+                    name: namespaced_name.clone(),
                     description: tool
                         .description
                         .as_deref()
@@ -110,24 +135,20 @@ impl McpManager {
         result
     }
 
-    /// Call a tool by name, routing to the correct MCP server.
+    /// Call a tool by its namespaced name, routing to the correct MCP server.
     pub async fn call_tool(
         &self,
         name: &str,
         args_json: &str,
     ) -> (String, bool) {
-        let Some(&server_idx) = self.tool_routing.get(name) else {
+        let Some((server_idx, original_name)) = self.tool_routing.get(name) else {
             return (
                 format!("Unknown tool '{}'. No MCP server provides this tool.", name),
                 true,
             );
         };
 
-        let server = &self.servers[server_idx];
-
-        let original_name = name
-            .strip_prefix(&format!("{server_id}__", server_id = server.id))
-            .unwrap_or(name);
+        let server = &self.servers[*server_idx];
 
         let arguments: Option<serde_json::Map<String, serde_json::Value>> =
             match serde_json::from_str(args_json) {
@@ -155,5 +176,19 @@ impl McpManager {
         for server in &self.servers {
             server.shutdown().await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_name_basic() {
+        assert_eq!(sanitize_name("filesystem"), "filesystem");
+        assert_eq!(sanitize_name("My Server"), "my_server");
+        assert_eq!(sanitize_name("git-hub"), "git_hub");
+        assert_eq!(sanitize_name("  spaces  "), "spaces");
+        assert_eq!(sanitize_name("A--B__C"), "a_b_c");
     }
 }

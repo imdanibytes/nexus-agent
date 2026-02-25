@@ -3,7 +3,7 @@ use serde::Deserialize;
 
 use crate::anthropic::types::{ContentBlock, Message, Role, Tool};
 use crate::ask_user::PendingQuestionStore;
-use crate::config::FetchConfig;
+use crate::config::{FetchConfig, FilesystemConfig};
 use crate::mcp::McpManager;
 use crate::provider::InferenceProvider;
 use crate::tasks::store::TaskStateStore;
@@ -230,10 +230,14 @@ pub struct SubAgentHandler<'a> {
     pub temperature: Option<f32>,
     pub mcp: &'a McpManager,
     pub fetch_config: &'a FetchConfig,
+    pub filesystem_config: &'a FilesystemConfig,
     pub task_store: &'a tokio::sync::RwLock<TaskStateStore>,
     pub pending_questions: &'a tokio::sync::RwLock<PendingQuestionStore>,
     pub parent_messages: &'a [Message],
     pub parent_tools: &'a [Tool],
+    /// Cumulative cost so far (prior_cost + parent turn_cost) so sub-agent
+    /// usage_update events show the correct running total.
+    pub cumulative_cost: f64,
 }
 
 #[async_trait]
@@ -309,11 +313,13 @@ impl ToolHandler for SubAgentHandler<'_> {
             self.temperature,
             self.mcp,
             self.fetch_config,
+            self.filesystem_config,
             self.task_store,
             self.pending_questions,
             ctx.tx,
             ctx.cancel.clone(),
             1, // depth = 1: sub-agent won't get sub_agent tool
+            self.cumulative_cost, // pass parent's running total for correct usage_update display
         )
         .await;
 

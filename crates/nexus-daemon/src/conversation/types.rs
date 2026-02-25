@@ -17,6 +17,11 @@ pub struct ConversationUsage {
     pub input_tokens: u32,
     pub output_tokens: u32,
     pub context_window: u32,
+    /// Cumulative cost in USD across the entire conversation lifetime.
+    /// This value only ever increases — it is never reset by compaction
+    /// or new turns. Persisted to disk.
+    #[serde(default)]
+    pub total_cost: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

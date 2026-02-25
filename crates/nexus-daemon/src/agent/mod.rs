@@ -13,14 +13,14 @@ use uuid::Uuid;
 use crate::anthropic::types::*;
 use crate::ask_user::PendingQuestionStore;
 use crate::mcp::McpManager;
-use crate::config::FetchConfig;
+use crate::config::{FetchConfig, FilesystemConfig};
 use crate::provider::InferenceProvider;
 use crate::system_prompt::fence_tool_result;
 use crate::tasks::store::TaskStateStore;
 use events::AgUiEvent;
 use sub_agent::SubAgentHandler;
 use tool_dispatch::{
-    AskUserHandler, FetchHandler, McpToolHandler, TaskToolHandler, ToolContext,
+    AskUserHandler, FetchHandler, FilesystemHandler, McpToolHandler, TaskToolHandler, ToolContext,
 };
 
 const MAX_ROUNDS: usize = 50;
@@ -42,6 +42,8 @@ pub struct AgentTurnResult {
     pub input_tokens: u32,
     pub output_tokens: u32,
     pub context_window: u32,
+    /// Cost incurred during this turn only (USD).
+    pub turn_cost: f64,
     /// If the turn ended with an error, this contains the error message.
     pub error: Option<String>,
     /// Structured error details (serialized ProviderError) for the frontend.
@@ -60,11 +62,13 @@ pub async fn run_agent_turn(
     temperature: Option<f32>,
     mcp: &McpManager,
     fetch_config: &FetchConfig,
+    filesystem_config: &FilesystemConfig,
     task_store: &tokio::sync::RwLock<TaskStateStore>,
     pending_questions: &tokio::sync::RwLock<PendingQuestionStore>,
     tx: &broadcast::Sender<AgUiEvent>,
     cancel: CancellationToken,
     depth: u32,
+    prior_cost: f64,
 ) -> Result<AgentTurnResult> {
     let run_id = Uuid::new_v4().to_string();
 
@@ -84,6 +88,7 @@ pub async fn run_agent_turn(
     let context_window = context_window_for_model(model);
     let mut turn_error: Option<String> = None;
     let mut turn_error_details: Option<serde_json::Value> = None;
+    let mut turn_cost: f64 = 0.0;
 
     for round in 0..MAX_ROUNDS {
         if cancel.is_cancelled() {
@@ -162,6 +167,11 @@ pub async fn run_agent_turn(
         // Accumulate and emit usage
         cumulative_input = round_input_tokens; // Latest call's input = full context
         cumulative_output += round_output_tokens;
+
+        // Calculate cost for this round
+        let round_cost = crate::pricing::calculate_cost(model, round_input_tokens, round_output_tokens);
+        turn_cost += round_cost;
+
         let _ = tx.send(AgUiEvent::Custom {
             thread_id: conversation_id.to_string(),
             name: "usage_update".to_string(),
@@ -169,6 +179,7 @@ pub async fn run_agent_turn(
                 "inputTokens": cumulative_input,
                 "outputTokens": cumulative_output,
                 "contextWindow": context_window,
+                "totalCost": prior_cost + turn_cost,
             }),
         });
 
@@ -192,6 +203,7 @@ pub async fn run_agent_turn(
                 let ask_handler = AskUserHandler { pending_questions };
                 let task_handler = TaskToolHandler { task_store };
                 let fetch_handler = FetchHandler { fetch_config };
+                let fs_handler = FilesystemHandler::new(filesystem_config);
                 let sub_agent_handler = SubAgentHandler {
                     provider,
                     model,
@@ -199,14 +211,16 @@ pub async fn run_agent_turn(
                     temperature,
                     mcp,
                     fetch_config,
+                    filesystem_config,
                     task_store,
                     pending_questions,
                     parent_messages: &messages,
                     parent_tools: &tools,
+                    cumulative_cost: prior_cost + turn_cost,
                 };
                 let mcp_handler = McpToolHandler { mcp };
                 let mut handlers: Vec<&dyn tool_dispatch::ToolHandler> =
-                    vec![&ask_handler, &task_handler, &fetch_handler];
+                    vec![&ask_handler, &task_handler, &fetch_handler, &fs_handler];
                 if depth == 0 {
                     handlers.push(&sub_agent_handler);
                 }
@@ -322,6 +336,7 @@ pub async fn run_agent_turn(
         input_tokens: cumulative_input,
         output_tokens: cumulative_output,
         context_window,
+        turn_cost,
         error: turn_error,
         error_details: turn_error_details,
     })
@@ -504,9 +519,5 @@ async fn consume_stream(
 }
 
 pub fn context_window_for_model(model: &str) -> u32 {
-    if model.contains("opus") || model.contains("sonnet") || model.contains("haiku") {
-        200_000
-    } else {
-        200_000
-    }
+    crate::pricing::context_window(model)
 }

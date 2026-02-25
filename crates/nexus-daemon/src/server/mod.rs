@@ -1,4 +1,5 @@
 pub mod agent_api;
+pub mod browse;
 pub mod chat;
 pub mod conversations;
 pub mod mcp_api;
@@ -6,6 +7,7 @@ pub mod providers;
 pub mod services;
 pub mod sse;
 pub mod turn;
+pub mod workspace_api;
 
 use axum::extract::State;
 use axum::routing::{get, patch, post, put};
@@ -15,8 +17,10 @@ use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
 use crate::anthropic::AnthropicClient;
-use crate::config::NexusConfig;
+use crate::config::{FilesystemConfig, NexusConfig};
+use crate::workspace::WorkspaceStore;
 use sse::SseHub;
+use tokio::sync::RwLock;
 
 pub use services::{AgentService, ChatService, McpService};
 
@@ -25,6 +29,11 @@ pub struct AppState {
     pub chat: Arc<ChatService>,
     pub agents: Arc<AgentService>,
     pub mcp: Arc<McpService>,
+    pub workspaces: RwLock<WorkspaceStore>,
+    /// Base filesystem config from nexus.json (without workspace paths merged).
+    pub base_filesystem_config: FilesystemConfig,
+    /// Effective filesystem config (workspaces + base). Updated on workspace CRUD.
+    pub effective_fs_config: RwLock<FilesystemConfig>,
     pub sse_hub: SseHub,
     /// Anthropic client used only for title generation (from ANTHROPIC_API_KEY env)
     pub title_client: Option<AnthropicClient>,
@@ -106,6 +115,17 @@ pub fn build_router(state: AppState, ui_dist_path: &str) -> Router {
             "/api/mcp-servers/{id}",
             put(mcp_api::update).delete(mcp_api::delete),
         )
+        // Workspaces
+        .route(
+            "/api/workspaces",
+            get(workspace_api::list).post(workspace_api::create),
+        )
+        .route(
+            "/api/workspaces/{id}",
+            put(workspace_api::update).delete(workspace_api::delete),
+        )
+        // Folder browser (for workspace picker)
+        .route("/api/browse", get(browse::browse))
         // Ask-user answer endpoint
         .route("/api/chat/answer", post(chat::answer_question))
         // Tools
