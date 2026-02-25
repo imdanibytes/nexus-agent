@@ -180,7 +180,7 @@ pub async fn handle_builtin(
             }
 
             // Emit task_state_changed event
-            let store = task_store.read().await;
+            let mut store = task_store.write().await;
             if let Some(state) = store.get(conversation_id) {
                 let _ = tx.send(AgUiEvent::Custom {
                     thread_id: conversation_id.to_string(),
@@ -388,7 +388,7 @@ async fn handle_list_tasks(
     conversation_id: &str,
     task_store: &RwLock<TaskStateStore>,
 ) -> Result<serde_json::Value, String> {
-    let store = task_store.read().await;
+    let mut store = task_store.write().await;
     let state = match store.get(conversation_id) {
         Some(s) => s,
         None => {

@@ -54,7 +54,12 @@ pub async fn delete(
 ) -> StatusCode {
     let mut store = state.chat.conversations.write().await;
     match store.delete(&id) {
-        Ok(()) => StatusCode::NO_CONTENT,
+        Ok(()) => {
+            // Clean up associated task state (memory + disk)
+            let mut task_store = state.chat.task_store.write().await;
+            task_store.remove(&id);
+            StatusCode::NO_CONTENT
+        }
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
@@ -109,5 +114,12 @@ pub async fn switch_path(
         .save(&conv)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    Ok(Json(serde_json::to_value(&conv).unwrap()))
+    let mut value = serde_json::to_value(&conv).unwrap();
+    // Include task state if it exists
+    let mut task_store = state.chat.task_store.write().await;
+    let task_state = task_store.get_or_default(&id);
+    if task_state.plan.is_some() {
+        value["task_state"] = serde_json::to_value(&*task_state).unwrap();
+    }
+    Ok(Json(value))
 }

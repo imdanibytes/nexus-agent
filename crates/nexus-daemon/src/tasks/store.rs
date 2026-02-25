@@ -19,7 +19,13 @@ impl TaskStateStore {
     }
 
     /// Get the task state for a conversation, with mode derived from state.
-    pub fn get(&self, conversation_id: &str) -> Option<TaskState> {
+    /// Lazily loads from disk if not already in memory.
+    pub fn get(&mut self, conversation_id: &str) -> Option<TaskState> {
+        if !self.states.contains_key(conversation_id) {
+            if let Some(state) = self.load_from_disk(conversation_id) {
+                self.states.insert(conversation_id.to_string(), state);
+            }
+        }
         self.states.get(conversation_id).map(|s| {
             let mut state = s.clone();
             state.mode = derive_mode(&state);
@@ -51,6 +57,13 @@ impl TaskStateStore {
             .map_err(|e| format!("Failed to serialize task state: {}", e))?;
         std::fs::write(&path, json)
             .map_err(|e| format!("Failed to write task state to {}: {}", path.display(), e))
+    }
+
+    /// Remove task state for a conversation from memory and disk.
+    pub fn remove(&mut self, conversation_id: &str) {
+        self.states.remove(conversation_id);
+        let path = self.base_dir.join(format!("{}.json", conversation_id));
+        std::fs::remove_file(&path).ok();
     }
 
     /// Load task state from disk for a conversation.

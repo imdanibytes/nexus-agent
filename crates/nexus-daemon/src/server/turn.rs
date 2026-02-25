@@ -108,7 +108,7 @@ pub fn spawn_agent_turn(
             use crate::system_prompt::CurrentTaskInfo;
             use crate::tasks::types::{AgentMode, TaskStatus};
 
-            let ts = state_clone.chat.task_store.read().await;
+            let mut ts = state_clone.chat.task_store.write().await;
             match ts.get(&conversation_id) {
                 Some(state) => {
                     let mode_enum = state.mode;
