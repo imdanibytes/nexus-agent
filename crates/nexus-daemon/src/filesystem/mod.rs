@@ -276,8 +276,9 @@ pub fn execute(
     args_json: &str,
     validator: &PathValidator,
 ) -> Result<String, String> {
+    let raw = if args_json.is_empty() { "{}" } else { args_json };
     let args: serde_json::Value =
-        serde_json::from_str(args_json).map_err(|e| format!("Invalid arguments: {e}"))?;
+        serde_json::from_str(raw).map_err(|e| format!("Invalid arguments: {e}"))?;
 
     match name {
         READ_FILE | READ_TEXT_FILE => {
