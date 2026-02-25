@@ -21,7 +21,7 @@ use crate::conversation::types::{ChatMessage, MessagePart, MessageRole};
 
 const KEEP_RECENT_TOOL_RESULTS: usize = 3;
 const SUMMARIZE_KEEP_RECENT: usize = 10;
-const SUMMARIZE_MODEL: &str = "claude-sonnet-4-6-20250514";
+const SUMMARIZE_MODEL: &str = "claude-sonnet-4-6";
 const SUMMARIZE_MAX_TOKENS: u32 = 2048;
 
 /// Fraction of context window above which pruning activates.
