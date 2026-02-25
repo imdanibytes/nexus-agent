@@ -87,7 +87,9 @@ impl ToolFilter for ModeToolFilter {
                 "task_create_plan" | "task_list" | "ask_user"
             ),
             AgentMode::Planning => {
-                crate::tasks::tools::is_builtin(tool_name) || tool_name == "ask_user"
+                crate::tasks::tools::is_builtin(tool_name)
+                    || tool_name == "ask_user"
+                    || tool_name == "sub_agent"
             }
             AgentMode::Validation => !matches!(
                 tool_name,
@@ -130,6 +132,7 @@ mod tests {
             tool("task_update"),
             tool("task_list"),
             tool("ask_user"),
+            tool("sub_agent"),
             tool("mcp_read_file"),
             tool("mcp_write_file"),
             tool("mcp_run_tests"),
@@ -139,13 +142,13 @@ mod tests {
     #[test]
     fn general_mode_allows_all() {
         let result = apply(AgentMode::General, all_tools());
-        assert_eq!(result.len(), 9);
+        assert_eq!(result.len(), 10);
     }
 
     #[test]
     fn execution_mode_allows_all() {
         let result = apply(AgentMode::Execution, all_tools());
-        assert_eq!(result.len(), 9);
+        assert_eq!(result.len(), 10);
     }
 
     #[test]
@@ -155,7 +158,7 @@ mod tests {
     }
 
     #[test]
-    fn planning_mode_restricts_to_task_tools() {
+    fn planning_mode_restricts_to_task_tools_and_sub_agent() {
         let result = apply(AgentMode::Planning, all_tools());
         assert_eq!(
             result,
@@ -166,6 +169,7 @@ mod tests {
                 "task_update",
                 "task_list",
                 "ask_user",
+                "sub_agent",
             ]
         );
     }
@@ -176,10 +180,17 @@ mod tests {
         assert!(result.contains(&"task_update".to_string()));
         assert!(result.contains(&"task_list".to_string()));
         assert!(result.contains(&"ask_user".to_string()));
+        assert!(result.contains(&"sub_agent".to_string()));
         assert!(result.contains(&"mcp_read_file".to_string()));
         assert!(result.contains(&"mcp_run_tests".to_string()));
         assert!(!result.contains(&"task_create_plan".to_string()));
         assert!(!result.contains(&"task_approve_plan".to_string()));
         assert!(!result.contains(&"task_create".to_string()));
+    }
+
+    #[test]
+    fn discovery_mode_excludes_sub_agent() {
+        let result = apply(AgentMode::Discovery, all_tools());
+        assert!(!result.contains(&"sub_agent".to_string()));
     }
 }

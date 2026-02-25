@@ -97,10 +97,11 @@ pub fn spawn_agent_turn(
             }
         };
 
-        // Assemble all tools (MCP + built-in task tools + ask_user)
+        // Assemble all tools (MCP + built-in task tools + ask_user + sub_agent)
         let mut tools = tools;
         tools.extend(crate::tasks::tools::definitions());
         tools.push(crate::ask_user::tool_definition());
+        tools.push(crate::agent::sub_agent::tool_definition());
 
         // Derive agent mode + current task info from task state
         let (mode, mode_enum, current_task) = {
@@ -185,6 +186,7 @@ pub fn spawn_agent_turn(
             &state_clone.chat.pending_questions,
             &agent_tx,
             cancel,
+            0, // depth=0: parent turn, sub_agent tool available
         )
         .await;
         drop(mcp_guard);

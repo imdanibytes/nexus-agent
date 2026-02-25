@@ -1,4 +1,5 @@
 pub mod events;
+pub mod sub_agent;
 pub mod tool_dispatch;
 
 use std::time::Instant;
@@ -16,6 +17,7 @@ use crate::provider::InferenceProvider;
 use crate::system_prompt::fence_tool_result;
 use crate::tasks::store::TaskStateStore;
 use events::AgUiEvent;
+use sub_agent::SubAgentHandler;
 use tool_dispatch::{
     AskUserHandler, McpToolHandler, TaskToolHandler, ToolContext,
 };
@@ -60,6 +62,7 @@ pub async fn run_agent_turn(
     pending_questions: &tokio::sync::RwLock<PendingQuestionStore>,
     tx: &broadcast::Sender<AgUiEvent>,
     cancel: CancellationToken,
+    depth: u32,
 ) -> Result<AgentTurnResult> {
     let run_id = Uuid::new_v4().to_string();
 
@@ -186,9 +189,24 @@ pub async fn run_agent_turn(
 
                 let ask_handler = AskUserHandler { pending_questions };
                 let task_handler = TaskToolHandler { task_store };
+                let sub_agent_handler = SubAgentHandler {
+                    provider,
+                    model,
+                    max_tokens,
+                    temperature,
+                    mcp,
+                    task_store,
+                    pending_questions,
+                    parent_messages: &messages,
+                    parent_tools: &tools,
+                };
                 let mcp_handler = McpToolHandler { mcp };
-                let handlers: Vec<&dyn tool_dispatch::ToolHandler> =
-                    vec![&ask_handler, &task_handler, &mcp_handler];
+                let mut handlers: Vec<&dyn tool_dispatch::ToolHandler> =
+                    vec![&ask_handler, &task_handler];
+                if depth == 0 {
+                    handlers.push(&sub_agent_handler);
+                }
+                handlers.push(&mcp_handler);
 
                 for tc in &tool_calls {
                     let tool_start_ms = turn_start.elapsed().as_millis() as u64;
