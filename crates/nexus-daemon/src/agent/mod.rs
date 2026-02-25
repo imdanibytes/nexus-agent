@@ -412,8 +412,7 @@ pub async fn run_agent_turn(
 
     // Turn-level cache summary
     let cache_savings_pct = if cumulative_input > 0 {
-        (cumulative_cache_read as f64 / (cumulative_input + cumulative_cache_read) as f64
-            * 100.0) as u32
+        (cumulative_cache_read as f64 / cumulative_input as f64 * 100.0) as u32
     } else {
         0
     };
