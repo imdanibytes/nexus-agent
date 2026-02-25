@@ -432,7 +432,7 @@ async fn cancel_existing_turn(
 /// Handles both old format (ToolCall with inline result on assistant messages)
 /// and new format (separate ToolResult parts on user messages).
 /// Fences tool results and user text at the API boundary.
-fn build_api_messages(messages: &[&ChatMessage]) -> Vec<Message> {
+pub(crate) fn build_api_messages(messages: &[&ChatMessage]) -> Vec<Message> {
     let mut result = Vec::new();
 
     for msg in messages {

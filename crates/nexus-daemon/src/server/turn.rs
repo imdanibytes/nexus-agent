@@ -187,6 +187,60 @@ pub fn spawn_agent_turn(
 
         let mcp_guard = state_clone.mcp.mcp.read().await;
 
+        // ── Context compaction ──
+        let mut api_messages = api_messages;
+        let estimated_tokens = conv.usage.as_ref().map(|u| u.input_tokens).unwrap_or(0);
+
+        // Layer 1: Tool result pruning (mechanical, no LLM call)
+        let prune_threshold = (context_window as f64 * crate::compaction::PRUNE_THRESHOLD_PCT) as u32;
+        if estimated_tokens > prune_threshold {
+            crate::compaction::prune_tool_results(&mut api_messages, 3);
+        }
+
+        // Layer 2: LLM summarization (last resort)
+        let effective_window = context_window.saturating_sub(20_000);
+        let summarize_threshold = (effective_window as f64 * crate::compaction::SUMMARIZE_THRESHOLD_PCT) as u32;
+        if estimated_tokens > summarize_threshold {
+            if let Some(ref title_client) = state_clone.title_client {
+                match crate::compaction::summarize_messages(
+                    title_client,
+                    &conv.active_messages(),
+                    10,
+                )
+                .await
+                {
+                    Ok((summary_msg, consumed_ids)) => {
+                        conv.active_path.retain(|id| !consumed_ids.contains(id));
+                        conv.messages.push(summary_msg.clone());
+                        conv.active_path.insert(0, summary_msg.id.clone());
+
+                        // Rebuild API messages from compacted conversation
+                        api_messages = super::chat::build_api_messages(&conv.active_messages());
+
+                        // Save compacted conversation
+                        {
+                            let mut store = state_clone.chat.conversations.write().await;
+                            if let Err(e) = store.save(&conv) {
+                                tracing::error!("Failed to save compacted conversation: {}", e);
+                            }
+                        }
+
+                        let _ = agent_tx.send(AgUiEvent::Custom {
+                            thread_id: conversation_id.clone(),
+                            name: "compaction".to_string(),
+                            value: serde_json::json!({
+                                "consumed_count": consumed_ids.len(),
+                                "summary_id": summary_msg.id,
+                            }),
+                        });
+                    }
+                    Err(e) => {
+                        tracing::warn!("Compaction failed, continuing with full context: {}", e);
+                    }
+                }
+            }
+        }
+
         let result = agent::run_agent_turn(
             provider.as_ref(),
             &conversation_id,

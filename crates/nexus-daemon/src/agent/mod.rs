@@ -95,6 +95,7 @@ pub async fn run_agent_turn(
     let mut turn_error: Option<String> = None;
     let mut turn_error_details: Option<serde_json::Value> = None;
     let mut turn_cost: f64 = 0.0;
+    let mut retried_after_prune = false;
 
     for round in 0..MAX_ROUNDS {
         if cancel.is_cancelled() {
@@ -149,6 +150,18 @@ pub async fn run_agent_turn(
         {
             Ok(s) => s,
             Err(e) => {
+                // Retry once on ContextLength with aggressive pruning
+                if !retried_after_prune {
+                    if let Some(pe) = e.downcast_ref::<crate::provider::error::ProviderError>() {
+                        if matches!(pe.kind, crate::provider::error::ProviderErrorKind::ContextLength) {
+                            retried_after_prune = true;
+                            tracing::warn!("Context length exceeded, aggressive pruning and retrying");
+                            crate::compaction::prune_tool_results(&mut messages, 1);
+                            continue;
+                        }
+                    }
+                }
+
                 let details = e
                     .downcast_ref::<crate::provider::error::ProviderError>()
                     .and_then(|pe| serde_json::to_value(pe).ok());
