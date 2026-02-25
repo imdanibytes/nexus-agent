@@ -72,6 +72,11 @@ impl SystemPromptProvider for ToolGuidanceProvider {
              - You may call multiple tools in a single response when appropriate.\n\
              - Always explain what you found after using a tool.\n\
              - If a tool call fails, explain the error and try an alternative approach.\n\
+             - ALWAYS prefer the filesystem tools (read_file, write_file, edit_file, \
+             create_directory, move_file) over bash for reading, writing, creating, or \
+             moving files. Filesystem tools have path validation and safety checks that \
+             bash does not. Reserve bash for build commands, tests, git operations, package \
+             management, and other tasks that require a shell.\n\
              </tool_guidance>"
         ))
     }
