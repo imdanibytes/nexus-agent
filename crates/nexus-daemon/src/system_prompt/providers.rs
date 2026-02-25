@@ -1,4 +1,5 @@
 use chrono::Local;
+use std::sync::OnceLock;
 
 use super::{SystemPromptContext, SystemPromptProvider};
 
@@ -308,6 +309,117 @@ impl SystemPromptProvider for ConversationContextProvider {
             "<conversation_context>\n{}\n</conversation_context>",
             lines.join("\n"),
         ))
+    }
+}
+
+// ── 10. System Info ──
+
+pub struct SystemInfoProvider;
+
+/// Cached system info string — computed once per process lifetime.
+static SYSTEM_INFO: OnceLock<String> = OnceLock::new();
+
+fn gather_system_info() -> String {
+    let mut lines = Vec::new();
+
+    // OS
+    let os = std::env::consts::OS;
+    let arch = std::env::consts::ARCH;
+    lines.push(format!("OS: {} ({})", os, arch));
+
+    // OS version via uname
+    if let Ok(output) = std::process::Command::new("uname").arg("-r").output() {
+        if output.status.success() {
+            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            lines.push(format!("Kernel: {}", version));
+        }
+    }
+
+    // Shell
+    if let Ok(shell) = std::env::var("SHELL") {
+        lines.push(format!("Shell: {}", shell));
+    }
+
+    // CPU count
+    let cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    lines.push(format!("CPUs: {}", cpus));
+
+    // Total memory (platform-specific)
+    if let Some(mem) = total_memory_mb() {
+        if mem >= 1024 {
+            lines.push(format!("Memory: {:.1} GB", mem as f64 / 1024.0));
+        } else {
+            lines.push(format!("Memory: {} MB", mem));
+        }
+    }
+
+    // Home directory
+    if let Some(home) = dirs::home_dir() {
+        lines.push(format!("Home: {}", home.display()));
+    }
+
+    // Hostname
+    if let Ok(output) = std::process::Command::new("hostname").output() {
+        if output.status.success() {
+            let hostname = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !hostname.is_empty() {
+                lines.push(format!("Hostname: {}", hostname));
+            }
+        }
+    }
+
+    lines.join("\n")
+}
+
+/// Get total physical memory in MB, or None if unavailable.
+fn total_memory_mb() -> Option<u64> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("sysctl")
+            .arg("-n")
+            .arg("hw.memsize")
+            .output()
+            .ok()?;
+        if output.status.success() {
+            let bytes: u64 = String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .parse()
+                .ok()?;
+            return Some(bytes / (1024 * 1024));
+        }
+        None
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let content = std::fs::read_to_string("/proc/meminfo").ok()?;
+        for line in content.lines() {
+            if line.starts_with("MemTotal:") {
+                let kb: u64 = line
+                    .split_whitespace()
+                    .nth(1)?
+                    .parse()
+                    .ok()?;
+                return Some(kb / 1024);
+            }
+        }
+        None
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        None
+    }
+}
+
+impl SystemPromptProvider for SystemInfoProvider {
+    fn name(&self) -> &str {
+        "system_info"
+    }
+
+    fn provide(&self, _ctx: &SystemPromptContext) -> Option<String> {
+        let info = SYSTEM_INFO.get_or_init(gather_system_info);
+        Some(format!("<system_info>\n{}\n</system_info>", info))
     }
 }
 

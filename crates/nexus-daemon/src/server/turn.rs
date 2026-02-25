@@ -105,6 +105,8 @@ pub fn spawn_agent_turn(
         if state_clone.config.fetch.enabled {
             tools.push(crate::fetch::tool_definition());
         }
+        // Bash tool
+        tools.push(crate::bash::tool_definition());
         // Use effective filesystem config (workspaces + base allowed_directories)
         let effective_fs = state_clone.effective_fs_config.read().await.clone();
         tools.extend(crate::filesystem::tool_definitions(&effective_fs));

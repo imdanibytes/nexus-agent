@@ -20,7 +20,8 @@ use crate::tasks::store::TaskStateStore;
 use events::AgUiEvent;
 use sub_agent::SubAgentHandler;
 use tool_dispatch::{
-    AskUserHandler, FetchHandler, FilesystemHandler, McpToolHandler, TaskToolHandler, ToolContext,
+    AskUserHandler, BashHandler, FetchHandler, FilesystemHandler, McpToolHandler, TaskToolHandler,
+    ToolContext,
 };
 
 const MAX_ROUNDS: usize = 50;
@@ -229,6 +230,12 @@ pub async fn run_agent_turn(
                 let task_handler = TaskToolHandler { task_store };
                 let fetch_handler = FetchHandler { fetch_config };
                 let fs_handler = FilesystemHandler::new(filesystem_config);
+                let bash_handler = BashHandler {
+                    working_dir: filesystem_config
+                        .allowed_directories
+                        .first()
+                        .cloned(),
+                };
                 let sub_agent_handler = SubAgentHandler {
                     provider,
                     model,
@@ -245,7 +252,7 @@ pub async fn run_agent_turn(
                 };
                 let mcp_handler = McpToolHandler { mcp };
                 let mut handlers: Vec<&dyn tool_dispatch::ToolHandler> =
-                    vec![&ask_handler, &task_handler, &fetch_handler, &fs_handler];
+                    vec![&ask_handler, &task_handler, &fetch_handler, &fs_handler, &bash_handler];
                 if depth == 0 {
                     handlers.push(&sub_agent_handler);
                 }

@@ -4,6 +4,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::ask_user::{self, AskUserArgs, PendingQuestion, PendingQuestionStore, UserAnswer};
+use crate::bash;
 use crate::config::{FetchConfig, FilesystemConfig};
 use crate::fetch;
 use crate::filesystem;
@@ -250,6 +251,53 @@ impl ToolHandler for FilesystemHandler {
                 is_error: true,
             },
         }
+    }
+}
+
+// ── BashHandler ──
+
+pub struct BashHandler {
+    pub working_dir: Option<String>,
+}
+
+#[async_trait]
+impl ToolHandler for BashHandler {
+    fn can_handle(&self, tool_name: &str) -> bool {
+        bash::is_bash(tool_name)
+    }
+
+    async fn handle(&self, ctx: &ToolContext<'_>) -> ToolResult {
+        let args: serde_json::Value = serde_json::from_str(ctx.args_json)
+            .unwrap_or_else(|_| serde_json::json!({}));
+
+        let command = match args.get("command").and_then(|v| v.as_str()) {
+            Some(c) => c,
+            None => {
+                return ToolResult {
+                    content: "Missing required field: 'command'".to_string(),
+                    is_error: true,
+                };
+            }
+        };
+
+        let timeout_ms = args.get("timeout_ms").and_then(|v| v.as_u64());
+
+        let _ = ctx.tx.send(AgUiEvent::Custom {
+            thread_id: ctx.conversation_id.to_string(),
+            name: "activity_update".to_string(),
+            value: serde_json::json!({ "activity": format!("Running: {}",
+                if command.len() > 60 { &command[..60] } else { command }
+            )}),
+        });
+
+        let (content, is_error) = bash::execute(
+            command,
+            timeout_ms,
+            self.working_dir.as_deref(),
+        )
+        .await;
+
+        ToolResult { content, is_error }
     }
 }
 

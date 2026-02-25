@@ -2,6 +2,7 @@ mod agent;
 mod agent_config;
 mod anthropic;
 mod ask_user;
+mod bash;
 mod config;
 mod conversation;
 mod fetch;

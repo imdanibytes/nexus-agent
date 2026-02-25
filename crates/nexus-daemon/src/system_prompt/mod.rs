@@ -62,6 +62,7 @@ impl SystemPromptBuilder {
         Self::new()
             .register(MessageBoundaryProvider)
             .register(IdentityProvider)
+            .register(SystemInfoProvider)
             .register(ModeProvider)
             .register(WorkflowProvider)
             .register(CorePromptProvider)
