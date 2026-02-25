@@ -308,6 +308,7 @@ impl ToolHandler for SubAgentHandler<'_> {
             messages,
             tools,
             Some(config.system_prompt),
+            None, // sub-agents don't use state injection
             self.model,
             self.max_tokens,
             self.temperature,

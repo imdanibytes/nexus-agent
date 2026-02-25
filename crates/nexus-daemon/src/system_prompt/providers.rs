@@ -239,13 +239,38 @@ impl SystemPromptProvider for WorkflowProvider {
     }
 }
 
-// ── 7. Task Context ──
+// ── 7. State Protocol ──
+
+pub struct StateProtocolProvider;
+
+impl SystemPromptProvider for StateProtocolProvider {
+    fn name(&self) -> &str {
+        "state_protocol"
+    }
+
+    fn provide(&self, _ctx: &SystemPromptContext) -> Option<String> {
+        Some(
+            "<state_protocol>\n\
+             Runtime context (current time, task progress, context usage) is delivered \
+             via <state_update> messages in the conversation rather than in this system prompt. \
+             The most recent <state_update> reflects the current state.\n\
+             </state_protocol>"
+                .to_string(),
+        )
+    }
+}
+
+// ── 8. Task Context ──
 
 pub struct TaskContextProvider;
 
 impl SystemPromptProvider for TaskContextProvider {
     fn name(&self) -> &str {
         "task_context"
+    }
+
+    fn cacheable(&self) -> bool {
+        false
     }
 
     fn provide(&self, ctx: &SystemPromptContext) -> Option<String> {
@@ -266,13 +291,17 @@ impl SystemPromptProvider for TaskContextProvider {
     }
 }
 
-// ── 8. Datetime ──
+// ── 9. Datetime ──
 
 pub struct DatetimeProvider;
 
 impl SystemPromptProvider for DatetimeProvider {
     fn name(&self) -> &str {
         "datetime"
+    }
+
+    fn cacheable(&self) -> bool {
+        false
     }
 
     fn provide(&self, _ctx: &SystemPromptContext) -> Option<String> {
@@ -289,6 +318,10 @@ pub struct ConversationContextProvider;
 impl SystemPromptProvider for ConversationContextProvider {
     fn name(&self) -> &str {
         "conversation_context"
+    }
+
+    fn cacheable(&self) -> bool {
+        false
     }
 
     fn provide(&self, ctx: &SystemPromptContext) -> Option<String> {

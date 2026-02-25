@@ -164,10 +164,10 @@ pub fn spawn_agent_turn(
             "Tool filter applied"
         );
 
-        // Build composable system prompt
+        // Build composable system prompt (split: static cached, dynamic injected)
         let context_window = crate::agent::context_window_for_model(&model);
         let builder = SystemPromptBuilder::default_builder();
-        let full_system_prompt = builder.build(&SystemPromptContext {
+        let prompt_parts = builder.build_parts(&SystemPromptContext {
             conversation_title: conv.title.clone(),
             message_count: conv.active_path.len(),
             tool_names: tools.iter().map(|t| t.name.clone()).collect(),
@@ -192,7 +192,8 @@ pub fn spawn_agent_turn(
             &conversation_id,
             api_messages,
             tools,
-            Some(full_system_prompt),
+            Some(prompt_parts.system),
+            prompt_parts.state,
             &model,
             max_tokens,
             temperature,

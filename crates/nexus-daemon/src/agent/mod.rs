@@ -60,6 +60,7 @@ pub async fn run_agent_turn(
     messages: Vec<Message>,
     tools: Vec<Tool>,
     system_prompt: Option<String>,
+    state_update: Option<String>,
     model: &str,
     max_tokens: u32,
     temperature: Option<f32>,
@@ -101,6 +102,16 @@ pub async fn run_agent_turn(
             break;
         }
 
+        // Log system prompt hash on first round to track stability across turns.
+        if round == 0 {
+            if let Some(ref sp) = system_prompt {
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                sp.hash(&mut hasher);
+                tracing::info!(system_prompt_hash = hasher.finish(), "System prompt hash");
+            }
+        }
+
         tracing::debug!(round, tools = tools.len(), "Starting inference round");
 
         let round_span_id = format!("t-round-{}", round);
@@ -110,13 +121,28 @@ pub async fn run_agent_turn(
         let inference_start = Instant::now();
         let inference_start_ms = turn_start.elapsed().as_millis() as u64;
 
+        // Inject dynamic state as a synthetic user message before the last
+        // message in a per-round clone. The original `messages` stays clean so
+        // state doesn't accumulate across rounds.
+        let mut messages_for_api = messages.clone();
+        if let Some(ref state) = state_update {
+            let state_msg = Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text {
+                    text: state.clone(),
+                }],
+            };
+            let pos = messages_for_api.len().saturating_sub(1);
+            messages_for_api.insert(pos, state_msg);
+        }
+
         let stream = match provider
             .create_message_stream(
                 model,
                 max_tokens,
                 system_prompt.clone(),
                 temperature,
-                messages.clone(),
+                messages_for_api,
                 tools.clone(),
             )
             .await
@@ -185,6 +211,19 @@ pub async fn run_agent_turn(
         cumulative_output += round_output_tokens;
         cumulative_cache_creation += round_cache_creation;
         cumulative_cache_read += round_cache_read;
+
+        tracing::info!(
+            round,
+            input_tokens = round_input_tokens,
+            cache_read = round_cache_read,
+            cache_creation = round_cache_creation,
+            cache_hit_pct = if round_total_input > 0 {
+                (round_cache_read as f64 / round_total_input as f64 * 100.0) as u32
+            } else {
+                0
+            },
+            "Cache metrics"
+        );
 
         // Calculate cost for this round (cache-aware)
         let round_cost = crate::pricing::calculate_cost_with_cache(
@@ -370,6 +409,24 @@ pub async fn run_agent_turn(
         name: "timing".to_string(),
         value: serde_json::json!({ "spans": timing_spans }),
     });
+
+    // Turn-level cache summary
+    let cache_savings_pct = if cumulative_input > 0 {
+        (cumulative_cache_read as f64 / (cumulative_input + cumulative_cache_read) as f64
+            * 100.0) as u32
+    } else {
+        0
+    };
+    tracing::info!(
+        rounds = round_count,
+        total_input = cumulative_input,
+        total_output = cumulative_output,
+        total_cache_read = cumulative_cache_read,
+        total_cache_creation = cumulative_cache_creation,
+        cache_savings_pct,
+        turn_cost_usd = format!("{:.6}", turn_cost),
+        "Turn complete"
+    );
 
     let _ = tx.send(AgUiEvent::RunFinished {
         thread_id: conversation_id.to_string(),

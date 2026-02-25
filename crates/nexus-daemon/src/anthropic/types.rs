@@ -168,12 +168,13 @@ pub struct Usage {
 /// at up to 3 positions (out of the 4 allowed):
 /// 1. System prompt — converted from string to array format, last block cached
 /// 2. Last tool definition
-/// 3. Last cacheable content block of the last message
+/// 3. Last stable message — the message right before the `<state_update>`
+///    injection point. This is the growing conversation prefix that stays
+///    identical between turns, enabling cross-turn message caching.
 ///
-/// The system prompt is built once per turn and cloned for each tool-use round,
-/// so it's stable within a turn and benefits from caching across multi-round
-/// tool use. Cross-turn cache misses on system are expected (datetime changes)
-/// but the write cost is amortized by within-turn read hits.
+/// The system prompt is fully static (dynamic info is injected as a
+/// `<state_update>` user message). This means the system cache is
+/// write-once-read-forever within a conversation.
 pub fn inject_cache_control(body: &mut serde_json::Value) {
     let cc = serde_json::json!({"type": "ephemeral"});
 
@@ -203,21 +204,44 @@ pub fn inject_cache_control(body: &mut serde_json::Value) {
         }
     }
 
-    // Messages: cache the last message's last cacheable content block.
-    // Thinking blocks can't be directly cached, so we skip them.
+    // Messages: cache the last stable message (right before <state_update>).
+    //
+    // The state_update message is a synthetic user message injected per-round
+    // that changes each turn. Everything before it is the stable conversation
+    // prefix. By placing the breakpoint there, cross-turn cache reads grow
+    // with the conversation length.
+    //
+    // If no state_update is found, fall back to caching the second-to-last
+    // message (the last message is typically the current user input which
+    // changes every turn).
     if let Some(messages) = body.get_mut("messages") {
         if let Some(arr) = messages.as_array_mut() {
-            if let Some(last_msg) = arr.last_mut() {
-                if let Some(content) = last_msg.get_mut("content") {
-                    if let Some(blocks) = content.as_array_mut() {
-                        if let Some(block) = blocks
-                            .iter_mut()
-                            .rev()
-                            .find(|b| {
+            // Find the state_update message index (scanning from the end)
+            let state_idx = arr.iter().rposition(|msg| {
+                msg.get("content")
+                    .and_then(|c| c.as_array())
+                    .and_then(|blocks| blocks.first())
+                    .and_then(|b| b.get("text"))
+                    .and_then(|t| t.as_str())
+                    .is_some_and(|t| t.starts_with("<state_update>"))
+            });
+
+            // Target: the message right before the state_update (or second-to-last)
+            let target_idx = match state_idx {
+                Some(idx) if idx > 0 => Some(idx - 1),
+                None if arr.len() >= 2 => Some(arr.len() - 2),
+                _ => None,
+            };
+
+            if let Some(idx) = target_idx {
+                if let Some(msg) = arr.get_mut(idx) {
+                    if let Some(content) = msg.get_mut("content") {
+                        if let Some(blocks) = content.as_array_mut() {
+                            if let Some(block) = blocks.iter_mut().rev().find(|b| {
                                 b.get("type").and_then(|t| t.as_str()) != Some("thinking")
-                            })
-                        {
-                            block["cache_control"] = cc;
+                            }) {
+                                block["cache_control"] = cc;
+                            }
                         }
                     }
                 }
@@ -351,7 +375,7 @@ mod tests {
     }
 
     #[test]
-    fn inject_cache_control_caches_last_message_content_block() {
+    fn inject_cache_control_caches_message_before_state_update() {
         let mut body = serde_json::json!({
             "model": "claude-sonnet-4-6",
             "messages": [
@@ -365,6 +389,14 @@ mod tests {
                         {"type": "text", "text": "response"},
                         {"type": "tool_use", "id": "t1", "name": "fetch", "input": {}}
                     ]
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "<state_update>\ntime info\n</state_update>"}]
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "follow-up question"}]
                 }
             ],
             "tools": [],
@@ -372,15 +404,52 @@ mod tests {
         inject_cache_control(&mut body);
 
         let messages = body["messages"].as_array().unwrap();
-        // First message: no cache_control on its content
+        // First message: no cache_control
         assert!(messages[0]["content"][0].get("cache_control").is_none());
-        // Last message, last block (tool_use): should have cache_control
+        // Assistant message (before state_update): should have cache_control on last block
         assert_eq!(
             messages[1]["content"][1]["cache_control"]["type"],
             "ephemeral"
         );
-        // Last message, first block: no cache_control
-        assert!(messages[1]["content"][0].get("cache_control").is_none());
+        // State message: no cache_control (changes every turn)
+        assert!(messages[2]["content"][0].get("cache_control").is_none());
+        // Last message: no cache_control (changes every turn)
+        assert!(messages[3]["content"][0].get("cache_control").is_none());
+    }
+
+    #[test]
+    fn inject_cache_control_falls_back_to_second_to_last_without_state() {
+        let mut body = serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "hello"}]
+                },
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "response"},
+                        {"type": "tool_use", "id": "t1", "name": "fetch", "input": {}}
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "follow-up"}]
+                }
+            ],
+            "tools": [],
+        });
+        inject_cache_control(&mut body);
+
+        let messages = body["messages"].as_array().unwrap();
+        // Second-to-last (assistant): should have cache_control
+        assert_eq!(
+            messages[1]["content"][1]["cache_control"]["type"],
+            "ephemeral"
+        );
+        // Last message: no cache_control
+        assert!(messages[2]["content"][0].get("cache_control").is_none());
     }
 
     #[test]
@@ -389,18 +458,30 @@ mod tests {
             "model": "claude-sonnet-4-6",
             "messages": [
                 {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "hello"}]
+                },
+                {
                     "role": "assistant",
                     "content": [
                         {"type": "text", "text": "before thinking"},
                         {"type": "thinking", "thinking": "internal thought"}
                     ]
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "<state_update>\ninfo\n</state_update>"}]
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "question"}]
                 }
             ],
             "tools": [],
         });
         inject_cache_control(&mut body);
 
-        let content = body["messages"][0]["content"].as_array().unwrap();
+        let content = body["messages"][1]["content"].as_array().unwrap();
         // Thinking block should NOT have cache_control
         assert!(content[1].get("cache_control").is_none());
         // Text block (last non-thinking) should have cache_control
