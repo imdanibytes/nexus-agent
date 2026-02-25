@@ -48,41 +48,7 @@ impl SystemPromptProvider for IdentityProvider {
     }
 }
 
-// ── 3. Tool Guidance ──
-
-pub struct ToolGuidanceProvider;
-
-impl SystemPromptProvider for ToolGuidanceProvider {
-    fn name(&self) -> &str {
-        "tool_guidance"
-    }
-
-    fn provide(&self, ctx: &SystemPromptContext) -> Option<String> {
-        if ctx.tool_names.is_empty() {
-            return None;
-        }
-
-        let tool_list = ctx.tool_names.join(", ");
-        Some(format!(
-            "<tool_guidance>\n\
-             You have access to the following tools: {tool_list}\n\n\
-             Guidelines:\n\
-             - Use tools when they can help answer the user's question more accurately.\n\
-             - Prefer using tools over guessing when factual information is needed.\n\
-             - You may call multiple tools in a single response when appropriate.\n\
-             - Always explain what you found after using a tool.\n\
-             - If a tool call fails, explain the error and try an alternative approach.\n\
-             - ALWAYS prefer the filesystem tools (read_file, write_file, edit_file, \
-             create_directory, move_file) over bash for reading, writing, creating, or \
-             moving files. Filesystem tools have path validation and safety checks that \
-             bash does not. Reserve bash for build commands, tests, git operations, package \
-             management, and other tasks that require a shell.\n\
-             </tool_guidance>"
-        ))
-    }
-}
-
-// ── 4. Core Prompt (user's custom system prompt) ──
+// ── 3. Core Prompt (user's custom system prompt) ──
 
 pub struct CorePromptProvider;
 
@@ -110,6 +76,10 @@ pub struct ModeProvider;
 impl SystemPromptProvider for ModeProvider {
     fn name(&self) -> &str {
         "mode"
+    }
+
+    fn cacheable(&self) -> bool {
+        false
     }
 
     fn provide(&self, ctx: &SystemPromptContext) -> Option<String> {
