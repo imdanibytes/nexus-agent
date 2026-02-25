@@ -5,6 +5,7 @@ mod ask_user;
 mod config;
 mod conversation;
 mod mcp;
+mod mechanics;
 mod provider;
 mod server;
 mod system_prompt;

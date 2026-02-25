@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::agent;
 use crate::agent::events::AgUiEvent;
 use crate::agent::AgentTurnResult;
-use crate::anthropic::types::{ContentBlock, Message, MessagesRequest, Role};
+use crate::anthropic::types::{ContentBlock, Message, Role};
 use crate::conversation::types::{
     ChatMessage, Conversation, ConversationUsage, MessagePart, MessageRole,
 };
@@ -265,9 +265,10 @@ pub fn spawn_agent_turn(
 
                 if turn_error.is_none() && needs_title {
                     let active = conv.active_messages();
-                    generate_title(
-                        state_clone.clone(),
-                        conversation_id.clone(),
+                    crate::mechanics::auto_title::generate_title(
+                        &state_clone,
+                        &conversation_id,
+                        &conv.title,
                         &active,
                     )
                     .await;
@@ -373,81 +374,3 @@ fn api_messages_to_chat(
         .collect()
 }
 
-/// Generate a short title for a conversation and broadcast it.
-async fn generate_title(
-    state: Arc<AppState>,
-    conversation_id: String,
-    messages: &[&ChatMessage],
-) {
-    let mut summary = String::new();
-    for msg in messages.iter().take(4) {
-        let role = match msg.role {
-            MessageRole::User => "User",
-            MessageRole::Assistant => "Assistant",
-        };
-        for part in &msg.parts {
-            if let MessagePart::Text { text } = part {
-                let truncated: String = text.chars().take(300).collect();
-                summary.push_str(&format!("{}: {}\n", role, truncated));
-            }
-        }
-    }
-
-    let request = MessagesRequest {
-        model: "claude-haiku-4-5-20251001".to_string(),
-        max_tokens: 30,
-        system: Some(
-            "Generate a very short title (3-6 words) for this conversation. \
-             Reply with only the title, no quotes or punctuation."
-                .to_string(),
-        ),
-        messages: vec![Message {
-            role: Role::User,
-            content: vec![ContentBlock::Text { text: summary }],
-        }],
-        tools: Vec::new(),
-        stream: false,
-        temperature: None,
-    };
-
-    let Some(ref title_client) = state.title_client else {
-        tracing::debug!("No title client configured, skipping title generation");
-        return;
-    };
-
-    match title_client.create_message(request).await {
-        Ok(response) => {
-            let title = response
-                .content
-                .iter()
-                .find_map(|block| {
-                    if let ContentBlock::Text { text } = block {
-                        Some(text.trim().to_string())
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_default();
-
-            if title.is_empty() {
-                return;
-            }
-
-            {
-                let mut store = state.chat.conversations.write().await;
-                if let Err(e) = store.rename(&conversation_id, &title) {
-                    tracing::error!("Failed to save title: {}", e);
-                }
-            }
-
-            let _ = state.chat.event_bridge.agent_tx().send(AgUiEvent::Custom {
-                thread_id: conversation_id,
-                name: "title_update".to_string(),
-                value: serde_json::json!({ "title": title }),
-            });
-        }
-        Err(e) => {
-            tracing::warn!("Title generation failed: {}", e);
-        }
-    }
-}
