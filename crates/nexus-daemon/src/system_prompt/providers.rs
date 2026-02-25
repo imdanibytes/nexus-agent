@@ -297,16 +297,21 @@ impl SystemPromptProvider for ConversationContextProvider {
     fn provide(&self, ctx: &SystemPromptContext) -> Option<String> {
         let mut lines = Vec::new();
 
-        if ctx.message_count > 0 {
-            lines.push(format!("Messages in conversation: {}", ctx.message_count));
+        if let Some(ref dir) = ctx.working_directory {
+            lines.push(format!("Working directory: {}", dir));
         }
 
         if ctx.context_window > 0 && ctx.input_tokens > 0 {
+            let remaining = ctx.context_window.saturating_sub(ctx.input_tokens);
             let pct = (ctx.input_tokens as f64 / ctx.context_window as f64 * 100.0) as u32;
             lines.push(format!(
-                "Context usage: {}% ({} / {} tokens)",
-                pct, ctx.input_tokens, ctx.context_window,
+                "Context: {}% used, ~{}K tokens remaining",
+                pct, remaining / 1000,
             ));
+        }
+
+        if ctx.total_cost > 0.0 {
+            lines.push(format!("Conversation cost: ${:.3}", ctx.total_cost));
         }
 
         if lines.is_empty() {

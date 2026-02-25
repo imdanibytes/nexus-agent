@@ -23,6 +23,10 @@ pub struct SystemPromptContext {
     pub context_window: u32,
     pub mode: String,
     pub current_task: Option<CurrentTaskInfo>,
+    /// Primary working directory (first allowed_directory).
+    pub working_directory: Option<String>,
+    /// Cumulative cost of the conversation so far (USD).
+    pub total_cost: f64,
 }
 
 /// A composable section of the system prompt.

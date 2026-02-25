@@ -166,6 +166,7 @@ pub fn spawn_agent_turn(
 
         // Build composable system prompt (split: static cached, dynamic injected)
         let context_window = crate::agent::context_window_for_model(&model);
+        let prior_cost = conv.usage.as_ref().map(|u| u.total_cost).unwrap_or(0.0);
         let builder = SystemPromptBuilder::default_builder();
         let prompt_parts = builder.build_parts(&SystemPromptContext {
             conversation_title: conv.title.clone(),
@@ -180,12 +181,11 @@ pub fn spawn_agent_turn(
             context_window,
             mode,
             current_task,
+            working_directory: effective_fs.allowed_directories.first().cloned(),
+            total_cost: prior_cost,
         });
 
         let mcp_guard = state_clone.mcp.mcp.read().await;
-
-        // Load prior cumulative cost from the conversation (survives compaction)
-        let prior_cost = conv.usage.as_ref().map(|u| u.total_cost).unwrap_or(0.0);
 
         let result = agent::run_agent_turn(
             provider.as_ref(),
