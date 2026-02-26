@@ -29,7 +29,7 @@ pub fn spawn_agent_turn(
     let agent_tx = state.chat.event_bridge.agent_tx();
     let state_clone = Arc::clone(&state);
 
-    let needs_title = conv.title == "New Chat";
+
     let last_active_id = conv.active_path.last().cloned();
 
     tokio::spawn(async move {
@@ -469,7 +469,7 @@ pub fn spawn_agent_turn(
                     drop(store);
                 }
 
-                if turn_error.is_none() && needs_title {
+                if turn_error.is_none() {
                     let active = conv.active_messages();
                     crate::mechanics::auto_title::generate_title(
                         &state_clone,
