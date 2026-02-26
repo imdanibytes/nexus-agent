@@ -58,16 +58,31 @@ class EventBus {
   private streams = new Map<string, TurnStream>();
   private openWaiters: Array<() => void> = [];
 
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
   /**
    * Open the global SSE connection to /api/events.
-   * No-op if already connected.
+   * No-op if already connected and OPEN/CONNECTING.
+   * Replaces CLOSED connections automatically.
    */
   connect(): void {
+    // If existing source is CLOSED, tear it down first
+    if (this.source && this.source.readyState === EventSource.CLOSED) {
+      this.source.close();
+      this.source = null;
+    }
+
     if (this.source) return;
+
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
 
     const es = new EventSource("/api/events");
 
     es.onopen = () => {
+      console.log("[EventBus] SSE connection opened");
       for (const resolve of this.openWaiters) resolve();
       this.openWaiters = [];
     };
@@ -82,7 +97,18 @@ class EventBus {
     };
 
     es.onerror = () => {
-      // EventSource auto-reconnects on transient errors.
+      // EventSource has three states: CONNECTING (0), OPEN (1), CLOSED (2).
+      // On transient errors it stays CONNECTING and auto-reconnects.
+      // On fatal errors (server gone) it moves to CLOSED — no auto-reconnect.
+      if (es.readyState === EventSource.CLOSED) {
+        console.warn("[EventBus] SSE connection closed by server, scheduling reconnect");
+        this.source = null;
+        // Retry after a short delay to avoid tight loops during server downtime
+        this.reconnectTimer = setTimeout(() => {
+          this.reconnectTimer = null;
+          this.connect();
+        }, 2000);
+      }
     };
 
     this.source = es;
@@ -91,17 +117,17 @@ class EventBus {
   /**
    * Resolves when the SSE connection is open.
    * Opens the connection if not already open.
+   * Replaces CLOSED connections before waiting.
    */
   ensureConnected(): Promise<void> {
     if (this.source?.readyState === EventSource.OPEN) {
       return Promise.resolve();
     }
 
-    if (!this.source) {
-      this.connect();
-    }
+    // connect() handles CLOSED → teardown → new connection
+    this.connect();
 
-    if (this.source!.readyState === EventSource.OPEN) {
+    if (this.source?.readyState === EventSource.OPEN) {
       return Promise.resolve();
     }
 
@@ -114,6 +140,10 @@ class EventBus {
    * Close the global SSE connection.
    */
   disconnect(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     if (!this.source) return;
     console.log("[EventBus] closing global EventSource");
     this.source.close();
