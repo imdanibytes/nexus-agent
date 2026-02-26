@@ -40,8 +40,3 @@ pub struct BgProcess {
     pub output_preview: Option<String>,
     pub output_size: u64,
 }
-
-#[derive(Debug, Clone)]
-pub struct PendingNotification {
-    pub process: BgProcess,
-}

@@ -5,6 +5,7 @@ pub mod conversations;
 #[cfg(debug_assertions)]
 pub mod debug;
 pub mod mcp_api;
+pub mod message_queue;
 pub mod providers;
 pub mod services;
 pub mod sse;
@@ -42,14 +43,11 @@ pub struct AppState {
     pub title_client: Option<AnthropicClient>,
 }
 
-pub fn build_router(state: AppState, ui_dist_path: &str) -> Router {
+pub fn build_router(state: AppState, queue_rx: tokio::sync::mpsc::UnboundedReceiver<String>, ui_dist_path: &str) -> Router {
     let state = Arc::new(state);
 
-    // Start background process idle watcher
-    crate::bg_process::manager::start_idle_watcher(
-        state.chat.process_manager.clone(),
-        Arc::clone(&state),
-    );
+    // Start event-driven queue watcher for idle conversations
+    start_queue_watcher(queue_rx, Arc::clone(&state));
 
     let mut router = Router::new()
         // Chat
@@ -215,4 +213,56 @@ async fn stop_process(
         Ok(()) => StatusCode::OK,
         Err(_) => StatusCode::NOT_FOUND,
     }
+}
+
+/// Event-driven queue watcher. Receives conversation IDs when messages are
+/// enqueued. If no turn is active for that conversation, drains the queue
+/// and spawns a follow-up turn.
+fn start_queue_watcher(
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<String>,
+    state: Arc<AppState>,
+) {
+    tokio::spawn(async move {
+        while let Some(conv_id) = rx.recv().await {
+            // If a turn is active, the after-turn drain will handle it
+            let active = state.chat.active_cancel.lock().await;
+            let turn_active = active
+                .as_ref()
+                .map(|(id, _)| id == &conv_id)
+                .unwrap_or(false);
+            drop(active);
+
+            if turn_active {
+                continue;
+            }
+
+            let queued = state.chat.message_queue.drain(&conv_id).await;
+            if queued.is_empty() {
+                continue;
+            }
+
+            tracing::info!(
+                conversation_id = %conv_id,
+                count = queued.len(),
+                "Queue watcher: injecting messages into idle conversation"
+            );
+
+            let conv = {
+                let store = state.chat.conversations.read().await;
+                match store.get(&conv_id) {
+                    Ok(Some(c)) => c,
+                    Ok(None) => {
+                        tracing::warn!(conversation_id = %conv_id, "Queue watcher: conversation not found");
+                        continue;
+                    }
+                    Err(e) => {
+                        tracing::warn!(conversation_id = %conv_id, "Queue watcher: failed to load: {}", e);
+                        continue;
+                    }
+                }
+            };
+
+            turn::drain_queue_and_follow_up(Arc::clone(&state), conv, conv_id, queued).await;
+        }
+    });
 }

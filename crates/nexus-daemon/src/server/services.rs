@@ -10,6 +10,7 @@ use crate::mcp::store::McpServerStore;
 use crate::mcp::McpManager;
 use crate::provider::{ProviderFactory, ProviderStore};
 use crate::tasks::store::TaskStateStore;
+use super::message_queue::MessageQueue;
 use super::sse::AgentEventBridge;
 
 /// Chat execution: conversations, cancellation, events, questions, tasks.
@@ -20,6 +21,7 @@ pub struct ChatService {
     pub pending_questions: RwLock<PendingQuestionStore>,
     pub task_store: RwLock<TaskStateStore>,
     pub process_manager: Arc<ProcessManager>,
+    pub message_queue: Arc<MessageQueue>,
 }
 
 /// Agent + provider configuration and client creation.

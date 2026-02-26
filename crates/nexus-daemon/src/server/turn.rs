@@ -399,24 +399,35 @@ pub fn spawn_agent_turn(
                     .await;
                 }
 
-                // Check for pending background process notifications
-                let notifications = state_clone
-                    .chat
-                    .process_manager
-                    .drain_notifications(&conversation_id)
-                    .await;
-                if !notifications.is_empty() {
-                    inject_notifications_and_follow_up(
+                // Clear active_cancel so the queue watcher knows no turn is running
+                {
+                    let mut active = state_clone.chat.active_cancel.lock().await;
+                    if active.as_ref().map(|(id, _)| id == &conversation_id).unwrap_or(false) {
+                        *active = None;
+                    }
+                }
+
+                // Drain any queued messages (bg process notifications, etc.)
+                let queued = state_clone.chat.message_queue.drain(&conversation_id).await;
+                if !queued.is_empty() {
+                    drain_queue_and_follow_up(
                         state_clone.clone(),
                         conv,
                         conversation_id.clone(),
-                        notifications,
+                        queued,
                     )
                     .await;
                 }
             }
             Err(e) => {
                 tracing::error!("Agent turn panicked: {}", e);
+                // Clear active_cancel on error too
+                {
+                    let mut active = state_clone.chat.active_cancel.lock().await;
+                    if active.as_ref().map(|(id, _)| id == &conversation_id).unwrap_or(false) {
+                        *active = None;
+                    }
+                }
                 let _ = agent_tx.send(AgUiEvent::RunError {
                     thread_id: conversation_id.clone(),
                     run_id: String::new(),
@@ -430,33 +441,32 @@ pub fn spawn_agent_turn(
 
 // ── Private helpers ──
 
-/// Strip `<tool_response>` fencing from tool results.
-/// Fencing is added for the Anthropic API but should not be stored.
-/// Inject background process notifications into a conversation and spawn a follow-up turn.
+/// Drain queued messages into a conversation and spawn a follow-up agent turn.
 ///
-/// Used both by the after-turn drain (inline in spawn_agent_turn) and by the idle watcher
-/// (when a process completes while no turn is active).
-pub async fn inject_notifications_and_follow_up(
+/// Called after a turn ends (if messages arrived during the turn) or by the
+/// queue watcher (if messages arrived while no turn was active).
+pub async fn drain_queue_and_follow_up(
     state: Arc<AppState>,
     mut conv: Conversation,
     conversation_id: String,
-    notifications: Vec<crate::bg_process::types::PendingNotification>,
+    messages: Vec<super::message_queue::QueuedMessage>,
 ) {
-    let text = crate::bg_process::manager::format_notifications(&notifications);
-    let notify_msg = ChatMessage {
-        id: Uuid::new_v4().to_string(),
-        role: MessageRole::User,
-        parts: vec![MessagePart::Text { text }],
-        timestamp: Utc::now(),
-        parent_id: conv.active_path.last().cloned(),
-        metadata: Some(serde_json::json!({ "synthetic": true, "source": "bg_process" })),
-    };
-    conv.active_path.push(notify_msg.id.clone());
-    conv.messages.push(notify_msg);
+    for msg in messages {
+        let chat_msg = ChatMessage {
+            id: Uuid::new_v4().to_string(),
+            role: MessageRole::User,
+            parts: vec![MessagePart::Text { text: msg.text }],
+            timestamp: Utc::now(),
+            parent_id: conv.active_path.last().cloned(),
+            metadata: Some(msg.metadata),
+        };
+        conv.active_path.push(chat_msg.id.clone());
+        conv.messages.push(chat_msg);
+    }
 
     let mut store = state.chat.conversations.write().await;
     if let Err(e) = store.save(&conv) {
-        tracing::error!("Failed to save notification message: {}", e);
+        tracing::error!("Failed to save queued messages: {}", e);
     }
     drop(store);
 
@@ -465,7 +475,13 @@ pub async fn inject_notifications_and_follow_up(
     let tools: Vec<crate::anthropic::types::Tool> = mcp_guard.tools();
     drop(mcp_guard);
 
+    // Register the follow-up turn so the queue watcher skips this conversation
     let follow_up_cancel = tokio_util::sync::CancellationToken::new();
+    {
+        let mut active = state.chat.active_cancel.lock().await;
+        *active = Some((conversation_id.clone(), follow_up_cancel.clone()));
+    }
+
     spawn_agent_turn(
         state,
         conv,
@@ -477,6 +493,7 @@ pub async fn inject_notifications_and_follow_up(
     );
 }
 
+/// Strip `<tool_response>` fencing from tool results.
 fn unfence_tool_result(content: &str) -> String {
     let trimmed = content.trim();
     if let Some(rest) = trimmed.strip_prefix("<tool_response>") {

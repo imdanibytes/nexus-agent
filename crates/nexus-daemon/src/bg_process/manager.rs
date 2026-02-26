@@ -8,6 +8,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::agent::events::AgUiEvent;
+use crate::server::message_queue::{MessageQueue, QueuedMessage};
 use super::types::*;
 
 const MAX_CONCURRENT_PER_CONVERSATION: usize = 5;
@@ -16,9 +17,9 @@ const PREVIEW_CHARS: usize = 500;
 pub struct ProcessManager {
     processes: Mutex<HashMap<String, BgProcess>>,
     cancels: Mutex<HashMap<String, CancellationToken>>,
-    pending_notifications: Mutex<HashMap<String, Vec<PendingNotification>>>,
     base_dir: PathBuf,
     agent_tx: broadcast::Sender<AgUiEvent>,
+    message_queue: Arc<MessageQueue>,
 }
 
 #[derive(Debug)]
@@ -29,14 +30,18 @@ pub struct SpawnResult {
 }
 
 impl ProcessManager {
-    pub fn new(base_dir: PathBuf, agent_tx: broadcast::Sender<AgUiEvent>) -> Self {
+    pub fn new(
+        base_dir: PathBuf,
+        agent_tx: broadcast::Sender<AgUiEvent>,
+        message_queue: Arc<MessageQueue>,
+    ) -> Self {
         std::fs::create_dir_all(&base_dir).ok();
         Self {
             processes: Mutex::new(HashMap::new()),
             cancels: Mutex::new(HashMap::new()),
-            pending_notifications: Mutex::new(HashMap::new()),
             base_dir,
             agent_tx,
+            message_queue,
         }
     }
 
@@ -102,7 +107,7 @@ impl ProcessManager {
         })
     }
 
-    /// Mark a process as completed/failed and queue a notification.
+    /// Mark a process as completed/failed and enqueue a notification message.
     pub async fn complete(
         &self,
         process_id: &str,
@@ -144,21 +149,24 @@ impl ProcessManager {
         // Remove cancel token
         self.cancels.lock().await.remove(process_id);
 
-        // Queue notification
-        let mut pending = self.pending_notifications.lock().await;
-        pending
-            .entry(conv_id.clone())
-            .or_default()
-            .push(PendingNotification {
-                process: snapshot.clone(),
-            });
-
         // Emit SSE event for frontend
         let _ = self.agent_tx.send(AgUiEvent::Custom {
-            thread_id: conv_id,
+            thread_id: conv_id.clone(),
             name: "bg_process_completed".to_string(),
             value: serde_json::to_value(&snapshot).unwrap_or_default(),
         });
+
+        // Enqueue notification as a user-role message
+        let text = format_bg_notification(&snapshot);
+        self.message_queue
+            .enqueue(
+                &conv_id,
+                QueuedMessage {
+                    text,
+                    metadata: serde_json::json!({ "synthetic": true, "source": "bg_process" }),
+                },
+            )
+            .await;
     }
 
     /// Cancel a running process.
@@ -241,31 +249,6 @@ impl ProcessManager {
         }
     }
 
-    /// Drain all pending notifications for a conversation.
-    pub async fn drain_notifications(&self, conversation_id: &str) -> Vec<PendingNotification> {
-        let mut pending = self.pending_notifications.lock().await;
-        pending.remove(conversation_id).unwrap_or_default()
-    }
-
-    /// Check if there are pending notifications for a conversation.
-    pub async fn has_pending(&self, conversation_id: &str) -> bool {
-        let pending = self.pending_notifications.lock().await;
-        pending
-            .get(conversation_id)
-            .map(|v| !v.is_empty())
-            .unwrap_or(false)
-    }
-
-    /// Get all conversation IDs that have pending notifications.
-    pub async fn conversations_with_pending(&self) -> Vec<String> {
-        let pending = self.pending_notifications.lock().await;
-        pending
-            .iter()
-            .filter(|(_, v)| !v.is_empty())
-            .map(|(k, _)| k.clone())
-            .collect()
-    }
-
     /// Cancel all running processes for a conversation and clean up output files.
     pub async fn cleanup_conversation(&self, conversation_id: &str) {
         let mut procs = self.processes.lock().await;
@@ -287,10 +270,7 @@ impl ProcessManager {
         drop(cancels);
         drop(procs);
 
-        self.pending_notifications
-            .lock()
-            .await
-            .remove(conversation_id);
+        self.message_queue.clear(conversation_id).await;
     }
 
     /// Check if any conversation has active (running) processes.
@@ -302,120 +282,43 @@ impl ProcessManager {
     }
 }
 
-/// Start a background task that polls for pending notifications on idle conversations.
-///
-/// When a background process completes while no agent turn is active for that conversation,
-/// this watcher picks up the notification and spawns a follow-up turn.
-pub fn start_idle_watcher(
-    process_manager: Arc<ProcessManager>,
-    state: Arc<crate::server::AppState>,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
-        loop {
-            interval.tick().await;
+/// Format a completed background process into a notification message.
+fn format_bg_notification(process: &BgProcess) -> String {
+    let status = match process.status {
+        ProcessStatus::Completed => "completed",
+        ProcessStatus::Failed => "failed",
+        ProcessStatus::Cancelled => "cancelled",
+        ProcessStatus::Running => "running",
+    };
 
-            let pending_convs = process_manager.conversations_with_pending().await;
-            if pending_convs.is_empty() {
-                continue;
-            }
+    let mut text = format!(
+        "[System] Background process \"{}\" (ID: {}) {}",
+        process.label, process.id, status
+    );
 
-            for conv_id in pending_convs {
-                // Skip if a turn is currently active for this conversation
-                let active = state.chat.active_cancel.lock().await;
-                let turn_active = active
-                    .as_ref()
-                    .map(|(id, _)| id == &conv_id)
-                    .unwrap_or(false);
-                drop(active);
+    if let Some(code) = process.exit_code {
+        text.push_str(&format!(" | Exit code: {}", code));
+    }
 
-                if turn_active {
-                    continue;
-                }
+    text.push_str(&format!(" | Output: {} bytes", process.output_size));
+    text.push_str(&format!(
+        "\nUse process_output(process_id=\"{}\") to read the full output.",
+        process.id
+    ));
 
-                let notifications = process_manager.drain_notifications(&conv_id).await;
-                if notifications.is_empty() {
-                    continue;
-                }
+    if let Some(ref preview) = process.output_preview {
+        text.push_str(&format!("\n\nPreview:\n{}", preview));
+    }
 
-                tracing::info!(
-                    conversation_id = %conv_id,
-                    count = notifications.len(),
-                    "Idle watcher: injecting background process notifications"
-                );
-
-                // Load conversation
-                let conv = {
-                    let store = state.chat.conversations.read().await;
-                    match store.get(&conv_id) {
-                        Ok(Some(c)) => c,
-                        Ok(None) => {
-                            tracing::warn!(conversation_id = %conv_id, "Idle watcher: conversation not found");
-                            continue;
-                        }
-                        Err(e) => {
-                            tracing::warn!(conversation_id = %conv_id, "Idle watcher: failed to load conversation: {}", e);
-                            continue;
-                        }
-                    }
-                };
-
-                crate::server::turn::inject_notifications_and_follow_up(
-                    Arc::clone(&state),
-                    conv,
-                    conv_id,
-                    notifications,
-                )
-                .await;
-            }
-        }
-    })
+    text
 }
 
 #[cfg(test)]
 fn test_process_manager() -> ProcessManager {
     let dir = std::env::temp_dir().join(format!("nexus-bg-test-{}", Uuid::new_v4()));
     let (tx, _rx) = broadcast::channel(16);
-    ProcessManager::new(dir, tx)
-}
-
-/// Format pending notifications into a synthetic user message.
-pub fn format_notifications(notifications: &[PendingNotification]) -> String {
-    let mut text = String::from("[System] Background process completed.\n");
-
-    for notif in notifications {
-        let p = &notif.process;
-        let status = match p.status {
-            ProcessStatus::Completed => "completed",
-            ProcessStatus::Failed => "failed",
-            ProcessStatus::Cancelled => "cancelled",
-            ProcessStatus::Running => "running",
-        };
-
-        text.push_str(&format!(
-            "\nProcess: \"{}\" (ID: {})\nStatus: {}",
-            p.label, p.id, status
-        ));
-
-        if let Some(code) = p.exit_code {
-            text.push_str(&format!(" | Exit code: {}", code));
-        }
-
-        text.push_str(&format!(" | Output: {} bytes", p.output_size));
-
-        text.push_str(&format!(
-            "\nUse process_output(process_id=\"{}\") to read the full output.",
-            p.id
-        ));
-
-        if let Some(ref preview) = p.output_preview {
-            text.push_str(&format!("\n\nPreview:\n{}", preview));
-        }
-
-        text.push('\n');
-    }
-
-    text
+    let (queue, _queue_rx) = MessageQueue::new();
+    ProcessManager::new(dir, tx, Arc::new(queue))
 }
 
 #[cfg(test)]
@@ -442,7 +345,6 @@ mod tests {
         assert_eq!(listed[0].status, ProcessStatus::Running);
         assert_eq!(listed[0].label, "test");
 
-        // Cleanup
         pm.cleanup_conversation("conv1").await;
     }
 
@@ -472,7 +374,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn complete_updates_status_and_queues_notification() {
+    async fn complete_updates_status_and_enqueues_notification() {
         let pm = make_pm();
         let result = pm
             .spawn("conv1", "test".into(), "echo hi".into(), ProcessKind::Bash)
@@ -491,14 +393,11 @@ mod tests {
         assert_eq!(listed[0].output_preview.as_deref(), Some("hello world"));
         assert_eq!(listed[0].output_size, 11);
 
-        // Notification queued
-        assert!(pm.has_pending("conv1").await);
-        let notifs = pm.drain_notifications("conv1").await;
-        assert_eq!(notifs.len(), 1);
-        assert_eq!(notifs[0].process.id, result.process_id);
-
-        // Drained — no more pending
-        assert!(!pm.has_pending("conv1").await);
+        // Notification enqueued to message queue
+        let queued = pm.message_queue.drain("conv1").await;
+        assert_eq!(queued.len(), 1);
+        assert!(queued[0].text.contains("test"));
+        assert!(queued[0].text.contains("completed"));
 
         pm.cleanup_conversation("conv1").await;
     }
@@ -536,6 +435,10 @@ mod tests {
         let listed = pm.list("conv1").await;
         assert_eq!(listed[0].status, ProcessStatus::Completed);
         assert_eq!(listed[0].exit_code, Some(0)); // unchanged
+
+        // Only one notification enqueued
+        let queued = pm.message_queue.drain("conv1").await;
+        assert_eq!(queued.len(), 1);
 
         pm.cleanup_conversation("conv1").await;
     }
@@ -627,40 +530,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn drain_returns_empty_for_no_notifications() {
-        let pm = make_pm();
-        let notifs = pm.drain_notifications("conv1").await;
-        assert!(notifs.is_empty());
-    }
-
-    #[tokio::test]
-    async fn conversations_with_pending() {
-        let pm = make_pm();
-        let r1 = pm
-            .spawn("conv1", "a".into(), "a".into(), ProcessKind::Bash)
-            .await
-            .unwrap();
-        let r2 = pm
-            .spawn("conv2", "b".into(), "b".into(), ProcessKind::Bash)
-            .await
-            .unwrap();
-
-        pm.complete(&r1.process_id, Some(0), false).await;
-        pm.complete(&r2.process_id, Some(0), false).await;
-
-        let mut pending = pm.conversations_with_pending().await;
-        pending.sort();
-        assert_eq!(pending, vec!["conv1", "conv2"]);
-
-        pm.drain_notifications("conv1").await;
-        let pending = pm.conversations_with_pending().await;
-        assert_eq!(pending, vec!["conv2"]);
-
-        pm.cleanup_conversation("conv1").await;
-        pm.cleanup_conversation("conv2").await;
-    }
-
-    #[tokio::test]
     async fn cleanup_cancels_running_and_removes_files() {
         let pm = make_pm();
         let r1 = pm
@@ -676,7 +545,6 @@ mod tests {
         assert!(r1.cancel_token.is_cancelled());
         assert!(!r1.output_path.exists());
         assert!(pm.list("conv1").await.is_empty());
-        assert!(!pm.has_pending("conv1").await);
     }
 
     #[tokio::test]
@@ -697,27 +565,24 @@ mod tests {
     }
 
     #[test]
-    fn format_notifications_single() {
-        let notif = PendingNotification {
-            process: BgProcess {
-                id: "abc123".to_string(),
-                conversation_id: "conv1".to_string(),
-                label: "Running tests".to_string(),
-                command: "cargo test".to_string(),
-                kind: ProcessKind::Bash,
-                status: ProcessStatus::Completed,
-                started_at: Utc::now(),
-                completed_at: Some(Utc::now()),
-                exit_code: Some(0),
-                is_error: false,
-                output_path: PathBuf::from("/tmp/test.out"),
-                output_preview: Some("all tests pass".to_string()),
-                output_size: 1234,
-            },
+    fn format_notification_text() {
+        let process = BgProcess {
+            id: "abc123".to_string(),
+            conversation_id: "conv1".to_string(),
+            label: "Running tests".to_string(),
+            command: "cargo test".to_string(),
+            kind: ProcessKind::Bash,
+            status: ProcessStatus::Completed,
+            started_at: Utc::now(),
+            completed_at: Some(Utc::now()),
+            exit_code: Some(0),
+            is_error: false,
+            output_path: PathBuf::from("/tmp/test.out"),
+            output_preview: Some("all tests pass".to_string()),
+            output_size: 1234,
         };
 
-        let text = format_notifications(&[notif]);
-        assert!(text.contains("Background process completed"));
+        let text = format_bg_notification(&process);
         assert!(text.contains("Running tests"));
         assert!(text.contains("abc123"));
         assert!(text.contains("completed"));
@@ -725,44 +590,5 @@ mod tests {
         assert!(text.contains("1234 bytes"));
         assert!(text.contains("all tests pass"));
         assert!(text.contains("process_output"));
-    }
-
-    #[test]
-    fn format_notifications_multiple() {
-        let notifs: Vec<PendingNotification> = (0..3)
-            .map(|i| PendingNotification {
-                process: BgProcess {
-                    id: format!("p{i}"),
-                    conversation_id: "conv1".to_string(),
-                    label: format!("Task {i}"),
-                    command: format!("cmd{i}"),
-                    kind: ProcessKind::Bash,
-                    status: if i == 1 {
-                        ProcessStatus::Failed
-                    } else {
-                        ProcessStatus::Completed
-                    },
-                    started_at: Utc::now(),
-                    completed_at: Some(Utc::now()),
-                    exit_code: Some(if i == 1 { 1 } else { 0 }),
-                    is_error: i == 1,
-                    output_path: PathBuf::from("/tmp/test.out"),
-                    output_preview: None,
-                    output_size: 0,
-                },
-            })
-            .collect();
-
-        let text = format_notifications(&notifs);
-        assert!(text.contains("Task 0"));
-        assert!(text.contains("Task 1"));
-        assert!(text.contains("Task 2"));
-        assert!(text.contains("failed"));
-    }
-
-    #[test]
-    fn format_notifications_empty() {
-        let text = format_notifications(&[]);
-        assert!(text.contains("Background process completed"));
     }
 }

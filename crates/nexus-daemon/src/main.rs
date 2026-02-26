@@ -130,9 +130,13 @@ async fn main() -> Result<()> {
     let mcp_configs = McpServerStore::new(mcp_servers);
     let factory = Arc::new(ProviderFactory::new());
 
+    let (message_queue, queue_rx) = server::message_queue::MessageQueue::new();
+    let message_queue = Arc::new(message_queue);
+
     let process_manager = Arc::new(bg_process::ProcessManager::new(
         nexus_dir.join("bg-processes"),
         event_bridge.agent_tx(),
+        message_queue.clone(),
     ));
 
     let chat = Arc::new(ChatService {
@@ -142,6 +146,7 @@ async fn main() -> Result<()> {
         pending_questions: tokio::sync::RwLock::new(ask_user::PendingQuestionStore::new()),
         task_store: tokio::sync::RwLock::new(tasks::store::TaskStateStore::new(nexus_dir.join("tasks"))),
         process_manager,
+        message_queue,
     });
 
     let agents_svc = Arc::new(AgentService {
@@ -167,7 +172,7 @@ async fn main() -> Result<()> {
         title_client,
     };
 
-    let router = server::build_router(state, "ui/dist");
+    let router = server::build_router(state, queue_rx, "ui/dist");
 
     let addr = format!("{}:{}", config.server.host, config.server.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;

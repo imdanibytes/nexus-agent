@@ -354,10 +354,14 @@ pub async fn run_agent_turn(
                         .first()
                         .cloned(),
                     process_manager: process_manager.clone()
-                        .unwrap_or_else(|| Arc::new(ProcessManager::new(
-                            std::path::PathBuf::from("/tmp/nexus-bg"),
-                            tx.clone(),
-                        ))),
+                        .unwrap_or_else(|| {
+                            let (queue, _rx) = crate::server::message_queue::MessageQueue::new();
+                            Arc::new(ProcessManager::new(
+                                std::path::PathBuf::from("/tmp/nexus-bg"),
+                                tx.clone(),
+                                Arc::new(queue),
+                            ))
+                        }),
                 };
                 let sub_agent_handler = SubAgentHandler {
                     provider,
