@@ -128,19 +128,9 @@ pub async fn run_agent_turn(
         let inference_start = Instant::now();
         let inference_start_ms = turn_start.elapsed().as_millis() as u64;
 
-        // Inject dynamic state as a synthetic user message before the last
-        // message in a per-round clone. The original `messages` stays clean so
-        // state doesn't accumulate across rounds.
         let mut messages_for_api = messages.clone();
         if let Some(ref state) = state_update {
-            let state_msg = Message {
-                role: Role::User,
-                content: vec![ContentBlock::Text {
-                    text: state.clone(),
-                }],
-            };
-            let pos = messages_for_api.len().saturating_sub(1);
-            messages_for_api.insert(pos, state_msg);
+            inject_state_update(&mut messages_for_api, state);
         }
 
         let stream = match provider
@@ -746,4 +736,158 @@ async fn consume_stream(
 
 pub fn context_window_for_model(model: &str) -> u32 {
     crate::pricing::context_window(model)
+}
+
+/// Inject a `<state_update>` user message into the API messages.
+///
+/// Insertion point: before the last message, UNLESS the last message
+/// contains tool_result blocks. In that case, append AFTER it to
+/// preserve the tool_use→tool_result pairing the Anthropic API requires.
+fn inject_state_update(messages: &mut Vec<Message>, state: &str) {
+    let state_msg = Message {
+        role: Role::User,
+        content: vec![ContentBlock::Text {
+            text: state.to_string(),
+        }],
+    };
+    let last_is_tool_result = messages.last().map_or(false, |m| {
+        m.role == Role::User
+            && m.content
+                .iter()
+                .any(|b| matches!(b, ContentBlock::ToolResult { .. }))
+    });
+    let pos = if last_is_tool_result {
+        messages.len()
+    } else {
+        messages.len().saturating_sub(1)
+    };
+    messages.insert(pos, state_msg);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::anthropic::types::*;
+
+    fn user_text(text: &str) -> Message {
+        Message {
+            role: Role::User,
+            content: vec![ContentBlock::Text {
+                text: text.to_string(),
+            }],
+        }
+    }
+
+    fn assistant_text(text: &str) -> Message {
+        Message {
+            role: Role::Assistant,
+            content: vec![ContentBlock::Text {
+                text: text.to_string(),
+            }],
+        }
+    }
+
+    fn assistant_tool_use(id: &str, name: &str) -> Message {
+        Message {
+            role: Role::Assistant,
+            content: vec![ContentBlock::ToolUse {
+                id: id.to_string(),
+                name: name.to_string(),
+                input: serde_json::json!({}),
+            }],
+        }
+    }
+
+    fn user_tool_result(id: &str, content: &str) -> Message {
+        Message {
+            role: Role::User,
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: id.to_string(),
+                content: content.to_string(),
+                is_error: Some(false),
+            }],
+        }
+    }
+
+    // ── inject_state_update tests ──
+
+    #[test]
+    fn state_injected_before_user_prompt_on_round_0() {
+        let mut msgs = vec![user_text("hello")];
+        inject_state_update(&mut msgs, "<state/>");
+        assert_eq!(msgs.len(), 2);
+        // State should be BEFORE the user prompt
+        assert!(matches!(&msgs[0].content[0], ContentBlock::Text { text } if text == "<state/>"));
+        assert!(matches!(&msgs[1].content[0], ContentBlock::Text { text } if text == "hello"));
+    }
+
+    #[test]
+    fn state_preserves_tool_use_tool_result_pairing() {
+        // After round 0: [User(prompt), Assistant(tool_use), User(tool_result)]
+        let mut msgs = vec![
+            user_text("prompt"),
+            assistant_tool_use("tc1", "bash"),
+            user_tool_result("tc1", "output"),
+        ];
+        inject_state_update(&mut msgs, "<state/>");
+
+        // State should be AFTER the tool_result (appended at end)
+        assert_eq!(msgs.len(), 4);
+        // tool_use at [1], tool_result at [2] — pairing preserved
+        assert!(matches!(&msgs[1].content[0], ContentBlock::ToolUse { id, .. } if id == "tc1"));
+        assert!(matches!(&msgs[2].content[0], ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "tc1"));
+        // State at [3]
+        assert!(matches!(&msgs[3].content[0], ContentBlock::Text { text } if text == "<state/>"));
+    }
+
+    #[test]
+    fn state_before_last_text_in_follow_up_turn() {
+        // Follow-up turn: [User(prompt), Assistant(tool_use), User(tool_result), Assistant(text), User(notification)]
+        let mut msgs = vec![
+            user_text("prompt"),
+            assistant_tool_use("tc1", "bash"),
+            user_tool_result("tc1", "output"),
+            assistant_text("got it"),
+            user_text("notification"),
+        ];
+        inject_state_update(&mut msgs, "<state/>");
+
+        // State should be BEFORE the last user text (notification)
+        assert_eq!(msgs.len(), 6);
+        assert!(matches!(&msgs[4].content[0], ContentBlock::Text { text } if text == "<state/>"));
+        assert!(matches!(&msgs[5].content[0], ContentBlock::Text { text } if text == "notification"));
+        // tool_use/tool_result pairing still intact at [1]/[2]
+        assert!(matches!(&msgs[1].content[0], ContentBlock::ToolUse { id, .. } if id == "tc1"));
+        assert!(matches!(&msgs[2].content[0], ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "tc1"));
+    }
+
+    #[test]
+    fn state_with_multiple_tool_rounds() {
+        // Round 0 tools + round 1 tools: last message is tool_result
+        let mut msgs = vec![
+            user_text("prompt"),
+            assistant_tool_use("tc1", "bash"),
+            user_tool_result("tc1", "out1"),
+            assistant_tool_use("tc2", "read"),
+            user_tool_result("tc2", "out2"),
+        ];
+        inject_state_update(&mut msgs, "<state/>");
+
+        assert_eq!(msgs.len(), 6);
+        // Both tool pairings preserved
+        assert!(matches!(&msgs[1].content[0], ContentBlock::ToolUse { id, .. } if id == "tc1"));
+        assert!(matches!(&msgs[2].content[0], ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "tc1"));
+        assert!(matches!(&msgs[3].content[0], ContentBlock::ToolUse { id, .. } if id == "tc2"));
+        assert!(matches!(&msgs[4].content[0], ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "tc2"));
+        // State appended at end
+        assert!(matches!(&msgs[5].content[0], ContentBlock::Text { text } if text == "<state/>"));
+    }
+
+    #[test]
+    fn state_on_empty_messages() {
+        let mut msgs: Vec<Message> = vec![];
+        inject_state_update(&mut msgs, "<state/>");
+        assert_eq!(msgs.len(), 1);
+        assert!(matches!(&msgs[0].content[0], ContentBlock::Text { text } if text == "<state/>"));
+    }
 }

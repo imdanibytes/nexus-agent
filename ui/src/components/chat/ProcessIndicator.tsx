@@ -1,13 +1,15 @@
 import { type FC, useMemo } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "@heroui/react";
-import { useProcessStore } from "../../stores/processStore";
+import { useProcessStore, type BgProcess } from "../../stores/processStore";
 import { useThreadListStore } from "../../stores/threadListStore";
 import { ProcessPanel } from "./ProcessPanel";
+
+const EMPTY: BgProcess[] = [];
 
 export const ProcessIndicator: FC = () => {
   const activeThreadId = useThreadListStore((s) => s.activeThreadId);
   const processes = useProcessStore((s) =>
-    activeThreadId ? (s.processes[activeThreadId] ?? []) : [],
+    activeThreadId ? (s.processes[activeThreadId] ?? EMPTY) : EMPTY,
   );
 
   const runningCount = useMemo(

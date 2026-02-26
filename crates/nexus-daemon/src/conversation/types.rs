@@ -390,3 +390,253 @@ pub enum MessagePart {
         is_error: bool,
     },
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_chat_msg(id: &str, role: MessageRole, parts: Vec<MessagePart>) -> ChatMessage {
+        ChatMessage {
+            id: id.to_string(),
+            role,
+            parts,
+            timestamp: Utc::now(),
+            parent_id: None,
+            metadata: None,
+        }
+    }
+
+    // ── build_api_messages_from_parts tests ──
+
+    #[test]
+    fn text_only_conversation() {
+        let msgs = vec![
+            make_chat_msg("1", MessageRole::User, vec![MessagePart::Text { text: "hi".into() }]),
+            make_chat_msg("2", MessageRole::Assistant, vec![MessagePart::Text { text: "hello".into() }]),
+        ];
+        let refs: Vec<&ChatMessage> = msgs.iter().collect();
+        let api = build_api_messages_from_parts(&refs);
+
+        assert_eq!(api.len(), 2);
+        assert_eq!(api[0].role, Role::User);
+        assert_eq!(api[1].role, Role::Assistant);
+    }
+
+    #[test]
+    fn tool_call_new_format_produces_correct_pairing() {
+        // New format: ToolCall on assistant (no inline result), ToolResult on user
+        let msgs = vec![
+            make_chat_msg("1", MessageRole::User, vec![MessagePart::Text { text: "do it".into() }]),
+            make_chat_msg(
+                "2",
+                MessageRole::Assistant,
+                vec![MessagePart::ToolCall {
+                    tool_call_id: "tc1".into(),
+                    tool_name: "bash".into(),
+                    args: serde_json::json!({"command": "ls"}),
+                    result: None,
+                    is_error: false,
+                }],
+            ),
+            make_chat_msg(
+                "3",
+                MessageRole::User,
+                vec![MessagePart::ToolResult {
+                    tool_call_id: "tc1".into(),
+                    result: "file.txt".into(),
+                    is_error: false,
+                }],
+            ),
+        ];
+        let refs: Vec<&ChatMessage> = msgs.iter().collect();
+        let api = build_api_messages_from_parts(&refs);
+
+        assert_eq!(api.len(), 3);
+
+        // [0] User text
+        assert_eq!(api[0].role, Role::User);
+        assert!(matches!(&api[0].content[0], ContentBlock::Text { .. }));
+
+        // [1] Assistant tool_use
+        assert_eq!(api[1].role, Role::Assistant);
+        assert!(matches!(&api[1].content[0], ContentBlock::ToolUse { id, .. } if id == "tc1"));
+
+        // [2] User tool_result
+        assert_eq!(api[2].role, Role::User);
+        assert!(matches!(&api[2].content[0], ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "tc1"));
+    }
+
+    #[test]
+    fn tool_call_legacy_inline_result_produces_separate_user_message() {
+        // Old format: ToolCall with inline result
+        let msgs = vec![
+            make_chat_msg("1", MessageRole::User, vec![MessagePart::Text { text: "do it".into() }]),
+            make_chat_msg(
+                "2",
+                MessageRole::Assistant,
+                vec![MessagePart::ToolCall {
+                    tool_call_id: "tc1".into(),
+                    tool_name: "bash".into(),
+                    args: serde_json::json!({"command": "ls"}),
+                    result: Some("file.txt".into()),
+                    is_error: false,
+                }],
+            ),
+        ];
+        let refs: Vec<&ChatMessage> = msgs.iter().collect();
+        let api = build_api_messages_from_parts(&refs);
+
+        // Should produce: User(text), Assistant(tool_use), User(tool_result from inline)
+        assert_eq!(api.len(), 3);
+        assert_eq!(api[0].role, Role::User);
+        assert_eq!(api[1].role, Role::Assistant);
+        assert!(matches!(&api[1].content[0], ContentBlock::ToolUse { .. }));
+        assert_eq!(api[2].role, Role::User);
+        assert!(matches!(&api[2].content[0], ContentBlock::ToolResult { .. }));
+    }
+
+    #[test]
+    fn user_message_tool_results_before_text() {
+        // User message with both text and tool results — results come first
+        let msgs = vec![make_chat_msg(
+            "1",
+            MessageRole::User,
+            vec![
+                MessagePart::Text { text: "context".into() },
+                MessagePart::ToolResult {
+                    tool_call_id: "tc1".into(),
+                    result: "output".into(),
+                    is_error: false,
+                },
+            ],
+        )];
+        let refs: Vec<&ChatMessage> = msgs.iter().collect();
+        let api = build_api_messages_from_parts(&refs);
+
+        // Should split into: User(tool_result), User(text)
+        assert_eq!(api.len(), 2);
+        assert!(matches!(&api[0].content[0], ContentBlock::ToolResult { .. }));
+        assert!(matches!(&api[1].content[0], ContentBlock::Text { .. }));
+    }
+
+    #[test]
+    fn thinking_blocks_stripped_from_api_output() {
+        let msgs = vec![make_chat_msg(
+            "1",
+            MessageRole::Assistant,
+            vec![
+                MessagePart::Thinking { thinking: "hmm".into() },
+                MessagePart::Text { text: "answer".into() },
+            ],
+        )];
+        let refs: Vec<&ChatMessage> = msgs.iter().collect();
+        let api = build_api_messages_from_parts(&refs);
+
+        assert_eq!(api.len(), 1);
+        // Only text block, thinking stripped
+        assert_eq!(api[0].content.len(), 1);
+        assert!(matches!(&api[0].content[0], ContentBlock::Text { text } if text == "answer"));
+    }
+
+    #[test]
+    fn empty_assistant_message_skipped() {
+        let msgs = vec![make_chat_msg(
+            "1",
+            MessageRole::Assistant,
+            vec![MessagePart::Thinking { thinking: "hmm".into() }],
+        )];
+        let refs: Vec<&ChatMessage> = msgs.iter().collect();
+        let api = build_api_messages_from_parts(&refs);
+
+        // Thinking-only assistant produces no content blocks, so no API message
+        assert_eq!(api.len(), 0);
+    }
+
+    // ── Conversation tests ──
+
+    #[test]
+    fn active_messages_returns_ordered() {
+        let conv = Conversation {
+            id: "c1".into(),
+            title: "test".into(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            messages: vec![
+                make_chat_msg("a", MessageRole::User, vec![]),
+                make_chat_msg("b", MessageRole::Assistant, vec![]),
+                make_chat_msg("c", MessageRole::User, vec![]),
+            ],
+            active_path: vec!["a".into(), "c".into()], // skip "b"
+            usage: None,
+            agent_id: None,
+            spans: vec![],
+        };
+
+        let active = conv.active_messages();
+        assert_eq!(active.len(), 2);
+        assert_eq!(active[0].id, "a");
+        assert_eq!(active[1].id, "c");
+    }
+
+    #[test]
+    fn span_summaries_returns_sealed_only() {
+        let conv = Conversation {
+            id: "c1".into(),
+            title: "test".into(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            messages: vec![],
+            active_path: vec![],
+            usage: None,
+            agent_id: None,
+            spans: vec![
+                Span {
+                    index: 0,
+                    message_ids: vec!["a".into()],
+                    summary: Some("summary 1".into()),
+                    sealed_at: Some(Utc::now()),
+                },
+                Span {
+                    index: 1,
+                    message_ids: vec![],
+                    summary: None,
+                    sealed_at: None, // open span
+                },
+            ],
+        };
+
+        let summaries = conv.span_summaries();
+        assert_eq!(summaries, vec!["summary 1"]);
+    }
+
+    #[test]
+    fn build_api_messages_includes_span_summaries() {
+        let conv = Conversation {
+            id: "c1".into(),
+            title: "test".into(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            messages: vec![make_chat_msg(
+                "m1",
+                MessageRole::User,
+                vec![MessagePart::Text { text: "latest".into() }],
+            )],
+            active_path: vec!["m1".into()],
+            usage: None,
+            agent_id: None,
+            spans: vec![Span {
+                index: 0,
+                message_ids: vec!["old".into()],
+                summary: Some("old context".into()),
+                sealed_at: Some(Utc::now()),
+            }],
+        };
+
+        let api = conv.build_api_messages();
+        // span summary pair + active message
+        assert_eq!(api.len(), 3);
+        assert_eq!(api[0].role, Role::User); // summary
+        assert_eq!(api[1].role, Role::Assistant); // ack
+        assert_eq!(api[2].role, Role::User); // latest
+    }
+}

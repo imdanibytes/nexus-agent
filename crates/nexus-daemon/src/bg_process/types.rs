@@ -6,6 +6,7 @@ use std::path::PathBuf;
 #[serde(rename_all = "snake_case")]
 pub enum ProcessKind {
     Bash,
+    #[allow(dead_code)] // Forward-looking: sub-agent bg dispatch needs handler ownership refactor
     SubAgent,
 }
 

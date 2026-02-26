@@ -6,10 +6,12 @@ import {
   BanIcon,
   SquareIcon,
 } from "lucide-react";
-import { Button, Tooltip } from "@heroui/react";
+import { Tooltip } from "@heroui/react";
 import { cn } from "../../lib/utils";
 import { useProcessStore, type BgProcess } from "../../stores/processStore";
 import { stopProcess } from "../../api/client";
+
+const EMPTY: BgProcess[] = [];
 
 function StatusIcon({ status }: { status: BgProcess["status"] }) {
   switch (status) {
@@ -83,7 +85,7 @@ const ProcessRow: FC<{ process: BgProcess }> = ({ process }) => {
 export const ProcessPanel: FC<{ conversationId: string }> = ({
   conversationId,
 }) => {
-  const processes = useProcessStore((s) => s.processes[conversationId] ?? []);
+  const processes = useProcessStore((s) => s.processes[conversationId] ?? EMPTY);
 
   if (processes.length === 0) return null;
 

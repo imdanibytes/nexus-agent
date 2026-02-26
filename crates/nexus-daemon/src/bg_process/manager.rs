@@ -20,6 +20,7 @@ pub struct ProcessManager {
     agent_tx: broadcast::Sender<AgUiEvent>,
 }
 
+#[derive(Debug)]
 pub struct SpawnResult {
     pub process_id: String,
     pub cancel_token: CancellationToken,
@@ -300,6 +301,13 @@ impl ProcessManager {
     }
 }
 
+#[cfg(test)]
+fn test_process_manager() -> ProcessManager {
+    let dir = std::env::temp_dir().join(format!("nexus-bg-test-{}", Uuid::new_v4()));
+    let (tx, _rx) = broadcast::channel(16);
+    ProcessManager::new(dir, tx)
+}
+
 /// Format pending notifications into a synthetic user message.
 pub fn format_notifications(notifications: &[PendingNotification]) -> String {
     let mut text = String::from("[System] Background process completed.\n");
@@ -337,4 +345,353 @@ pub fn format_notifications(notifications: &[PendingNotification]) -> String {
     }
 
     text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_pm() -> ProcessManager {
+        test_process_manager()
+    }
+
+    #[tokio::test]
+    async fn spawn_returns_process_id_and_output_path() {
+        let pm = make_pm();
+        let result = pm
+            .spawn("conv1", "test".into(), "echo hi".into(), ProcessKind::Bash)
+            .await
+            .unwrap();
+
+        assert!(!result.process_id.is_empty());
+        assert!(result.output_path.to_str().unwrap().contains(&result.process_id));
+
+        let listed = pm.list("conv1").await;
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].status, ProcessStatus::Running);
+        assert_eq!(listed[0].label, "test");
+
+        // Cleanup
+        pm.cleanup_conversation("conv1").await;
+    }
+
+    #[tokio::test]
+    async fn spawn_enforces_max_concurrent() {
+        let pm = make_pm();
+        for i in 0..MAX_CONCURRENT_PER_CONVERSATION {
+            pm.spawn("conv1", format!("p{i}"), format!("cmd{i}"), ProcessKind::Bash)
+                .await
+                .unwrap();
+        }
+
+        let err = pm
+            .spawn("conv1", "overflow".into(), "cmd".into(), ProcessKind::Bash)
+            .await
+            .unwrap_err();
+        assert!(err.contains("Maximum"));
+
+        // Different conversation is not affected
+        let ok = pm
+            .spawn("conv2", "other".into(), "cmd".into(), ProcessKind::Bash)
+            .await;
+        assert!(ok.is_ok());
+
+        pm.cleanup_conversation("conv1").await;
+        pm.cleanup_conversation("conv2").await;
+    }
+
+    #[tokio::test]
+    async fn complete_updates_status_and_queues_notification() {
+        let pm = make_pm();
+        let result = pm
+            .spawn("conv1", "test".into(), "echo hi".into(), ProcessKind::Bash)
+            .await
+            .unwrap();
+
+        // Write some output
+        std::fs::write(&result.output_path, "hello world").unwrap();
+
+        pm.complete(&result.process_id, Some(0), false).await;
+
+        let listed = pm.list("conv1").await;
+        assert_eq!(listed[0].status, ProcessStatus::Completed);
+        assert_eq!(listed[0].exit_code, Some(0));
+        assert!(!listed[0].is_error);
+        assert_eq!(listed[0].output_preview.as_deref(), Some("hello world"));
+        assert_eq!(listed[0].output_size, 11);
+
+        // Notification queued
+        assert!(pm.has_pending("conv1").await);
+        let notifs = pm.drain_notifications("conv1").await;
+        assert_eq!(notifs.len(), 1);
+        assert_eq!(notifs[0].process.id, result.process_id);
+
+        // Drained — no more pending
+        assert!(!pm.has_pending("conv1").await);
+
+        pm.cleanup_conversation("conv1").await;
+    }
+
+    #[tokio::test]
+    async fn complete_with_error_sets_failed_status() {
+        let pm = make_pm();
+        let result = pm
+            .spawn("conv1", "test".into(), "fail".into(), ProcessKind::Bash)
+            .await
+            .unwrap();
+
+        pm.complete(&result.process_id, Some(1), true).await;
+
+        let listed = pm.list("conv1").await;
+        assert_eq!(listed[0].status, ProcessStatus::Failed);
+        assert!(listed[0].is_error);
+        assert_eq!(listed[0].exit_code, Some(1));
+
+        pm.cleanup_conversation("conv1").await;
+    }
+
+    #[tokio::test]
+    async fn complete_ignores_non_running_process() {
+        let pm = make_pm();
+        let result = pm
+            .spawn("conv1", "test".into(), "cmd".into(), ProcessKind::Bash)
+            .await
+            .unwrap();
+
+        pm.complete(&result.process_id, Some(0), false).await;
+        // Second complete should be a no-op
+        pm.complete(&result.process_id, Some(1), true).await;
+
+        let listed = pm.list("conv1").await;
+        assert_eq!(listed[0].status, ProcessStatus::Completed);
+        assert_eq!(listed[0].exit_code, Some(0)); // unchanged
+
+        pm.cleanup_conversation("conv1").await;
+    }
+
+    #[tokio::test]
+    async fn cancel_sets_cancelled_status() {
+        let pm = make_pm();
+        let result = pm
+            .spawn("conv1", "test".into(), "sleep 99".into(), ProcessKind::Bash)
+            .await
+            .unwrap();
+
+        assert!(result.cancel_token.is_cancelled() == false);
+        pm.cancel(&result.process_id).await.unwrap();
+        assert!(result.cancel_token.is_cancelled());
+
+        let listed = pm.list("conv1").await;
+        assert_eq!(listed[0].status, ProcessStatus::Cancelled);
+        assert!(listed[0].completed_at.is_some());
+
+        pm.cleanup_conversation("conv1").await;
+    }
+
+    #[tokio::test]
+    async fn cancel_returns_error_for_finished_process() {
+        let pm = make_pm();
+        let result = pm
+            .spawn("conv1", "test".into(), "cmd".into(), ProcessKind::Bash)
+            .await
+            .unwrap();
+        pm.complete(&result.process_id, Some(0), false).await;
+
+        let err = pm.cancel(&result.process_id).await.unwrap_err();
+        assert!(err.contains("not found or already finished"));
+
+        pm.cleanup_conversation("conv1").await;
+    }
+
+    #[tokio::test]
+    async fn read_output_full() {
+        let pm = make_pm();
+        let result = pm
+            .spawn("conv1", "test".into(), "cmd".into(), ProcessKind::Bash)
+            .await
+            .unwrap();
+        std::fs::write(&result.output_path, "line1\nline2\nline3\n").unwrap();
+
+        let output = pm.read_output(&result.process_id, None, None).await.unwrap();
+        assert_eq!(output, "line1\nline2\nline3\n");
+
+        pm.cleanup_conversation("conv1").await;
+    }
+
+    #[tokio::test]
+    async fn read_output_tail() {
+        let pm = make_pm();
+        let result = pm
+            .spawn("conv1", "test".into(), "cmd".into(), ProcessKind::Bash)
+            .await
+            .unwrap();
+        std::fs::write(&result.output_path, "line1\nline2\nline3").unwrap();
+
+        let output = pm.read_output(&result.process_id, Some(1), None).await.unwrap();
+        assert_eq!(output, "line3");
+
+        pm.cleanup_conversation("conv1").await;
+    }
+
+    #[tokio::test]
+    async fn read_output_head() {
+        let pm = make_pm();
+        let result = pm
+            .spawn("conv1", "test".into(), "cmd".into(), ProcessKind::Bash)
+            .await
+            .unwrap();
+        std::fs::write(&result.output_path, "line1\nline2\nline3").unwrap();
+
+        let output = pm.read_output(&result.process_id, None, Some(2)).await.unwrap();
+        assert_eq!(output, "line1\nline2");
+
+        pm.cleanup_conversation("conv1").await;
+    }
+
+    #[tokio::test]
+    async fn read_output_not_found() {
+        let pm = make_pm();
+        let err = pm.read_output("nonexistent", None, None).await.unwrap_err();
+        assert!(err.contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn drain_returns_empty_for_no_notifications() {
+        let pm = make_pm();
+        let notifs = pm.drain_notifications("conv1").await;
+        assert!(notifs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn conversations_with_pending() {
+        let pm = make_pm();
+        let r1 = pm
+            .spawn("conv1", "a".into(), "a".into(), ProcessKind::Bash)
+            .await
+            .unwrap();
+        let r2 = pm
+            .spawn("conv2", "b".into(), "b".into(), ProcessKind::Bash)
+            .await
+            .unwrap();
+
+        pm.complete(&r1.process_id, Some(0), false).await;
+        pm.complete(&r2.process_id, Some(0), false).await;
+
+        let mut pending = pm.conversations_with_pending().await;
+        pending.sort();
+        assert_eq!(pending, vec!["conv1", "conv2"]);
+
+        pm.drain_notifications("conv1").await;
+        let pending = pm.conversations_with_pending().await;
+        assert_eq!(pending, vec!["conv2"]);
+
+        pm.cleanup_conversation("conv1").await;
+        pm.cleanup_conversation("conv2").await;
+    }
+
+    #[tokio::test]
+    async fn cleanup_cancels_running_and_removes_files() {
+        let pm = make_pm();
+        let r1 = pm
+            .spawn("conv1", "a".into(), "a".into(), ProcessKind::Bash)
+            .await
+            .unwrap();
+
+        std::fs::write(&r1.output_path, "data").unwrap();
+        assert!(r1.output_path.exists());
+
+        pm.cleanup_conversation("conv1").await;
+
+        assert!(r1.cancel_token.is_cancelled());
+        assert!(!r1.output_path.exists());
+        assert!(pm.list("conv1").await.is_empty());
+        assert!(!pm.has_pending("conv1").await);
+    }
+
+    #[tokio::test]
+    async fn has_running() {
+        let pm = make_pm();
+        assert!(!pm.has_running("conv1").await);
+
+        let result = pm
+            .spawn("conv1", "test".into(), "cmd".into(), ProcessKind::Bash)
+            .await
+            .unwrap();
+        assert!(pm.has_running("conv1").await);
+
+        pm.complete(&result.process_id, Some(0), false).await;
+        assert!(!pm.has_running("conv1").await);
+
+        pm.cleanup_conversation("conv1").await;
+    }
+
+    #[test]
+    fn format_notifications_single() {
+        let notif = PendingNotification {
+            process: BgProcess {
+                id: "abc123".to_string(),
+                conversation_id: "conv1".to_string(),
+                label: "Running tests".to_string(),
+                command: "cargo test".to_string(),
+                kind: ProcessKind::Bash,
+                status: ProcessStatus::Completed,
+                started_at: Utc::now(),
+                completed_at: Some(Utc::now()),
+                exit_code: Some(0),
+                is_error: false,
+                output_path: PathBuf::from("/tmp/test.out"),
+                output_preview: Some("all tests pass".to_string()),
+                output_size: 1234,
+            },
+        };
+
+        let text = format_notifications(&[notif]);
+        assert!(text.contains("Background process completed"));
+        assert!(text.contains("Running tests"));
+        assert!(text.contains("abc123"));
+        assert!(text.contains("completed"));
+        assert!(text.contains("Exit code: 0"));
+        assert!(text.contains("1234 bytes"));
+        assert!(text.contains("all tests pass"));
+        assert!(text.contains("process_output"));
+    }
+
+    #[test]
+    fn format_notifications_multiple() {
+        let notifs: Vec<PendingNotification> = (0..3)
+            .map(|i| PendingNotification {
+                process: BgProcess {
+                    id: format!("p{i}"),
+                    conversation_id: "conv1".to_string(),
+                    label: format!("Task {i}"),
+                    command: format!("cmd{i}"),
+                    kind: ProcessKind::Bash,
+                    status: if i == 1 {
+                        ProcessStatus::Failed
+                    } else {
+                        ProcessStatus::Completed
+                    },
+                    started_at: Utc::now(),
+                    completed_at: Some(Utc::now()),
+                    exit_code: Some(if i == 1 { 1 } else { 0 }),
+                    is_error: i == 1,
+                    output_path: PathBuf::from("/tmp/test.out"),
+                    output_preview: None,
+                    output_size: 0,
+                },
+            })
+            .collect();
+
+        let text = format_notifications(&notifs);
+        assert!(text.contains("Task 0"));
+        assert!(text.contains("Task 1"));
+        assert!(text.contains("Task 2"));
+        assert!(text.contains("failed"));
+    }
+
+    #[test]
+    fn format_notifications_empty() {
+        let text = format_notifications(&[]);
+        assert!(text.contains("Background process completed"));
+    }
 }

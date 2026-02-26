@@ -66,6 +66,45 @@ pub fn tool_definitions() -> Vec<Tool> {
     ]
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_bg_process_tool_recognizes_all_tools() {
+        assert!(is_bg_process_tool("process_output"));
+        assert!(is_bg_process_tool("process_status"));
+        assert!(is_bg_process_tool("process_stop"));
+    }
+
+    #[test]
+    fn is_bg_process_tool_rejects_others() {
+        assert!(!is_bg_process_tool("bash"));
+        assert!(!is_bg_process_tool("read_file"));
+        assert!(!is_bg_process_tool("process_"));
+        assert!(!is_bg_process_tool(""));
+    }
+
+    #[test]
+    fn tool_definitions_count() {
+        let defs = tool_definitions();
+        assert_eq!(defs.len(), 3);
+
+        let names: Vec<&str> = defs.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"process_output"));
+        assert!(names.contains(&"process_status"));
+        assert!(names.contains(&"process_stop"));
+    }
+
+    #[test]
+    fn process_output_schema_requires_process_id() {
+        let defs = tool_definitions();
+        let output_tool = defs.iter().find(|t| t.name == "process_output").unwrap();
+        let required = output_tool.input_schema["required"].as_array().unwrap();
+        assert!(required.iter().any(|v| v.as_str() == Some("process_id")));
+    }
+}
+
 pub struct BgProcessToolHandler<'a> {
     pub process_manager: &'a ProcessManager,
 }
