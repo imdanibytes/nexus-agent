@@ -24,6 +24,30 @@ const SEARCH_FILES: &str = "search_files";
 const GET_FILE_INFO: &str = "get_file_info";
 const LIST_ALLOWED_DIRECTORIES: &str = "list_allowed_directories";
 
+/// Default patterns always excluded from directory_tree and search_files.
+/// These are directories that are never useful for code exploration and can
+/// contain millions of entries (e.g. node_modules).
+const DEFAULT_EXCLUDES: &[&str] = &[
+    "node_modules",
+    ".git",
+    "__pycache__",
+    ".next",
+    ".venv",
+    "venv",
+    ".tox",
+    ".turbo",
+    ".svn",
+    ".hg",
+    ".DS_Store",
+    "coverage",
+    ".nyc_output",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    "bower_components",
+    ".cache",
+];
+
 const ALL_TOOLS: &[&str] = &[
     READ_FILE,
     READ_TEXT_FILE,
@@ -193,8 +217,9 @@ pub fn tool_definitions(config: &FilesystemConfig) -> Vec<Tool> {
         },
         Tool {
             name: DIRECTORY_TREE.into(),
-            description: "Recursive tree view of files and directories with tree-drawing \
-                characters. Use excludePatterns to skip directories like node_modules or .git."
+            description: "Recursive tree view of files and directories. Common non-source \
+                directories (node_modules, .git, __pycache__, .next, .venv, target, etc.) are \
+                excluded by default. Use excludePatterns to add more."
                 .into(),
             input_schema: serde_json::json!({
                 "type": "object",
@@ -341,15 +366,16 @@ pub fn execute(
         }
         DIRECTORY_TREE => {
             let path = require_str(&args, "path")?;
-            let exclude = args
-                .get("excludePatterns")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
+            let mut exclude: Vec<String> = DEFAULT_EXCLUDES.iter().map(|s| s.to_string()).collect();
+            if let Some(arr) = args.get("excludePatterns").and_then(|v| v.as_array()) {
+                for v in arr {
+                    if let Some(s) = v.as_str() {
+                        if !exclude.contains(&s.to_string()) {
+                            exclude.push(s.to_string());
+                        }
+                    }
+                }
+            }
             ops::directory_tree(validator, path, &exclude)
         }
         MOVE_FILE => {
@@ -360,15 +386,16 @@ pub fn execute(
         SEARCH_FILES => {
             let path = require_str(&args, "path")?;
             let pattern = require_str(&args, "pattern")?;
-            let exclude = args
-                .get("excludePatterns")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
+            let mut exclude: Vec<String> = DEFAULT_EXCLUDES.iter().map(|s| s.to_string()).collect();
+            if let Some(arr) = args.get("excludePatterns").and_then(|v| v.as_array()) {
+                for v in arr {
+                    if let Some(s) = v.as_str() {
+                        if !exclude.contains(&s.to_string()) {
+                            exclude.push(s.to_string());
+                        }
+                    }
+                }
+            }
             ops::search_files(validator, path, pattern, &exclude)
         }
         GET_FILE_INFO => {

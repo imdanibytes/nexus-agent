@@ -15,7 +15,7 @@ pub struct SseHub {
 
 impl SseHub {
     pub fn new() -> Self {
-        let (tx, _) = broadcast::channel(256);
+        let (tx, _) = broadcast::channel(1024);
         Self { tx }
     }
 
@@ -45,14 +45,35 @@ pub struct AgentEventBridge {
 
 impl AgentEventBridge {
     pub fn new(hub: SseHub) -> Self {
-        let (tx, _) = broadcast::channel(256);
+        let (tx, _) = broadcast::channel(1024);
         let bridge = Self { tx: tx.clone() };
 
-        // Spawn a task that forwards AgUiEvents to the SseHub as JSON
+        // Spawn a task that forwards AgUiEvents to the SseHub as JSON.
+        // IMPORTANT: We must handle Lagged errors by continuing, not breaking.
+        // If the broadcast buffer overflows, recv() returns Err(Lagged(n)),
+        // and breaking out of the loop would kill the forwarder permanently,
+        // causing all subsequent events (including RUN_FINISHED) to be lost.
         let mut rx = tx.subscribe();
         tokio::spawn(async move {
-            while let Ok(event) = rx.recv().await {
-                hub.push(&event);
+            loop {
+                match rx.recv().await {
+                    Ok(event) => {
+                        hub.push(&event);
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(
+                            skipped = n,
+                            "SSE bridge lagged — {} events dropped. Consider increasing buffer size.",
+                            n
+                        );
+                        // Continue receiving — don't break the forwarding loop
+                        continue;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        // Channel closed — all senders dropped, shut down cleanly
+                        break;
+                    }
+                }
             }
         });
 

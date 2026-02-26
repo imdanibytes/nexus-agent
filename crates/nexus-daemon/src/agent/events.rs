@@ -30,6 +30,15 @@ pub enum AgUiEvent {
         message_id: String,
         delta: String,
     },
+    #[serde(rename = "TEXT_MESSAGE_END")]
+    TextMessageEnd {
+        #[serde(rename = "threadId")]
+        thread_id: String,
+        #[serde(rename = "runId")]
+        run_id: String,
+        #[serde(rename = "messageId")]
+        message_id: String,
+    },
     #[serde(rename = "TOOL_CALL_START")]
     ToolCallStart {
         #[serde(rename = "threadId")]
@@ -50,6 +59,15 @@ pub enum AgUiEvent {
         #[serde(rename = "toolCallId")]
         tool_call_id: String,
         delta: String,
+    },
+    #[serde(rename = "TOOL_CALL_END")]
+    ToolCallEnd {
+        #[serde(rename = "threadId")]
+        thread_id: String,
+        #[serde(rename = "runId")]
+        run_id: String,
+        #[serde(rename = "toolCallId")]
+        tool_call_id: String,
     },
     #[serde(rename = "TOOL_CALL_RESULT")]
     ToolCallResult {

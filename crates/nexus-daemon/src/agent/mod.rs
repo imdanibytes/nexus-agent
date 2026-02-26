@@ -120,6 +120,36 @@ pub async fn run_agent_turn(
             }
         }
 
+        // Mid-turn context compaction: prune tool results before they overflow.
+        // On round 0 the caller (turn.rs) already compacted, so skip.
+        if round > 0 {
+            let estimated = crate::compaction::estimate_tokens(
+                &messages,
+                system_prompt.as_deref(),
+                &tools,
+            );
+            let prune_threshold = (context_window as f64 * 0.70) as u32;
+            let aggressive_threshold = (context_window as f64 * 0.85) as u32;
+
+            if estimated > aggressive_threshold {
+                tracing::warn!(
+                    round,
+                    estimated,
+                    threshold = aggressive_threshold,
+                    "Mid-turn aggressive pruning (>85% context)"
+                );
+                crate::compaction::prune_tool_results(&mut messages, 1);
+            } else if estimated > prune_threshold {
+                tracing::info!(
+                    round,
+                    estimated,
+                    threshold = prune_threshold,
+                    "Mid-turn pruning (>70% context)"
+                );
+                crate::compaction::prune_tool_results(&mut messages, 3);
+            }
+        }
+
         tracing::debug!(round, tools = tools.len(), "Starting inference round");
 
         let round_span_id = format!("t-round-{}", round);
@@ -418,8 +448,20 @@ pub async fn run_agent_turn(
                         cancel: &cancel,
                     };
                     let result = tool_dispatch::dispatch_tool_call(&handlers, ctx).await;
-                    let content = result.content;
+                    let mut content = result.content;
                     let is_error = result.is_error;
+
+                    // Guard: if tool output exceeds ~10k tokens, save to temp file
+                    // to avoid blowing the context window.
+                    const TOOL_RESULT_MAX_CHARS: usize = 30_000;
+                    if content.len() > TOOL_RESULT_MAX_CHARS && !is_error {
+                        content = spill_tool_result_to_file(
+                            &tc.name,
+                            &tc.id,
+                            &content,
+                        );
+                    }
+
                     let tool_duration = tool_start.elapsed().as_millis() as u64;
 
                     let _ = tx.send(AgUiEvent::ToolCallResult {
@@ -742,6 +784,63 @@ async fn consume_stream(
 
 pub fn context_window_for_model(model: &str) -> u32 {
     crate::pricing::context_window(model)
+}
+
+/// Save a large tool result to a temp file and return a compact stub.
+///
+/// The stub tells the model the file path, size, and a truncated preview,
+/// so it can read the full output via bash if needed.
+fn spill_tool_result_to_file(tool_name: &str, tool_call_id: &str, content: &str) -> String {
+    let dir = std::path::PathBuf::from("/tmp/nexus-tool-output");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        tracing::warn!("Failed to create tool output dir: {}", e);
+        // Fall back to truncation if we can't write the file
+        let preview: String = content.chars().take(2000).collect();
+        return format!(
+            "[Output too large: {} chars (~{} tokens), truncated]\n\n{}…",
+            content.len(),
+            content.len() / 3,
+            preview,
+        );
+    }
+
+    let filename = format!("{}_{}.txt", tool_name, &tool_call_id[..8.min(tool_call_id.len())]);
+    let path = dir.join(&filename);
+
+    match std::fs::write(&path, content) {
+        Ok(_) => {
+            let preview: String = content.chars().take(500).collect();
+            let suffix = if content.chars().count() > 500 { "…" } else { "" };
+            tracing::info!(
+                tool = tool_name,
+                chars = content.len(),
+                path = %path.display(),
+                "Tool result spilled to file"
+            );
+            format!(
+                "[Output saved to file: {} chars (~{} tokens)]\n\
+                 Path: {}\n\
+                 Use `bash cat {}` to read the full output if needed.\n\n\
+                 Preview:\n{}{}",
+                content.len(),
+                content.len() / 3,
+                path.display(),
+                path.display(),
+                preview,
+                suffix,
+            )
+        }
+        Err(e) => {
+            tracing::warn!("Failed to write tool output file: {}", e);
+            let preview: String = content.chars().take(2000).collect();
+            format!(
+                "[Output too large: {} chars (~{} tokens), truncated]\n\n{}…",
+                content.len(),
+                content.len() / 3,
+                preview,
+            )
+        }
+    }
 }
 
 /// Inject a `<state_update>` user message into the API messages.
