@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useThreadListStore } from "../stores/threadListStore";
+import { useThreadStore } from "../stores/threadStore";
 import { useUsageStore } from "../stores/usageStore";
 import { eventBus } from "../runtime/event-bus";
 
@@ -37,9 +38,16 @@ export function useStreamBroadcasts(): void {
       }
     });
 
+    const unsubCompaction = eventBus.on("compaction", (event) => {
+      if (event.threadId) {
+        useThreadStore.getState().loadHistory(event.threadId as string);
+      }
+    });
+
     return () => {
       unsubTitle();
       unsubUsage();
+      unsubCompaction();
     };
   }, []);
 }

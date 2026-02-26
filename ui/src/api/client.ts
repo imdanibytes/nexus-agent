@@ -12,6 +12,13 @@ export interface ConversationUsage {
   total_cost?: number;
 }
 
+export interface ServerSpan {
+  index: number;
+  message_ids: string[];
+  summary?: string;
+  sealed_at?: string;
+}
+
 export interface ConversationFull {
   id: string;
   title: string;
@@ -24,6 +31,7 @@ export interface ConversationFull {
     tasks: Record<string, import("../types/tasks").Task>;
     mode?: import("../types/tasks").AgentMode;
   };
+  spans?: ServerSpan[];
   created_at: string;
   updated_at: string;
 }

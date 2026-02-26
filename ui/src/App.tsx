@@ -12,6 +12,7 @@ import { useMcpStore } from "./stores/mcpStore";
 import { useWorkspaceStore } from "./stores/workspaceStore";
 import { useUIStore, applyTheme } from "./stores/uiStore";
 import { eventBus } from "./runtime/event-bus";
+import { DebugPanel } from "./components/chat/DebugPanel";
 
 export default function App() {
   const theme = useUIStore((s) => s.theme);
@@ -78,6 +79,7 @@ function AppShell() {
         <TaskPanel />
       </div>
       <SettingsModal />
+      {import.meta.env.DEV && <DebugPanel />}
     </div>
   );
 }

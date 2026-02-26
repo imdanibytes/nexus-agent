@@ -1,4 +1,4 @@
-import { useCallback, useEffect, type FC } from "react";
+import { useEffect, type FC } from "react";
 import { ArrowDownIcon } from "lucide-react";
 import { useThreadStore, EMPTY_CONV } from "../../stores/threadStore";
 import { useThreadListStore } from "../../stores/threadListStore";
@@ -13,6 +13,7 @@ import { AgentSwitcher } from "../agent/AgentSwitcher";
 import { ThreadWelcome } from "./ThreadWelcome";
 import { UserMessage } from "./UserMessage";
 import { AssistantMessage } from "./AssistantMessage";
+import { SpanDivider } from "./SpanDivider";
 
 export const Thread: FC = () => {
   const activeThreadId = useThreadListStore((s) => s.activeThreadId);
@@ -21,6 +22,11 @@ export const Thread: FC = () => {
   );
   const isLoadingHistory = useThreadStore(
     (s) => s.conversations[activeThreadId ?? ""]?.isLoadingHistory ?? false,
+  );
+  const sealedSpans = useThreadStore(
+    (s) =>
+      s.conversations[activeThreadId ?? ""]?.sealedSpans ??
+      EMPTY_CONV.sealedSpans,
   );
   const { sendMessage, branchMessage, regenerate, abort, isStreaming } =
     useChatStream();
@@ -67,6 +73,15 @@ export const Thread: FC = () => {
           }}
         >
           {isEmpty && <ThreadWelcome onSend={sendMessage} />}
+
+          {sealedSpans.length > 0 && (
+            <SpanDivider
+              spans={sealedSpans}
+              onLoadAll={() =>
+                useThreadStore.getState().loadAllSpanMessages(activeThreadId!)
+              }
+            />
+          )}
 
           {messages.map((msg, idx) => {
             // Skip user messages that only carry tool results (API plumbing)

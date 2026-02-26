@@ -82,8 +82,18 @@ export interface ChatMessage {
 
 // ── Per-conversation state ──
 
+export interface SealedSpan {
+  index: number;
+  summary: string;
+  messageIds: string[];
+  /** Original messages, loaded from repository when user clicks "load earlier" */
+  messages?: ChatMessage[];
+}
+
 export interface ConvState {
   messages: ChatMessage[];
+  /** Sealed conversation spans — compacted segments with summaries */
+  sealedSpans: SealedSpan[];
   isStreaming: boolean;
   isLoadingHistory: boolean;
   activity: string | null;
@@ -94,6 +104,7 @@ export interface ConvState {
 
 export const EMPTY_CONV: ConvState = {
   messages: [],
+  sealedSpans: [],
   isStreaming: false,
   isLoadingHistory: false,
   activity: null,
@@ -138,6 +149,7 @@ interface ThreadState {
   ) => void;
   getLastMessageId: (convId: string) => string | null;
   setActivity: (convId: string, activity: string | null) => void;
+  loadAllSpanMessages: (convId: string) => void;
   syncRepository: (
     convId: string,
     serverMessages: Array<{
@@ -380,6 +392,15 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         resolveActiveBranch(repo, childrenMap, selections),
       );
 
+      // Parse sealed spans from server response
+      const sealedSpans: SealedSpan[] = (conv.spans ?? [])
+        .filter((s) => s.sealed_at != null && s.summary)
+        .map((s) => ({
+          index: s.index,
+          summary: s.summary!,
+          messageIds: s.message_ids,
+        }));
+
       hydrateUsage(convId, conv);
       hydrateTaskState(convId, conv);
 
@@ -389,6 +410,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
           childrenMap,
           branchSelections: selections,
           messages,
+          sealedSpans,
           isLoadingHistory: false,
         }),
       );
@@ -519,6 +541,25 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
 
   setActivity: (convId, activity) => {
     set((s) => patchConv(s, convId, { activity }));
+  },
+
+  loadAllSpanMessages: (convId) => {
+    const conv = get().conversations[convId];
+    if (!conv) return;
+
+    const repoMap = new Map(conv.repository.map((n) => [n.message.id, n.message]));
+
+    set((s) =>
+      patchConv(s, convId, {
+        sealedSpans: conv.sealedSpans.map((span) => {
+          if (span.messages) return span; // already loaded
+          const msgs = span.messageIds
+            .map((id) => repoMap.get(id))
+            .filter((m): m is ChatMessage => m != null);
+          return { ...span, messages: msgs };
+        }),
+      }),
+    );
   },
 
   syncRepository: (convId, serverMessages, activePath) => {
