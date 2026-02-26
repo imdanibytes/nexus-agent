@@ -103,6 +103,11 @@ pub async fn switch_path(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
+    // Cannot switch to a path inside a sealed span
+    if conv.is_in_sealed_span(&body.message_id) {
+        return Err(StatusCode::CONFLICT);
+    }
+
     let new_path = conv.path_to(&body.message_id);
     if new_path.is_empty() {
         return Err(StatusCode::BAD_REQUEST);

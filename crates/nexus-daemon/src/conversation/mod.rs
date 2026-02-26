@@ -52,6 +52,7 @@ impl ConversationStore {
             active_path: Vec::new(),
             usage: None,
             agent_id: None,
+            spans: Vec::new(),
         };
 
         self.write_conversation(&conv)?;

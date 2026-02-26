@@ -230,7 +230,7 @@ impl SystemPromptProvider for StateProtocolProvider {
     }
 }
 
-// ── 8. Task Context ──
+// ── 8. Plan Context ──
 
 pub struct TaskContextProvider;
 
@@ -244,20 +244,56 @@ impl SystemPromptProvider for TaskContextProvider {
     }
 
     fn provide(&self, ctx: &SystemPromptContext) -> Option<String> {
-        let task = ctx.current_task.as_ref()?;
-        let mut lines = vec![
-            format!(
-                "You are executing plan \"{}\" — task {}/{}: {}",
-                task.plan_title, task.completed_count + 1, task.total_count, task.task_title,
-            ),
-            format!("Task ID: {}", task.task_id),
-        ];
-        if let Some(desc) = &task.task_description {
-            lines.push(format!("Description: {}", desc));
-        }
-        lines.push("Update this task's status with task_update as you work.".to_string());
+        let plan = ctx.plan_context.as_ref()?;
+        let mut lines = Vec::new();
 
-        Some(format!("<current_task>\n{}\n</current_task>", lines.join("\n")))
+        lines.push(format!(
+            "Plan: \"{}\" ({} mode)",
+            plan.plan_title, plan.mode,
+        ));
+
+        if let Some(ref summary) = plan.plan_summary {
+            lines.push(format!("Summary: {}", summary));
+        }
+
+        if !plan.tasks.is_empty() {
+            lines.push(String::new());
+            lines.push("Tasks:".to_string());
+
+            let completed = plan.tasks.iter().filter(|t| t.status == "completed").count();
+            let total = plan.tasks.len();
+
+            for (i, task) in plan.tasks.iter().enumerate() {
+                let is_current = plan.current_task_id.as_deref() == Some(&task.id);
+                let marker = if is_current { " ← CURRENT" } else { "" };
+                let deps = if task.depends_on.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (depends on: {})", task.depends_on.join(", "))
+                };
+                lines.push(format!(
+                    "  [{}] {}. {}{}{}",
+                    task.status, i + 1, task.title, deps, marker,
+                ));
+                if is_current {
+                    if let Some(ref desc) = task.description {
+                        lines.push(format!("    Description: {}", desc));
+                    }
+                }
+            }
+
+            lines.push(String::new());
+            lines.push(format!("Progress: {}/{} completed", completed, total));
+
+            if let Some(ref current_id) = plan.current_task_id {
+                if let Some(current) = plan.tasks.iter().find(|t| t.id == *current_id) {
+                    lines.push(format!("Current task: {}", current.title));
+                    lines.push("Update this task's status with task_update as you work.".to_string());
+                }
+            }
+        }
+
+        Some(format!("<plan_context>\n{}\n</plan_context>", lines.join("\n")))
     }
 }
 

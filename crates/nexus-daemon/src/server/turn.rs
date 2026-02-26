@@ -8,7 +8,7 @@ use crate::agent::events::AgUiEvent;
 use crate::agent::AgentTurnResult;
 use crate::anthropic::types::{ContentBlock, Message, Role};
 use crate::conversation::types::{
-    ChatMessage, Conversation, ConversationUsage, MessagePart, MessageRole,
+    ChatMessage, Conversation, ConversationUsage, MessagePart, MessageRole, Span,
 };
 use crate::server::AppState;
 use crate::system_prompt::{SystemPromptBuilder, SystemPromptContext};
@@ -115,39 +115,40 @@ pub fn spawn_agent_turn(
         // Inject required "description" field into all tool schemas
         crate::anthropic::types::inject_tool_description_field(&mut tools);
 
-        // Derive agent mode + current task info from task state
-        let (mode, mode_enum, current_task) = {
-            use crate::system_prompt::CurrentTaskInfo;
-            use crate::tasks::types::{AgentMode, TaskStatus};
+        // Derive agent mode + full plan context from task state
+        let (mode, mode_enum, plan_context) = {
+            use crate::system_prompt::{PlanContext, PlanTaskSnapshot};
+            use crate::tasks::types::AgentMode;
 
             let mut ts = state_clone.chat.task_store.write().await;
             match ts.get(&conversation_id) {
                 Some(state) => {
                     let mode_enum = state.mode;
                     let mode = state.mode.to_string();
-                    let task_info = state.plan.as_ref().and_then(|plan| {
-                        // Find the first in-progress task, or the first pending one
-                        let current = plan.task_ids.iter()
+                    let plan_ctx = state.plan.as_ref().map(|plan| {
+                        let tasks: Vec<PlanTaskSnapshot> = plan.task_ids.iter()
                             .filter_map(|id| state.tasks.get(id))
-                            .find(|t| matches!(t.status, TaskStatus::InProgress))
-                            .or_else(|| {
-                                plan.task_ids.iter()
-                                    .filter_map(|id| state.tasks.get(id))
-                                    .find(|t| matches!(t.status, TaskStatus::Pending))
-                            })?;
-                        let completed = state.tasks.values()
-                            .filter(|t| matches!(t.status, TaskStatus::Completed))
-                            .count();
-                        Some(CurrentTaskInfo {
+                            .map(|t| PlanTaskSnapshot {
+                                id: t.id.clone(),
+                                title: t.title.clone(),
+                                description: t.description.clone(),
+                                status: t.status.to_string(),
+                                depends_on: t.depends_on.clone(),
+                            })
+                            .collect();
+                        let current_id = tasks.iter()
+                            .find(|t| t.status == "in_progress")
+                            .or_else(|| tasks.iter().find(|t| t.status == "pending"))
+                            .map(|t| t.id.clone());
+                        PlanContext {
                             plan_title: plan.title.clone(),
-                            task_id: current.id.clone(),
-                            task_title: current.title.clone(),
-                            task_description: current.description.clone(),
-                            completed_count: completed,
-                            total_count: state.tasks.len(),
-                        })
+                            plan_summary: plan.summary.clone(),
+                            tasks,
+                            current_task_id: current_id,
+                            mode: mode.clone(),
+                        }
                     });
-                    (mode, mode_enum, task_info)
+                    (mode, mode_enum, plan_ctx)
                 }
                 None => ("general".to_string(), AgentMode::General, None),
             }
@@ -181,7 +182,7 @@ pub fn spawn_agent_turn(
             input_tokens: 0,
             context_window,
             mode,
-            current_task,
+            plan_context,
             working_directory: effective_fs.allowed_directories.first().cloned(),
             total_cost: prior_cost,
         });
@@ -202,9 +203,14 @@ pub fn spawn_agent_turn(
             crate::compaction::prune_tool_results(&mut api_messages, 3);
         }
 
-        // Layer 2: LLM summarization (last resort)
+        // Layer 2: LLM summarization (last resort, or aggressive in execution mode)
         let effective_window = context_window.saturating_sub(20_000);
-        let summarize_threshold = (effective_window as f64 * crate::compaction::SUMMARIZE_THRESHOLD_PCT) as u32;
+        let summarize_pct = if mode_enum == crate::tasks::types::AgentMode::Execution {
+            0.4 // Aggressively compact in execution mode to reclaim planning context
+        } else {
+            crate::compaction::SUMMARIZE_THRESHOLD_PCT
+        };
+        let summarize_threshold = (effective_window as f64 * summarize_pct) as u32;
         if estimated_tokens > summarize_threshold {
             if let Some(ref title_client) = state_clone.title_client {
                 match crate::compaction::summarize_messages(
@@ -214,13 +220,32 @@ pub fn spawn_agent_turn(
                 )
                 .await
                 {
-                    Ok((summary_msg, consumed_ids)) => {
-                        conv.active_path.retain(|id| !consumed_ids.contains(id));
-                        conv.messages.push(summary_msg.clone());
-                        conv.active_path.insert(0, summary_msg.id.clone());
+                    Ok((summary_text, consumed_ids)) => {
+                        // Create spans: seal current, open new
+                        if conv.spans.is_empty() {
+                            // First compaction — bootstrap span chain
+                            conv.spans.push(Span {
+                                index: 0,
+                                message_ids: consumed_ids.clone(),
+                                summary: Some(summary_text),
+                                sealed_at: Some(Utc::now()),
+                            });
+                            conv.spans.push(Span {
+                                index: 1,
+                                message_ids: Vec::new(),
+                                summary: None,
+                                sealed_at: None,
+                            });
+                        } else {
+                            conv.seal_current_span(&consumed_ids, summary_text);
+                            conv.open_new_span();
+                        }
 
-                        // Rebuild API messages from compacted conversation
-                        api_messages = super::chat::build_api_messages(&conv.active_messages());
+                        // Remove consumed IDs from active_path
+                        conv.active_path.retain(|id| !consumed_ids.contains(id));
+
+                        // Rebuild API messages (span summaries injected automatically)
+                        api_messages = conv.build_api_messages();
 
                         // Save compacted conversation
                         {
@@ -234,8 +259,8 @@ pub fn spawn_agent_turn(
                             thread_id: conversation_id.clone(),
                             name: "compaction".to_string(),
                             value: serde_json::json!({
+                                "sealed_span_index": conv.spans.len() - 2,
                                 "consumed_count": consumed_ids.len(),
-                                "summary_id": summary_msg.id,
                             }),
                         });
                     }

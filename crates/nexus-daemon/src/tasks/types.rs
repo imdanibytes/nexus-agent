@@ -12,6 +12,17 @@ pub enum TaskStatus {
     Failed,
 }
 
+impl fmt::Display for TaskStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TaskStatus::Pending => write!(f, "pending"),
+            TaskStatus::InProgress => write!(f, "in_progress"),
+            TaskStatus::Completed => write!(f, "completed"),
+            TaskStatus::Failed => write!(f, "failed"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AgentMode {

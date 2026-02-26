@@ -2,6 +2,8 @@ pub mod agent_api;
 pub mod browse;
 pub mod chat;
 pub mod conversations;
+#[cfg(debug_assertions)]
+pub mod debug;
 pub mod mcp_api;
 pub mod providers;
 pub mod services;
@@ -42,7 +44,7 @@ pub struct AppState {
 pub fn build_router(state: AppState, ui_dist_path: &str) -> Router {
     let state = Arc::new(state);
 
-    Router::new()
+    let mut router = Router::new()
         // Chat
         .route("/api/chat", post(chat::start_turn))
         .route("/api/chat/branch", post(chat::branch_turn))
@@ -133,7 +135,24 @@ pub fn build_router(state: AppState, ui_dist_path: &str) -> Router {
         // SSE events
         .route("/api/events", get(events_stream))
         // Status
-        .route("/api/status", get(health))
+        .route("/api/status", get(health));
+
+    // Debug endpoints (debug builds only)
+    #[cfg(debug_assertions)]
+    {
+        router = router
+            .route(
+                "/api/debug/compact/{id}",
+                post(debug::force_compact),
+            )
+            .route(
+                "/api/debug/task-state/{id}",
+                post(debug::set_task_state),
+            )
+            .route("/api/debug/emit", post(debug::emit_event));
+    }
+
+    router
         // Static files (UI) — SPA fallback: serve index.html for non-file routes
         .fallback_service(
             ServeDir::new(ui_dist_path)

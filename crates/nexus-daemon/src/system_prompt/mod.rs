@@ -2,14 +2,25 @@ mod providers;
 
 pub use providers::*;
 
-/// Snapshot of the current task for system prompt injection.
-pub struct CurrentTaskInfo {
+/// Snapshot of a single task for plan context injection.
+pub struct PlanTaskSnapshot {
+    pub id: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub status: String,
+    pub depends_on: Vec<String>,
+}
+
+/// Full plan context injected into the system prompt state_update.
+///
+/// Survives compaction because the system prompt is rebuilt every turn
+/// from `TaskStateStore`, not from conversation history.
+pub struct PlanContext {
     pub plan_title: String,
-    pub task_id: String,
-    pub task_title: String,
-    pub task_description: Option<String>,
-    pub completed_count: usize,
-    pub total_count: usize,
+    pub plan_summary: Option<String>,
+    pub tasks: Vec<PlanTaskSnapshot>,
+    pub current_task_id: Option<String>,
+    pub mode: String,
 }
 
 /// Context passed to each provider so it can decide what to emit.
@@ -22,7 +33,7 @@ pub struct SystemPromptContext {
     pub input_tokens: u32,
     pub context_window: u32,
     pub mode: String,
-    pub current_task: Option<CurrentTaskInfo>,
+    pub plan_context: Option<PlanContext>,
     /// Primary working directory (first allowed_directory).
     pub working_directory: Option<String>,
     /// Cumulative cost of the conversation so far (USD).

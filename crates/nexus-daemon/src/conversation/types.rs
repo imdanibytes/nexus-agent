@@ -3,6 +3,9 @@ use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::anthropic::types::{ContentBlock, Message, Role};
+use crate::system_prompt::{fence_tool_result, fence_user_message};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationMeta {
     pub id: String,
@@ -28,6 +31,24 @@ pub struct ConversationUsage {
     pub total_cost: f64,
 }
 
+/// A sealed segment of conversation history.
+///
+/// When compaction fires, the current span is sealed (summary generated)
+/// and a new open span is created. Sealed spans are read-only — branching
+/// only works within the current open span.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Span {
+    /// Monotonically increasing: 0, 1, 2, ...
+    pub index: u32,
+    /// Message IDs belonging to this span (active_path order at seal time).
+    /// Empty for the current open span (active_path is source of truth).
+    pub message_ids: Vec<String>,
+    /// LLM-generated summary. None for the current open span.
+    pub summary: Option<String>,
+    /// When sealed. None = current open span.
+    pub sealed_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Conversation {
     pub id: String,
@@ -41,6 +62,9 @@ pub struct Conversation {
     /// The agent that was last used in this conversation
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
+    /// Conversation spans — sealed segments behind compaction boundaries.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spans: Vec<Span>,
 }
 
 impl Conversation {
@@ -132,6 +156,189 @@ impl Conversation {
             .collect()
     }
 
+    // ── Span helpers ──
+
+    /// Seal the current (last) span with the given consumed IDs and summary.
+    pub fn seal_current_span(&mut self, consumed_ids: &[String], summary: String) {
+        if let Some(span) = self.spans.last_mut() {
+            span.message_ids = consumed_ids.to_vec();
+            span.summary = Some(summary);
+            span.sealed_at = Some(Utc::now());
+        }
+    }
+
+    /// Open a new empty span after the current one.
+    pub fn open_new_span(&mut self) {
+        let next_index = self.spans.last().map(|s| s.index + 1).unwrap_or(0);
+        self.spans.push(Span {
+            index: next_index,
+            message_ids: Vec::new(),
+            summary: None,
+            sealed_at: None,
+        });
+    }
+
+    /// Sealed span summaries in order.
+    pub fn span_summaries(&self) -> Vec<&str> {
+        self.spans
+            .iter()
+            .filter_map(|s| s.summary.as_deref())
+            .collect()
+    }
+
+    /// Whether a message ID belongs to a sealed span.
+    pub fn is_in_sealed_span(&self, message_id: &str) -> bool {
+        self.spans
+            .iter()
+            .filter(|s| s.sealed_at.is_some())
+            .any(|s| s.message_ids.iter().any(|id| id == message_id))
+    }
+
+    // ── API message building ──
+
+    /// Build Anthropic API messages from span summaries + current active path.
+    ///
+    /// Sealed span summaries are prepended as user/assistant pairs so the model
+    /// has context from previous compacted segments. Current active path messages
+    /// are appended using the standard conversion logic.
+    pub fn build_api_messages(&self) -> Vec<Message> {
+        let mut result = Vec::new();
+
+        // Prepend sealed span summaries as user/assistant pairs
+        for summary in self.span_summaries() {
+            result.push(Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text {
+                    text: format!("[Previous conversation context]\n\n{}", summary),
+                }],
+            });
+            result.push(Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::Text {
+                    text: "Understood, I have the previous context.".to_string(),
+                }],
+            });
+        }
+
+        // Append current active path messages
+        result.extend(build_api_messages_from_parts(&self.active_messages()));
+        result
+    }
+}
+
+/// Build Anthropic API Messages from ChatMessages (raw conversion).
+///
+/// Handles both old format (ToolCall with inline result on assistant messages)
+/// and new format (separate ToolResult parts on user messages).
+/// Fences tool results and user text at the API boundary.
+pub fn build_api_messages_from_parts(messages: &[&ChatMessage]) -> Vec<Message> {
+    let mut result = Vec::new();
+
+    for msg in messages {
+        match msg.role {
+            MessageRole::Assistant => {
+                let content: Vec<ContentBlock> = msg
+                    .parts
+                    .iter()
+                    .filter_map(|part| match part {
+                        MessagePart::Text { text } => {
+                            Some(ContentBlock::Text { text: text.clone() })
+                        }
+                        MessagePart::ToolCall {
+                            tool_call_id,
+                            tool_name,
+                            args,
+                            ..
+                        } => Some(ContentBlock::ToolUse {
+                            id: tool_call_id.clone(),
+                            name: tool_name.clone(),
+                            input: if args.is_object() {
+                                args.clone()
+                            } else {
+                                serde_json::json!({})
+                            },
+                        }),
+                        MessagePart::Thinking { .. } | MessagePart::ToolResult { .. } => None,
+                    })
+                    .collect();
+
+                if !content.is_empty() {
+                    result.push(Message {
+                        role: Role::Assistant,
+                        content,
+                    });
+                }
+
+                // Legacy: if ToolCall parts carry inline results, emit a user
+                // message with ToolResult blocks (old merged format)
+                let inline_results: Vec<ContentBlock> = msg
+                    .parts
+                    .iter()
+                    .filter_map(|part| match part {
+                        MessagePart::ToolCall {
+                            tool_call_id,
+                            result: Some(res),
+                            is_error,
+                            ..
+                        } => Some(ContentBlock::ToolResult {
+                            tool_use_id: tool_call_id.clone(),
+                            content: fence_tool_result(res),
+                            is_error: Some(*is_error),
+                        }),
+                        _ => None,
+                    })
+                    .collect();
+
+                if !inline_results.is_empty() {
+                    result.push(Message {
+                        role: Role::User,
+                        content: inline_results,
+                    });
+                }
+            }
+            MessageRole::User => {
+                let mut text_blocks = Vec::new();
+                let mut tool_result_blocks = Vec::new();
+
+                for part in &msg.parts {
+                    match part {
+                        MessagePart::Text { text } => {
+                            text_blocks.push(ContentBlock::Text {
+                                text: fence_user_message(text),
+                            });
+                        }
+                        MessagePart::ToolResult {
+                            tool_call_id,
+                            result,
+                            is_error,
+                        } => {
+                            tool_result_blocks.push(ContentBlock::ToolResult {
+                                tool_use_id: tool_call_id.clone(),
+                                content: fence_tool_result(result),
+                                is_error: Some(*is_error),
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+
+                if !tool_result_blocks.is_empty() {
+                    result.push(Message {
+                        role: Role::User,
+                        content: tool_result_blocks,
+                    });
+                }
+                if !text_blocks.is_empty() {
+                    result.push(Message {
+                        role: Role::User,
+                        content: text_blocks,
+                    });
+                }
+            }
+        }
+    }
+
+    result
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

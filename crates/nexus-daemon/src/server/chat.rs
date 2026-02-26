@@ -6,10 +6,8 @@ use serde::Deserialize;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::anthropic::types::{ContentBlock, Message, Role};
 use crate::conversation::types::{ChatMessage, MessagePart, MessageRole};
 use crate::server::AppState;
-use crate::system_prompt::{fence_tool_result, fence_user_message};
 use super::turn::spawn_agent_turn;
 
 #[derive(Debug, Deserialize)]
@@ -80,7 +78,7 @@ pub async fn start_turn(
             .save(&conv)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        let api_messages = build_api_messages(&conv.active_messages());
+        let api_messages = conv.build_api_messages();
 
 
         // Filter MCP tools based on active agent's mcp_server_ids
@@ -136,6 +134,11 @@ pub async fn branch_turn(
             return Err(StatusCode::BAD_REQUEST);
         }
 
+        // Cannot branch into a sealed span
+        if conv.is_in_sealed_span(&body.message_id) {
+            return Err(StatusCode::CONFLICT);
+        }
+
         // New message is a sibling — same parent as the original
         let parent_id = original_msg.parent_id.clone();
 
@@ -167,7 +170,7 @@ pub async fn branch_turn(
             .save(&conv)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        let api_messages = build_api_messages(&conv.active_messages());
+        let api_messages = conv.build_api_messages();
 
 
         // Filter MCP tools based on active agent's mcp_server_ids
@@ -238,6 +241,11 @@ pub async fn regenerate_turn(
             return Err(StatusCode::BAD_REQUEST);
         }
 
+        // Cannot regenerate within a sealed span
+        if conv.is_in_sealed_span(&body.message_id) {
+            return Err(StatusCode::CONFLICT);
+        }
+
         // Active path ends at this user message (strip any existing assistant response)
         let user_path = conv.path_to_only(&body.message_id);
         conv.active_path = user_path;
@@ -247,7 +255,7 @@ pub async fn regenerate_turn(
             .save(&conv)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        let api_messages = build_api_messages(&conv.active_messages());
+        let api_messages = conv.build_api_messages();
 
 
         let tools = {
@@ -357,7 +365,7 @@ pub async fn tool_invoke(
             .save(&conv)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        let api_messages = build_api_messages(&conv.active_messages());
+        let api_messages = conv.build_api_messages();
 
         let tools = {
             let mcp = state.mcp.mcp.read().await;
@@ -425,124 +433,6 @@ async fn cancel_existing_turn(
     let cancel = tokio_util::sync::CancellationToken::new();
     *active = Some((conversation_id.to_string(), cancel.clone()));
     cancel
-}
-
-/// Build Anthropic API Messages from active-path ChatMessages.
-///
-/// Handles both old format (ToolCall with inline result on assistant messages)
-/// and new format (separate ToolResult parts on user messages).
-/// Fences tool results and user text at the API boundary.
-pub(crate) fn build_api_messages(messages: &[&ChatMessage]) -> Vec<Message> {
-    let mut result = Vec::new();
-
-    for msg in messages {
-        match msg.role {
-            MessageRole::Assistant => {
-                // Text + ToolUse blocks
-                let content: Vec<ContentBlock> = msg
-                    .parts
-                    .iter()
-                    .filter_map(|part| match part {
-                        MessagePart::Text { text } => {
-                            Some(ContentBlock::Text { text: text.clone() })
-                        }
-                        MessagePart::ToolCall {
-                            tool_call_id,
-                            tool_name,
-                            args,
-                            ..
-                        } => Some(ContentBlock::ToolUse {
-                            id: tool_call_id.clone(),
-                            name: tool_name.clone(),
-                            input: if args.is_object() {
-                                args.clone()
-                            } else {
-                                serde_json::json!({})
-                            },
-                        }),
-                        MessagePart::Thinking { .. } | MessagePart::ToolResult { .. } => None,
-                    })
-                    .collect();
-
-                if !content.is_empty() {
-                    result.push(Message {
-                        role: Role::Assistant,
-                        content,
-                    });
-                }
-
-                // Legacy: if ToolCall parts carry inline results, emit a user
-                // message with ToolResult blocks (old merged format)
-                let inline_results: Vec<ContentBlock> = msg
-                    .parts
-                    .iter()
-                    .filter_map(|part| match part {
-                        MessagePart::ToolCall {
-                            tool_call_id,
-                            result: Some(res),
-                            is_error,
-                            ..
-                        } => Some(ContentBlock::ToolResult {
-                            tool_use_id: tool_call_id.clone(),
-                            content: fence_tool_result(res),
-                            is_error: Some(*is_error),
-                        }),
-                        _ => None,
-                    })
-                    .collect();
-
-                if !inline_results.is_empty() {
-                    result.push(Message {
-                        role: Role::User,
-                        content: inline_results,
-                    });
-                }
-            }
-            MessageRole::User => {
-                let mut text_blocks = Vec::new();
-                let mut tool_result_blocks = Vec::new();
-
-                for part in &msg.parts {
-                    match part {
-                        MessagePart::Text { text } => {
-                            text_blocks.push(ContentBlock::Text {
-                                text: fence_user_message(text),
-                            });
-                        }
-                        MessagePart::ToolResult {
-                            tool_call_id,
-                            result,
-                            is_error,
-                        } => {
-                            tool_result_blocks.push(ContentBlock::ToolResult {
-                                tool_use_id: tool_call_id.clone(),
-                                content: fence_tool_result(result),
-                                is_error: Some(*is_error),
-                            });
-                        }
-                        _ => {}
-                    }
-                }
-
-                // Tool results and text can't be mixed in one API message.
-                // Tool results go first (they pair with the preceding assistant).
-                if !tool_result_blocks.is_empty() {
-                    result.push(Message {
-                        role: Role::User,
-                        content: tool_result_blocks,
-                    });
-                }
-                if !text_blocks.is_empty() {
-                    result.push(Message {
-                        role: Role::User,
-                        content: text_blocks,
-                    });
-                }
-            }
-        }
-    }
-
-    result
 }
 
 // ── Ask-user answer endpoint ──

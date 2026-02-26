@@ -10,8 +10,6 @@
 //!    compact reference. Permanent: replaces messages in the stored conversation.
 
 use anyhow::Result;
-use chrono::Utc;
-use uuid::Uuid;
 
 use crate::anthropic::types::{ContentBlock, Message, MessagesRequest, Role, Tool};
 use crate::anthropic::AnthropicClient;
@@ -181,18 +179,14 @@ Use bullet points, not prose. Omit pleasantries and filler.";
 /// Summarize old messages into a compact structured reference.
 ///
 /// Keeps the last `keep_recent` messages intact. Everything before is fed
-/// to Sonnet for summarization. Returns a summary ChatMessage (role: User,
-/// metadata: `is_compaction_summary: true`) and the list of consumed
-/// message IDs to remove from `active_path`.
-///
-/// The summary ChatMessage should be prepended to `active_path` and added
-/// to `conv.messages`. Old messages stay in `conv.messages` for branch
-/// history but are removed from `active_path`.
+/// to Sonnet for summarization. Returns the summary text and the list of
+/// consumed message IDs. The caller is responsible for creating spans
+/// and updating `active_path`.
 pub async fn summarize_messages(
     client: &AnthropicClient,
     messages: &[&ChatMessage],
     keep_recent: usize,
-) -> Result<(ChatMessage, Vec<String>)> {
+) -> Result<(String, Vec<String>)> {
     if messages.len() <= keep_recent {
         anyhow::bail!("Not enough messages to summarize");
     }
@@ -210,7 +204,6 @@ pub async fn summarize_messages(
         for part in &msg.parts {
             match part {
                 MessagePart::Text { text } => {
-                    // Truncate very long text parts
                     let truncated: String = text.chars().take(2000).collect();
                     let suffix = if text.chars().count() > 2000 {
                         "…"
@@ -222,7 +215,6 @@ pub async fn summarize_messages(
                 MessagePart::ToolCall {
                     tool_name, args, ..
                 } => {
-                    // Show tool name and key args (truncated)
                     let args_str = serde_json::to_string(args).unwrap_or_default();
                     let truncated: String = args_str.chars().take(200).collect();
                     conversation_text
@@ -276,23 +268,7 @@ pub async fn summarize_messages(
         })
         .unwrap_or_else(|| "[Compaction summary unavailable]".to_string());
 
-    // Build summary ChatMessage
     let consumed_ids: Vec<String> = to_summarize.iter().map(|m| m.id.clone()).collect();
-
-    let summary_msg = ChatMessage {
-        id: Uuid::new_v4().to_string(),
-        role: MessageRole::User,
-        parts: vec![MessagePart::Text {
-            text: format!(
-                "[Conversation compacted — {} messages summarized]\n\n{}",
-                consumed_ids.len(),
-                summary_text,
-            ),
-        }],
-        timestamp: Utc::now(),
-        parent_id: None,
-        metadata: Some(serde_json::json!({ "is_compaction_summary": true })),
-    };
 
     tracing::info!(
         consumed = consumed_ids.len(),
@@ -301,7 +277,7 @@ pub async fn summarize_messages(
         "Conversation compacted"
     );
 
-    Ok((summary_msg, consumed_ids))
+    Ok((summary_text, consumed_ids))
 }
 
 // ── Tests ──
