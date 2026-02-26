@@ -176,6 +176,31 @@ context needed to continue the work. Include:
 Be extremely concise — this summary replaces the original messages. \
 Use bullet points, not prose. Omit pleasantries and filler.";
 
+/// Find a safe split point that doesn't separate tool calls from their results.
+///
+/// Starts at `messages.len() - keep_recent` and advances forward if the
+/// boundary would orphan a ToolResult from its matching ToolCall.
+fn safe_split_point(messages: &[&ChatMessage], keep_recent: usize) -> usize {
+    let mut split_at = messages.len() - keep_recent;
+
+    // If the last consumed message is an assistant with tool calls,
+    // the next message contains the matching tool results — include it
+    // in the consumed set to avoid orphaned ToolResults in the kept set.
+    if split_at > 0 && split_at < messages.len() {
+        let last_consumed = messages[split_at - 1];
+        if last_consumed.role == MessageRole::Assistant
+            && last_consumed
+                .parts
+                .iter()
+                .any(|p| matches!(p, MessagePart::ToolCall { .. }))
+        {
+            split_at += 1;
+        }
+    }
+
+    split_at
+}
+
 /// Summarize old messages into a compact structured reference.
 ///
 /// Keeps the last `keep_recent` messages intact. Everything before is fed
@@ -191,7 +216,13 @@ pub async fn summarize_messages(
         anyhow::bail!("Not enough messages to summarize");
     }
 
-    let split_at = messages.len() - keep_recent;
+    let split_at = safe_split_point(messages, keep_recent);
+
+    // After boundary adjustment we may have consumed too many messages
+    if split_at == 0 {
+        anyhow::bail!("No messages to summarize after safe boundary adjustment");
+    }
+
     let to_summarize = &messages[..split_at];
 
     // Build a text representation of old messages for the summarizer
@@ -486,5 +517,123 @@ mod tests {
 
         // Should be unchanged
         assert_eq!(messages[2].content[0], original_content);
+    }
+
+    // ── safe_split_point tests ──
+
+    fn make_chat_msg(id: &str, role: MessageRole, parts: Vec<MessagePart>) -> ChatMessage {
+        ChatMessage {
+            id: id.to_string(),
+            role,
+            parts,
+            timestamp: chrono::Utc::now(),
+            parent_id: None,
+            metadata: None,
+        }
+    }
+
+    fn text_user(id: &str, text: &str) -> ChatMessage {
+        make_chat_msg(
+            id,
+            MessageRole::User,
+            vec![MessagePart::Text {
+                text: text.to_string(),
+            }],
+        )
+    }
+
+    fn text_assistant(id: &str, text: &str) -> ChatMessage {
+        make_chat_msg(
+            id,
+            MessageRole::Assistant,
+            vec![MessagePart::Text {
+                text: text.to_string(),
+            }],
+        )
+    }
+
+    fn tool_call_assistant(id: &str, tool_call_id: &str) -> ChatMessage {
+        make_chat_msg(
+            id,
+            MessageRole::Assistant,
+            vec![MessagePart::ToolCall {
+                tool_call_id: tool_call_id.to_string(),
+                tool_name: "read_file".to_string(),
+                args: serde_json::json!({}),
+                result: None,
+                is_error: false,
+            }],
+        )
+    }
+
+    fn tool_result_user(id: &str, tool_call_id: &str) -> ChatMessage {
+        make_chat_msg(
+            id,
+            MessageRole::User,
+            vec![MessagePart::ToolResult {
+                tool_call_id: tool_call_id.to_string(),
+                result: "ok".to_string(),
+                is_error: false,
+            }],
+        )
+    }
+
+    #[test]
+    fn safe_split_no_tools() {
+        let msgs = vec![
+            text_user("1", "hi"),
+            text_assistant("2", "hello"),
+            text_user("3", "how"),
+            text_assistant("4", "fine"),
+            text_user("5", "bye"),
+        ];
+        let refs: Vec<&ChatMessage> = msgs.iter().collect();
+        // keep_recent=2 → tentative split_at=3
+        assert_eq!(safe_split_point(&refs, 2), 3);
+    }
+
+    #[test]
+    fn safe_split_boundary_between_tool_call_and_result() {
+        // [u1, a2(tool_0), u3(result_0), u4, a5]
+        let msgs = vec![
+            text_user("1", "do something"),
+            tool_call_assistant("2", "tool_0"),
+            tool_result_user("3", "tool_0"),
+            text_user("4", "thanks"),
+            text_assistant("5", "done"),
+        ];
+        let refs: Vec<&ChatMessage> = msgs.iter().collect();
+        // keep_recent=3 → tentative split_at=2
+        // messages[1] is assistant with ToolCall → advance to 3
+        assert_eq!(safe_split_point(&refs, 3), 3);
+    }
+
+    #[test]
+    fn safe_split_boundary_after_tool_result() {
+        // [u1, a2(tool_0), u3(result_0), u4, a5]
+        let msgs = vec![
+            text_user("1", "do something"),
+            tool_call_assistant("2", "tool_0"),
+            tool_result_user("3", "tool_0"),
+            text_user("4", "thanks"),
+            text_assistant("5", "done"),
+        ];
+        let refs: Vec<&ChatMessage> = msgs.iter().collect();
+        // keep_recent=2 → tentative split_at=3
+        // messages[2] is user(ToolResult) → no advance needed
+        assert_eq!(safe_split_point(&refs, 2), 3);
+    }
+
+    #[test]
+    fn safe_split_boundary_on_text_assistant() {
+        let msgs = vec![
+            text_user("1", "hi"),
+            text_assistant("2", "hello"),
+            text_user("3", "how"),
+            text_assistant("4", "fine"),
+        ];
+        let refs: Vec<&ChatMessage> = msgs.iter().collect();
+        // keep_recent=2 → split_at=2, messages[1] is text-only assistant → no advance
+        assert_eq!(safe_split_point(&refs, 2), 2);
     }
 }
