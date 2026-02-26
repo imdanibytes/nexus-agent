@@ -28,10 +28,19 @@ respond with ONLY the new title — no quotes, no explanation.";
 const TITLE_MODEL_ANTHROPIC: &str = "claude-haiku-4-5-20251001";
 const TITLE_MODEL_BEDROCK: &str = "us.anthropic.claude-haiku-4-5-20251001-v1:0";
 
+/// Result of a title generation call, including cost information.
+struct TitleResult {
+    /// The new title, or None if KEEP.
+    title: Option<String>,
+    /// Cost of the title generation call in USD.
+    cost: f64,
+}
+
 /// Generate or update a conversation title and broadcast it.
 ///
 /// Best-effort: errors are logged but never propagate. Returns the new title
 /// if one was generated, or None if the current title was kept.
+/// The cost of the title generation call is always added to the conversation.
 pub async fn generate_title(
     state: &Arc<AppState>,
     conversation_id: &str,
@@ -48,14 +57,20 @@ pub async fn generate_title(
     let (provider, title_model) = resolve_provider(state).await?;
 
     match call_title_model(provider.as_ref(), &title_model, &summary).await {
-        Ok(Some(title)) => {
-            tracing::info!("auto_title: generated title '{}' for conv={}", title, conversation_id);
-            persist_and_broadcast(state, conversation_id, &title).await;
-            Some(title)
-        }
-        Ok(None) => {
-            tracing::debug!("auto_title: model said KEEP for conv={}", conversation_id);
-            None
+        Ok(result) => {
+            // Always add the cost to the conversation, even for KEEP
+            if result.cost > 0.0 {
+                add_cost_to_conversation(state, conversation_id, result.cost).await;
+                tracing::debug!("auto_title: added ${:.6} to conv={}", result.cost, conversation_id);
+            }
+
+            if let Some(ref title) = result.title {
+                tracing::info!("auto_title: generated title '{}' for conv={} (cost=${:.6})", title, conversation_id, result.cost);
+                persist_and_broadcast(state, conversation_id, title).await;
+            } else {
+                tracing::debug!("auto_title: model said KEEP for conv={}", conversation_id);
+            }
+            result.title
         }
         Err(e) => {
             tracing::warn!("auto_title: title generation failed: {}", e);
@@ -123,13 +138,13 @@ fn build_summary(messages: &[&ChatMessage], current_title: &str) -> String {
     lines.join("\n")
 }
 
-/// Call the title model via streaming and collect the response text.
-/// Returns Ok(Some(title)) for a new title, Ok(None) for KEEP, Err on failure.
+/// Call the title model via streaming and collect the response text + usage.
+/// Returns Ok(TitleResult) with title and cost, Err on failure.
 async fn call_title_model(
     provider: &dyn InferenceProvider,
     model: &str,
     summary: &str,
-) -> Result<Option<String>, String> {
+) -> Result<TitleResult, String> {
     let messages = vec![Message {
         role: Role::User,
         content: vec![ContentBlock::Text {
@@ -150,15 +165,29 @@ async fn call_title_model(
         .await
         .map_err(|e| format!("stream creation failed: {}", e))?;
 
-    // Collect text deltas from the stream
+    // Collect text deltas and usage from the stream
     let mut text = String::new();
+    let mut input_tokens: u32 = 0;
+    let mut output_tokens: u32 = 0;
     while let Some(event) = stream.next().await {
         match event {
+            Ok(StreamEvent::MessageStart { usage, .. }) => {
+                // Capture input token count from the message start event
+                if let Some(usage) = &usage {
+                    input_tokens = usage.input_tokens;
+                }
+            }
             Ok(StreamEvent::ContentBlockDelta {
                 delta: Delta::TextDelta { text: chunk },
                 ..
             }) => {
                 text.push_str(&chunk);
+            }
+            Ok(StreamEvent::MessageDelta { usage, .. }) => {
+                // Capture output token count from the message delta event
+                if let Some(u) = &usage {
+                    output_tokens = u.output_tokens;
+                }
             }
             Ok(StreamEvent::MessageStop) => break,
             Ok(StreamEvent::Error { message, .. }) => {
@@ -171,10 +200,12 @@ async fn call_title_model(
         }
     }
 
+    let cost = crate::pricing::calculate_cost(model, input_tokens, output_tokens);
+
     let text = text.trim().to_string();
 
     if text.is_empty() || text.eq_ignore_ascii_case("KEEP") {
-        return Ok(None);
+        return Ok(TitleResult { title: None, cost });
     }
 
     // Clean: strip quotes, limit length
@@ -186,9 +217,39 @@ async fn call_title_model(
         .collect::<String>();
 
     if cleaned.is_empty() {
-        Ok(None)
+        Ok(TitleResult { title: None, cost })
     } else {
-        Ok(Some(cleaned))
+        Ok(TitleResult { title: Some(cleaned), cost })
+    }
+}
+
+/// Add the title generation cost to the conversation's running total.
+async fn add_cost_to_conversation(state: &Arc<AppState>, conversation_id: &str, cost: f64) {
+    let mut store = state.chat.conversations.write().await;
+    match store.get(conversation_id) {
+        Ok(Some(mut conv)) => {
+            if let Some(ref mut usage) = conv.usage {
+                usage.total_cost += cost;
+            } else {
+                conv.usage = Some(crate::conversation::types::ConversationUsage {
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                    context_window: 0,
+                    total_cost: cost,
+                });
+            }
+            if let Err(e) = store.save(&conv) {
+                tracing::error!("auto_title: failed to save cost: {}", e);
+            }
+        }
+        Ok(None) => {
+            tracing::warn!("auto_title: conversation {} not found for cost update", conversation_id);
+        }
+        Err(e) => {
+            tracing::error!("auto_title: failed to load conversation for cost update: {}", e);
+        }
     }
 }
 
