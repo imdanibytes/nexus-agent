@@ -70,16 +70,16 @@ function AppShell() {
       <TopBar onMenuPress={() => setDrawerOpen(true)} />
       <div className="flex flex-1 min-h-0 gap-2 p-2">
         <ProcessSidePanel />
-        <div className="relative flex-1 min-w-0">
+        <div className="flex-1 min-w-0">
           <Thread />
-          <ThreadDrawer
-            isOpen={drawerOpen}
-            onClose={() => setDrawerOpen(false)}
-            navigate={navigate}
-          />
         </div>
         <TaskPanel />
       </div>
+      <ThreadDrawer
+        isOpen={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        navigate={navigate}
+      />
       <SettingsModal />
       {import.meta.env.DEV && <DebugPanel />}
     </div>
