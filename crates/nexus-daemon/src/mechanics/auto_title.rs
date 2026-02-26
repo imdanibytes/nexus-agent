@@ -26,7 +26,7 @@ respond with ONLY the new title — no quotes, no explanation.";
 /// Title model per provider type. Bedrock uses the cross-region inference
 /// profile ID; direct Anthropic uses the standard model name.
 const TITLE_MODEL_ANTHROPIC: &str = "claude-haiku-4-5-20251001";
-const TITLE_MODEL_BEDROCK: &str = "us.anthropic.claude-haiku-4-5-v1";
+const TITLE_MODEL_BEDROCK: &str = "us.anthropic.claude-3-haiku-20240307-v1:0";
 
 /// Generate or update a conversation title and broadcast it.
 ///
