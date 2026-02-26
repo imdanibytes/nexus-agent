@@ -1,5 +1,5 @@
 import { memo, type FC, useCallback, useMemo, useState } from "react";
-import { Button, Textarea, Chip } from "@heroui/react";
+import { Button, Textarea } from "@heroui/react";
 import {
   CheckIcon,
   XIcon,
@@ -278,15 +278,21 @@ const AnsweredCard: FC<{ toolCall: ToolCallPart }> = ({ toolCall }) => {
       ? toolCall.args.question
       : "Question";
   const truncatedQ =
-    question.length > 60 ? `${question.slice(0, 60)}...` : question;
+    question.length > 80 ? `${question.slice(0, 80)}...` : question;
 
   return (
-    <div className="my-1.5 flex items-center gap-2 text-xs text-default-500">
-      <span className="size-2 rounded-full bg-success shrink-0" />
-      <span className="truncate">{truncatedQ}</span>
-      <Chip size="sm" variant="flat" className="text-[10px] h-5 shrink-0">
-        {answerText}
-      </Chip>
+    <div className="my-2 rounded-lg border border-default-200/50 bg-default-50/40 px-3 py-2 text-xs">
+      <div className="flex items-start gap-2">
+        <span className="size-2 rounded-full bg-success shrink-0 mt-1.5" />
+        <div className="min-w-0 overflow-hidden">
+          <div className="text-default-500">
+            <MarkdownText text={truncatedQ} />
+          </div>
+          <div className="mt-1 text-default-700 [&_.aui-md-p]:my-1">
+            <MarkdownText text={answerText} />
+          </div>
+        </div>
+      </div>
     </div>
   );
 };

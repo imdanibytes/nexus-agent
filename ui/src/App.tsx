@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Routes, Route, useParams, useNavigate } from "react-router";
 import { Thread } from "./components/chat/Thread";
 import { TaskPanel } from "./components/chat/TaskPanel";
+import { ProcessSidePanel } from "./components/chat/ProcessSidePanel";
 import { TopBar } from "./components/chat/TopBar";
 import { ThreadDrawer } from "./components/chat/ThreadDrawer";
 import { SettingsModal } from "./components/settings/SettingsModal";
@@ -68,6 +69,7 @@ function AppShell() {
     <div className="relative flex h-full flex-col overflow-hidden rounded-2xl bg-white/80 dark:bg-default-50/40 backdrop-blur-xl border border-default-200 dark:border-default-200/50 shadow-sm dark:shadow-none">
       <TopBar onMenuPress={() => setDrawerOpen(true)} />
       <div className="flex flex-1 min-h-0 gap-2 p-2">
+        <ProcessSidePanel />
         <div className="relative flex-1 min-w-0">
           <Thread />
           <ThreadDrawer

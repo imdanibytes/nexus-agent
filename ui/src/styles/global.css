@@ -190,6 +190,13 @@ body {
 
 /* --- Code block: nuke Streamdown utility artifacts, restyle with HeroUI --- */
 
+/* --- KaTeX math: overflow is handled at the component level in MarkdownText.tsx --- */
+/* The span component override wraps .katex-display in a scrollable block container */
+.aui-md {
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
 .aui-md [data-streamdown="code-block"] {
   margin-top: 0.625rem !important;
   margin-bottom: 0.625rem !important;

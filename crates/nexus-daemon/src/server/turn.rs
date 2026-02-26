@@ -367,22 +367,55 @@ pub fn spawn_agent_turn(
                     let new_ids: Vec<String> =
                         chat_messages.iter().map(|m| m.id.clone()).collect();
 
-                    conv.messages.extend(chat_messages);
-                    conv.active_path.extend(new_ids);
-                    conv.updated_at = Utc::now();
-                    conv.agent_id =
-                        agent_meta["agent_id"].as_str().map(|s| s.to_string());
-                    conv.usage = Some(ConversationUsage {
-                        input_tokens,
-                        output_tokens,
-                        cache_read_input_tokens,
-                        cache_creation_input_tokens,
-                        context_window,
-                        total_cost: prior_cost + turn_cost,
-                    });
-
+                    // Bug 5 fix: Reload conversation from store to avoid
+                    // overwriting changes made by other subsystems during
+                    // the (potentially long-running) agent turn.
                     let mut store = state_clone.chat.conversations.write().await;
-                    if let Err(e) = store.save(&conv) {
+                    let save_result = match store.get(&conversation_id) {
+                        Ok(Some(mut fresh_conv)) => {
+                            fresh_conv.messages.extend(chat_messages);
+                            fresh_conv.active_path.extend(new_ids);
+                            fresh_conv.updated_at = Utc::now();
+                            fresh_conv.agent_id =
+                                agent_meta["agent_id"].as_str().map(|s| s.to_string());
+                            fresh_conv.usage = Some(ConversationUsage {
+                                input_tokens,
+                                output_tokens,
+                                cache_read_input_tokens,
+                                cache_creation_input_tokens,
+                                context_window,
+                                total_cost: prior_cost + turn_cost,
+                            });
+                            // Preserve span updates from compaction above
+                            if !conv.spans.is_empty() {
+                                fresh_conv.spans = conv.spans.clone();
+                            }
+                            conv = fresh_conv.clone();
+                            store.save(&fresh_conv)
+                        }
+                        Ok(None) => {
+                            tracing::warn!("Conversation {} not found at save time, saving local copy", conversation_id);
+                            conv.messages.extend(chat_messages);
+                            conv.active_path.extend(new_ids);
+                            conv.updated_at = Utc::now();
+                            conv.agent_id =
+                                agent_meta["agent_id"].as_str().map(|s| s.to_string());
+                            conv.usage = Some(ConversationUsage {
+                                input_tokens,
+                                output_tokens,
+                                cache_read_input_tokens,
+                                cache_creation_input_tokens,
+                                context_window,
+                                total_cost: prior_cost + turn_cost,
+                            });
+                            store.save(&conv)
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to reload conversation: {}", e);
+                            Err(e)
+                        }
+                    };
+                    if let Err(e) = save_result {
                         tracing::error!("Failed to save conversation: {}", e);
                     }
                     drop(store);
@@ -399,20 +432,19 @@ pub fn spawn_agent_turn(
                     .await;
                 }
 
-                // Clear active_cancel so the queue watcher knows no turn is running
-                {
-                    let mut active = state_clone.chat.active_cancel.lock().await;
-                    if active.as_ref().map(|(id, _)| id == &conversation_id).unwrap_or(false) {
-                        *active = None;
-                    }
-                }
+                // Bug 3 fix: Hold active_cancels lock across clear + drain
+                // to prevent TOCTOU race with the queue watcher.
+                let queued = {
+                    let mut active = state_clone.chat.active_cancels.lock().await;
+                    active.remove(&conversation_id);
+                    // Drain while still holding the lock so the queue watcher
+                    // cannot see "no active turn" before we've drained.
+                    state_clone.chat.message_queue.drain(&conversation_id).await
+                };
 
-                // Drain any queued messages (bg process notifications, etc.)
-                let queued = state_clone.chat.message_queue.drain(&conversation_id).await;
                 if !queued.is_empty() {
                     drain_queue_and_follow_up(
                         state_clone.clone(),
-                        conv,
                         conversation_id.clone(),
                         queued,
                     )
@@ -421,12 +453,10 @@ pub fn spawn_agent_turn(
             }
             Err(e) => {
                 tracing::error!("Agent turn panicked: {}", e);
-                // Clear active_cancel on error too
+                // Clear active_cancels on error too
                 {
-                    let mut active = state_clone.chat.active_cancel.lock().await;
-                    if active.as_ref().map(|(id, _)| id == &conversation_id).unwrap_or(false) {
-                        *active = None;
-                    }
+                    let mut active = state_clone.chat.active_cancels.lock().await;
+                    active.remove(&conversation_id);
                 }
                 let _ = agent_tx.send(AgUiEvent::RunError {
                     thread_id: conversation_id.clone(),
@@ -445,12 +475,29 @@ pub fn spawn_agent_turn(
 ///
 /// Called after a turn ends (if messages arrived during the turn) or by the
 /// queue watcher (if messages arrived while no turn was active).
+///
+/// Reloads the conversation from the store to avoid stale data.
 pub async fn drain_queue_and_follow_up(
     state: Arc<AppState>,
-    mut conv: Conversation,
     conversation_id: String,
     messages: Vec<super::message_queue::QueuedMessage>,
 ) {
+    // Reload fresh conversation from store
+    let mut conv = {
+        let store = state.chat.conversations.read().await;
+        match store.get(&conversation_id) {
+            Ok(Some(c)) => c,
+            Ok(None) => {
+                tracing::warn!(conversation_id = %conversation_id, "drain_queue_and_follow_up: conversation not found");
+                return;
+            }
+            Err(e) => {
+                tracing::error!(conversation_id = %conversation_id, "drain_queue_and_follow_up: failed to load: {}", e);
+                return;
+            }
+        }
+    };
+
     for msg in messages {
         let chat_msg = ChatMessage {
             id: Uuid::new_v4().to_string(),
@@ -478,8 +525,8 @@ pub async fn drain_queue_and_follow_up(
     // Register the follow-up turn so the queue watcher skips this conversation
     let follow_up_cancel = tokio_util::sync::CancellationToken::new();
     {
-        let mut active = state.chat.active_cancel.lock().await;
-        *active = Some((conversation_id.clone(), follow_up_cancel.clone()));
+        let mut active = state.chat.active_cancels.lock().await;
+        active.insert(conversation_id.clone(), follow_up_cancel.clone());
     }
 
     spawn_agent_turn(

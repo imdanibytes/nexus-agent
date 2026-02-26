@@ -402,12 +402,9 @@ pub async fn abort_turn(
     State(state): State<Arc<AppState>>,
     Json(body): Json<AbortRequest>,
 ) -> StatusCode {
-    let mut active = state.chat.active_cancel.lock().await;
-    if let Some((ref cid, ref token)) = *active {
-        if cid == &body.conversation_id {
-            token.cancel();
-            *active = None;
-        }
+    let mut active = state.chat.active_cancels.lock().await;
+    if let Some(token) = active.remove(&body.conversation_id) {
+        token.cancel();
     }
     StatusCode::OK
 }
@@ -424,14 +421,12 @@ async fn cancel_existing_turn(
     state: &Arc<AppState>,
     conversation_id: &str,
 ) -> tokio_util::sync::CancellationToken {
-    let mut active = state.chat.active_cancel.lock().await;
-    if let Some((ref cid, ref token)) = *active {
-        if cid == conversation_id {
-            token.cancel();
-        }
+    let mut active = state.chat.active_cancels.lock().await;
+    if let Some(token) = active.remove(conversation_id) {
+        token.cancel();
     }
     let cancel = tokio_util::sync::CancellationToken::new();
-    *active = Some((conversation_id.to_string(), cancel.clone()));
+    active.insert(conversation_id.to_string(), cancel.clone());
     cancel
 }
 

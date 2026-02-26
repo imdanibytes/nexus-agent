@@ -22,8 +22,6 @@ export interface TurnContext {
   skipUserPersist?: boolean;
 }
 
-// ── Stream consumer ──
-
 export async function consumeStream(
   conversationId: string,
   signal: AbortSignal,

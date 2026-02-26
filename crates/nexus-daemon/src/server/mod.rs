@@ -23,7 +23,6 @@ use tower_http::services::ServeDir;
 use crate::anthropic::AnthropicClient;
 use crate::config::{FilesystemConfig, NexusConfig};
 use crate::workspace::WorkspaceStore;
-use sse::SseHub;
 use tokio::sync::RwLock;
 
 pub use services::{AgentService, ChatService, McpService};
@@ -38,7 +37,6 @@ pub struct AppState {
     pub base_filesystem_config: FilesystemConfig,
     /// Effective filesystem config (workspaces + base). Updated on workspace CRUD.
     pub effective_fs_config: RwLock<FilesystemConfig>,
-    pub sse_hub: SseHub,
     /// Anthropic client used only for title generation (from ANTHROPIC_API_KEY env)
     pub title_client: Option<AnthropicClient>,
 }
@@ -146,7 +144,7 @@ pub fn build_router(state: AppState, queue_rx: tokio::sync::mpsc::UnboundedRecei
         .route("/api/chat/answer", post(chat::answer_question))
         // Tools
         .route("/api/tools", get(list_tools))
-        // SSE events
+        // SSE events (global multiplexed stream)
         .route("/api/events", get(events_stream))
         // Status
         .route("/api/status", get(health));
@@ -194,7 +192,15 @@ async fn events_stream(
     State(state): State<Arc<AppState>>,
 ) -> axum::response::sse::Sse<impl futures::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>>
 {
-    state.sse_hub.subscribe()
+    let active_runs: Vec<String> = state
+        .chat
+        .active_cancels
+        .lock()
+        .await
+        .keys()
+        .cloned()
+        .collect();
+    state.chat.event_bridge.subscribe(active_runs).await
 }
 
 async fn list_processes(
@@ -225,11 +231,8 @@ fn start_queue_watcher(
     tokio::spawn(async move {
         while let Some(conv_id) = rx.recv().await {
             // If a turn is active, the after-turn drain will handle it
-            let active = state.chat.active_cancel.lock().await;
-            let turn_active = active
-                .as_ref()
-                .map(|(id, _)| id == &conv_id)
-                .unwrap_or(false);
+            let active = state.chat.active_cancels.lock().await;
+            let turn_active = active.contains_key(&conv_id);
             drop(active);
 
             if turn_active {
@@ -247,22 +250,7 @@ fn start_queue_watcher(
                 "Queue watcher: injecting messages into idle conversation"
             );
 
-            let conv = {
-                let store = state.chat.conversations.read().await;
-                match store.get(&conv_id) {
-                    Ok(Some(c)) => c,
-                    Ok(None) => {
-                        tracing::warn!(conversation_id = %conv_id, "Queue watcher: conversation not found");
-                        continue;
-                    }
-                    Err(e) => {
-                        tracing::warn!(conversation_id = %conv_id, "Queue watcher: failed to load: {}", e);
-                        continue;
-                    }
-                }
-            };
-
-            turn::drain_queue_and_follow_up(Arc::clone(&state), conv, conv_id, queued).await;
+            turn::drain_queue_and_follow_up(Arc::clone(&state), conv_id, queued).await;
         }
     });
 }

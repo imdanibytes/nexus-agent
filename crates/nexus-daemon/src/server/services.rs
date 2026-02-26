@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::{Mutex, RwLock};
@@ -16,7 +17,7 @@ use super::sse::AgentEventBridge;
 /// Chat execution: conversations, cancellation, events, questions, tasks.
 pub struct ChatService {
     pub conversations: RwLock<ConversationStore>,
-    pub active_cancel: Mutex<Option<(String, tokio_util::sync::CancellationToken)>>,
+    pub active_cancels: Mutex<HashMap<String, tokio_util::sync::CancellationToken>>,
     pub event_bridge: AgentEventBridge,
     pub pending_questions: RwLock<PendingQuestionStore>,
     pub task_store: RwLock<TaskStateStore>,

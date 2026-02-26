@@ -18,16 +18,20 @@ export interface BgProcess {
 interface ProcessState {
   /** All known processes keyed by conversation ID → array. */
   processes: Record<string, BgProcess[]>;
+  /** Whether the side panel is expanded. */
+  panelOpen: boolean;
 
   addProcess: (process: BgProcess) => void;
   updateProcess: (processId: string, patch: Partial<BgProcess>) => void;
   removeProcess: (processId: string) => void;
   removeConversation: (conversationId: string) => void;
   setProcesses: (conversationId: string, processes: BgProcess[]) => void;
+  setPanelOpen: (open: boolean) => void;
 }
 
 export const useProcessStore = create<ProcessState>((set) => ({
   processes: {},
+  panelOpen: false,
 
   addProcess: (process) =>
     set((s) => {
@@ -73,4 +77,6 @@ export const useProcessStore = create<ProcessState>((set) => ({
     set((s) => ({
       processes: { ...s.processes, [conversationId]: processes },
     })),
+
+  setPanelOpen: (panelOpen) => set({ panelOpen }),
 }));

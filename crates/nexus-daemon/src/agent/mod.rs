@@ -564,9 +564,14 @@ pub async fn run_agent_turn(
         "Turn complete"
     );
 
+    let has_running_processes = match &process_manager {
+        Some(pm) => pm.has_running(conversation_id).await,
+        None => false,
+    };
     let _ = tx.send(AgUiEvent::RunFinished {
         thread_id: conversation_id.to_string(),
         run_id,
+        has_running_processes,
     });
 
     Ok(AgentTurnResult {

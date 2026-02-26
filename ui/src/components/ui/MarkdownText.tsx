@@ -271,6 +271,29 @@ const markdownComponents: Components = {
     }
     return <div className={className} {...props}>{children}</div>;
   },
+  span: ({ className, node: _, ...props }) => {
+    // Wrap display math in a scrollable block container
+    if (className?.includes("katex-display")) {
+      return (
+        <span
+          className={className}
+          style={{ display: "block", overflowX: "auto", overflowY: "hidden", maxWidth: "100%", WebkitOverflowScrolling: "touch", padding: "4px 0" }}
+          {...props}
+        />
+      );
+    }
+    // Wrap inline math in a constrained inline-block
+    if (className?.includes("katex")) {
+      return (
+        <span
+          className={className}
+          style={{ display: "inline-block", maxWidth: "100%", overflowX: "auto", overflowY: "hidden", verticalAlign: "bottom" }}
+          {...props}
+        />
+      );
+    }
+    return <span className={className} {...props} />;
+  },
   section: ({ className, node: _, ...props }) => {
     const isFootnotes =
       (props as Record<string, unknown>)["data-footnotes"] !== undefined;

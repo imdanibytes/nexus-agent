@@ -87,6 +87,11 @@ pub enum AgUiEvent {
         thread_id: String,
         #[serde(rename = "runId")]
         run_id: String,
+        /// True if the conversation has background processes still running.
+        /// The client should keep the SSE connection open to receive their
+        /// completion notifications.
+        #[serde(rename = "hasRunningProcesses", default)]
+        has_running_processes: bool,
     },
     #[serde(rename = "RUN_ERROR")]
     RunError {
@@ -105,6 +110,43 @@ pub enum AgUiEvent {
         name: String,
         value: serde_json::Value,
     },
+    /// Sent once when a client connects to the global SSE stream.
+    /// Contains the list of conversations with in-progress turns.
+    #[serde(rename = "SYNC")]
+    Sync {
+        #[serde(rename = "activeRuns")]
+        active_runs: Vec<String>,
+    },
+}
+
+impl AgUiEvent {
+    /// Extract the thread_id from any event variant (if present).
+    pub fn thread_id(&self) -> Option<&str> {
+        match self {
+            Self::RunStarted { thread_id, .. }
+            | Self::TextMessageStart { thread_id, .. }
+            | Self::TextMessageContent { thread_id, .. }
+            | Self::TextMessageEnd { thread_id, .. }
+            | Self::ToolCallStart { thread_id, .. }
+            | Self::ToolCallArgs { thread_id, .. }
+            | Self::ToolCallEnd { thread_id, .. }
+            | Self::ToolCallResult { thread_id, .. }
+            | Self::RunFinished { thread_id, .. }
+            | Self::RunError { thread_id, .. }
+            | Self::Custom { thread_id, .. } => Some(thread_id),
+            Self::Sync { .. } => None,
+        }
+    }
+
+    /// Check if this is a RUN_STARTED event.
+    pub fn is_run_started(&self) -> bool {
+        matches!(self, Self::RunStarted { .. })
+    }
+
+    /// Check if this is a terminal event (RUN_FINISHED or RUN_ERROR).
+    pub fn is_run_terminal(&self) -> bool {
+        matches!(self, Self::RunFinished { .. } | Self::RunError { .. })
+    }
 }
 
 #[cfg(test)]
@@ -175,5 +217,25 @@ mod tests {
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["type"], "RUN_ERROR");
         assert!(json.get("details").is_none());
+    }
+
+    #[test]
+    fn run_finished_has_running_processes_serializes() {
+        let event = AgUiEvent::RunFinished {
+            thread_id: "t1".into(),
+            run_id: "r1".into(),
+            has_running_processes: true,
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["type"], "RUN_FINISHED");
+        assert_eq!(json["hasRunningProcesses"], true);
+
+        let event_false = AgUiEvent::RunFinished {
+            thread_id: "t1".into(),
+            run_id: "r1".into(),
+            has_running_processes: false,
+        };
+        let json_false = serde_json::to_value(&event_false).unwrap();
+        assert_eq!(json_false["hasRunningProcesses"], false);
     }
 }

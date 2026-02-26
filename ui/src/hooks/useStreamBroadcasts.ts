@@ -4,6 +4,8 @@ import { useThreadStore } from "../stores/threadStore";
 import { useUsageStore } from "../stores/usageStore";
 import { useProcessStore, type BgProcess } from "../stores/processStore";
 import { eventBus } from "../runtime/event-bus";
+import { consumeStream } from "../lib/stream-consumer";
+import { snowflake } from "../lib/snowflake";
 
 /** Register broadcast event handlers (title_update, usage_update). */
 export function useStreamBroadcasts(): void {
@@ -63,10 +65,8 @@ export function useStreamBroadcasts(): void {
           outputPreview: proc.outputPreview,
           outputSize: proc.outputSize,
         });
-        // Auto-remove from indicator after 5s
-        setTimeout(() => {
-          useProcessStore.getState().removeProcess(proc.id);
-        }, 5000);
+        // Don't disconnect SSE here — the server will spawn a follow-up turn
+        // for the bg process notification, and RUN_FINISHED will handle disconnect.
       }
     });
 
@@ -77,10 +77,53 @@ export function useStreamBroadcasts(): void {
           status: "cancelled",
           completedAt: proc.completedAt,
         });
-        // Auto-remove from indicator after 5s
-        setTimeout(() => {
-          useProcessStore.getState().removeProcess(proc.id);
-        }, 5000);
+        // Don't disconnect SSE here — same as bg_process_completed above.
+      }
+    });
+
+    // Auto-consume server-initiated turns. This handles:
+    // - Follow-up turns (e.g., after bg_process_completed)
+    // - Reconnection (SYNC replays buffered events, then RUN_STARTED arrives)
+    // - Programmatic API triggers
+    const autoConsumeControllers = new Map<string, AbortController>();
+
+    function autoConsume(conversationId: string): void {
+      // Only auto-consume if this conversation is NOT already streaming
+      // (i.e., this is a server-initiated turn, not a user-initiated one)
+      const conv = useThreadStore.getState().conversations[conversationId];
+      if (conv?.isStreaming) return;
+
+      console.debug(`[AutoConsume] Server-initiated turn for ${conversationId}`);
+
+      const assistantMsgId = snowflake();
+      useThreadStore.getState().startStreaming(conversationId, assistantMsgId);
+
+      const controller = new AbortController();
+      autoConsumeControllers.set(conversationId, controller);
+
+      // No turnCtx — server handles persistence for follow-up turns.
+      // After the stream ends, reload history to sync client state.
+      consumeStream(conversationId, controller.signal).then(() => {
+        autoConsumeControllers.delete(conversationId);
+        useThreadStore.getState().loadHistory(conversationId);
+      });
+    }
+
+    const unsubRunStarted = eventBus.on("RUN_STARTED", (event) => {
+      const conversationId = event.threadId as string | undefined;
+      if (!conversationId) return;
+      autoConsume(conversationId);
+    });
+
+    // SYNC: sent on SSE connect with the list of active conversations.
+    // Start auto-consuming each so that reconnection (page refresh) picks
+    // up in-progress turns and replayed events render immediately.
+    const unsubSync = eventBus.on("SYNC", (event) => {
+      const activeRuns = event.activeRuns as string[] | undefined;
+      if (!activeRuns?.length) return;
+      console.debug(`[SYNC] Active runs:`, activeRuns);
+      for (const conversationId of activeRuns) {
+        autoConsume(conversationId);
       }
     });
 
@@ -91,6 +134,10 @@ export function useStreamBroadcasts(): void {
       unsubBgStarted();
       unsubBgCompleted();
       unsubBgCancelled();
+      unsubRunStarted();
+      unsubSync();
+      for (const c of autoConsumeControllers.values()) c.abort();
+      autoConsumeControllers.clear();
     };
   }, []);
 }

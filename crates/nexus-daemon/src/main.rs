@@ -30,7 +30,7 @@ use crate::conversation::ConversationStore;
 use crate::mcp::store::McpServerStore;
 use crate::mcp::McpManager;
 use crate::provider::{ProviderFactory, ProviderStore, ProviderType};
-use crate::server::sse::{AgentEventBridge, SseHub};
+use crate::server::sse::AgentEventBridge;
 use crate::server::{AppState, AgentService, ChatService, McpService};
 use crate::workspace::WorkspaceStore;
 
@@ -110,8 +110,7 @@ async fn main() -> Result<()> {
     let conversations_dir = nexus_dir.join("conversations");
     let conversations = ConversationStore::load(conversations_dir)?;
 
-    let sse_hub = SseHub::new();
-    let event_bridge = AgentEventBridge::new(sse_hub.clone());
+    let event_bridge = AgentEventBridge::new();
 
     // Workspaces + effective filesystem config
     let workspace_store = WorkspaceStore::new(config.workspaces.clone());
@@ -141,7 +140,7 @@ async fn main() -> Result<()> {
 
     let chat = Arc::new(ChatService {
         conversations: tokio::sync::RwLock::new(conversations),
-        active_cancel: tokio::sync::Mutex::new(None),
+        active_cancels: tokio::sync::Mutex::new(std::collections::HashMap::new()),
         event_bridge,
         pending_questions: tokio::sync::RwLock::new(ask_user::PendingQuestionStore::new()),
         task_store: tokio::sync::RwLock::new(tasks::store::TaskStateStore::new(nexus_dir.join("tasks"))),
@@ -168,7 +167,6 @@ async fn main() -> Result<()> {
         chat,
         agents: agents_svc,
         mcp: mcp_svc,
-        sse_hub,
         title_client,
     };
 

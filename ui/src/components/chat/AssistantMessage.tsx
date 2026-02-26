@@ -295,7 +295,7 @@ const AssistantMessageImpl: FC<{
       className="group/assistant relative mx-auto w-full max-w-(--thread-max-width) animate-fade-in py-3"
       data-role="assistant"
     >
-      <div className="wrap-break-word px-2 text-foreground leading-relaxed space-y-2.5">
+      <div className="wrap-break-word min-w-0 px-2 text-foreground leading-relaxed space-y-2.5">
         {isActiveStream && visibleParts.length === 0 && (
           <ThinkingIndicator label={activity} />
         )}

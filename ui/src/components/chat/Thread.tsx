@@ -10,7 +10,7 @@ import { TooltipIconButton } from "../ui/TooltipIconButton";
 import { ContextRing } from "../ui/ContextRing";
 import { Composer } from "../ui/Composer";
 import { AgentSwitcher } from "../agent/AgentSwitcher";
-import { ProcessIndicator } from "./ProcessIndicator";
+
 import { SystemNotification } from "./SystemNotification";
 import { ThreadWelcome } from "./ThreadWelcome";
 import { UserMessage } from "./UserMessage";
@@ -66,7 +66,7 @@ export const Thread: FC = () => {
       <div className="relative flex-1 min-h-0">
         <div
           ref={containerRef}
-          className="aui-thread-viewport flex h-full flex-col overflow-x-auto overflow-y-scroll scroll-smooth px-4 pt-4"
+          className="aui-thread-viewport flex h-full flex-col overflow-x-hidden overflow-y-scroll scroll-smooth px-4 pt-4"
           style={{
             maskImage:
               "linear-gradient(to bottom, transparent 0%, black 20px, black calc(100% - 20px), transparent 100%)",
@@ -169,7 +169,6 @@ const ComposerLeftSlot: FC = () => {
   return (
     <div className="flex items-center gap-1.5">
       <AgentSwitcher />
-      <ProcessIndicator />
       {usage && usage.contextWindow > 0 && (
         <ContextRing
           contextTokens={usage.inputTokens + usage.outputTokens}

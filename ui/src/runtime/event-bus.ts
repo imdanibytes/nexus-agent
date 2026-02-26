@@ -1,7 +1,10 @@
 /**
- * SSE-based event bus. Opens a single persistent EventSource to /api/events.
- * Turn-scoped events are routed to per-conversation async iterables.
- * Broadcast events (CUSTOM) dispatch to registered handlers.
+ * SSE-based event bus with a single global EventSource connection.
+ *
+ * One connection per browser tab at /api/events. The server pushes all events
+ * for all conversations. Turn-scoped events are routed to per-conversation
+ * async iterables. Broadcast events (CUSTOM, SYNC, RUN_STARTED) dispatch to
+ * registered handlers.
  */
 
 export const EventType = {
@@ -16,6 +19,7 @@ export const EventType = {
   TOOL_CALL_END: "TOOL_CALL_END",
   TOOL_CALL_RESULT: "TOOL_CALL_RESULT",
   CUSTOM: "CUSTOM",
+  SYNC: "SYNC",
 } as const;
 
 export type EventType = (typeof EventType)[keyof typeof EventType];
@@ -54,11 +58,12 @@ class EventBus {
   private streams = new Map<string, TurnStream>();
   private openWaiters: Array<() => void> = [];
 
+  /**
+   * Open the global SSE connection to /api/events.
+   * No-op if already connected.
+   */
   connect(): void {
-    if (this.source?.readyState === EventSource.OPEN) return;
-
-    // Close stale connection that's stuck reconnecting
-    this.source?.close();
+    if (this.source) return;
 
     const es = new EventSource("/api/events");
 
@@ -77,35 +82,48 @@ class EventBus {
     };
 
     es.onerror = () => {
-      // EventSource auto-reconnects, but we need to force a fresh
-      // connection if the server restarted (new process = new broadcast
-      // channel, old reconnect lands on a clean hub that missed events).
+      // EventSource auto-reconnects on transient errors.
     };
 
     this.source = es;
   }
 
-  /** Resolves when the SSE connection is open. Forces reconnect if needed. */
+  /**
+   * Resolves when the SSE connection is open.
+   * Opens the connection if not already open.
+   */
   ensureConnected(): Promise<void> {
     if (this.source?.readyState === EventSource.OPEN) {
       return Promise.resolve();
     }
-    this.connect();
+
+    if (!this.source) {
+      this.connect();
+    }
+
+    if (this.source!.readyState === EventSource.OPEN) {
+      return Promise.resolve();
+    }
+
     return new Promise((resolve) => {
-      // Double-check after connect() — might already be open
-      if (this.source?.readyState === EventSource.OPEN) {
-        resolve();
-        return;
-      }
       this.openWaiters.push(resolve);
     });
   }
 
+  /**
+   * Close the global SSE connection.
+   */
   disconnect(): void {
-    this.source?.close();
+    if (!this.source) return;
+    console.log("[EventBus] closing global EventSource");
+    this.source.close();
     this.source = null;
   }
 
+  /**
+   * Register a broadcast handler for CUSTOM/SYNC/RUN_STARTED events.
+   * Receives matching events from the global connection.
+   */
   on(name: string, handler: BroadcastHandler): () => void {
     let set = this.broadcastHandlers.get(name);
     if (!set) {
@@ -116,6 +134,10 @@ class EventBus {
     return () => set!.delete(handler);
   }
 
+  /**
+   * Subscribe to turn-scoped events for a specific conversation.
+   * Returns an async iterable that yields events until the turn ends.
+   */
   subscribe(threadId: string): AsyncIterable<AgUiEvent> {
     let stream = this.streams.get(threadId);
     if (!stream) {
@@ -123,7 +145,7 @@ class EventBus {
       this.streams.set(threadId, stream);
     }
 
-    const self = this;
+    const streams = this.streams;
     return {
       [Symbol.asyncIterator](): AsyncIterator<AgUiEvent> {
         return {
@@ -135,7 +157,7 @@ class EventBus {
               });
             }
             if (stream.done) {
-              self.streams.delete(threadId);
+              streams.delete(threadId);
               return Promise.resolve({
                 value: undefined as never,
                 done: true,
@@ -165,6 +187,15 @@ class EventBus {
   private dispatch(event: AgUiEvent): void {
     const type = event.type;
 
+    // SYNC events dispatch to broadcast handlers only (no threadId routing)
+    if (type === EventType.SYNC) {
+      const handlers = this.broadcastHandlers.get("SYNC");
+      if (handlers) {
+        for (const h of handlers) h(event);
+      }
+      return;
+    }
+
     if (type === EventType.CUSTOM) {
       const name = event.name as string;
       const handlers = this.broadcastHandlers.get(name);
@@ -175,6 +206,15 @@ class EventBus {
         this.routeToStream(event);
       }
       return;
+    }
+
+    // Notify broadcast handlers for RUN_STARTED so server-initiated
+    // follow-up turns can be detected
+    if (type === EventType.RUN_STARTED) {
+      const handlers = this.broadcastHandlers.get("RUN_STARTED");
+      if (handlers) {
+        for (const h of handlers) h(event);
+      }
     }
 
     if (TURN_EVENTS.has(type) && event.threadId) {
