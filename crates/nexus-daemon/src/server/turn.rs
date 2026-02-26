@@ -33,6 +33,8 @@ pub fn spawn_agent_turn(
     let last_active_id = conv.active_path.last().cloned();
 
     tokio::spawn(async move {
+        let setup_start = std::time::Instant::now();
+
         // Resolve active agent → provider
         let (provider_record, model, max_tokens, system_prompt, temperature, thinking_budget, agent_meta) = {
             let agents = state_clone.agents.agents.read().await;
@@ -282,6 +284,8 @@ pub fn spawn_agent_turn(
             filesystem_config: effective_fs.clone(),
         });
 
+        let setup_duration_ms = setup_start.elapsed().as_millis() as u64;
+
         let result = agent::run_agent_turn(
             provider.as_ref(),
             &conversation_id,
@@ -311,7 +315,7 @@ pub fn spawn_agent_turn(
         match result {
             Ok(AgentTurnResult {
                 messages: new_messages,
-                timing_spans,
+                timing_spans: mut timing_spans,
                 input_tokens,
                 output_tokens,
                 cache_read_input_tokens,
@@ -321,6 +325,50 @@ pub fn spawn_agent_turn(
                 error: turn_error,
                 ..
             }) => {
+                // Inject the pre-turn setup span (agent resolution, tool assembly,
+                // system prompt building, compaction) as a child of the turn span.
+                if setup_duration_ms > 0 {
+                    // Insert after the turn span (index 0) so it appears first
+                    let insert_idx = if !timing_spans.is_empty() { 1 } else { 0 };
+                    timing_spans.insert(insert_idx, serde_json::json!({
+                        "id": "t-setup",
+                        "name": "setup",
+                        "parentId": "t-turn",
+                        "startMs": 0,
+                        "endMs": setup_duration_ms,
+                        "durationMs": setup_duration_ms,
+                    }));
+
+                    // Shift all other spans forward by setup_duration_ms so the turn
+                    // span's endMs reflects total wall time including setup.
+                    // The agent's spans start at 0 (its own Instant::now()), so we
+                    // need to offset them by the setup duration.
+                    for span in timing_spans.iter_mut() {
+                        if let Some(obj) = span.as_object_mut() {
+                            let id = obj.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                            if id == "t-turn" || id == "t-setup" {
+                                continue;
+                            }
+                            if let Some(start) = obj.get("startMs").and_then(|v| v.as_u64()) {
+                                obj.insert("startMs".to_string(), (start + setup_duration_ms).into());
+                            }
+                            if let Some(end) = obj.get("endMs").and_then(|v| v.as_u64()) {
+                                obj.insert("endMs".to_string(), (end + setup_duration_ms).into());
+                            }
+                        }
+                    }
+
+                    // Update the turn span's endMs to include setup
+                    if let Some(turn_span) = timing_spans.first_mut() {
+                        if let Some(obj) = turn_span.as_object_mut() {
+                            if let Some(end) = obj.get("endMs").and_then(|v| v.as_u64()) {
+                                obj.insert("endMs".to_string(), (end + setup_duration_ms).into());
+                                obj.insert("durationMs".to_string(), (end + setup_duration_ms).into());
+                            }
+                        }
+                    }
+                }
+
                 if let Some(ref err_msg) = turn_error {
                     tracing::error!("Agent turn failed: {}", err_msg);
                 }

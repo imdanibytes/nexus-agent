@@ -234,6 +234,7 @@ export const TimingWaterfall: FC<{ spans: TimingSpan[] }> = ({ spans }) => {
       {/* Legend */}
       <div className="flex gap-3 mt-3 pt-2 border-t border-default-200/50 text-default-500 flex-wrap">
         {[
+          { label: "Setup", color: "bg-slate-400/60 dark:bg-slate-500/50" },
           { label: "LLM", color: "bg-blue-400 dark:bg-blue-500" },
           { label: "Tool", color: "bg-emerald-400 dark:bg-emerald-500" },
         ].map(({ label, color }) => (

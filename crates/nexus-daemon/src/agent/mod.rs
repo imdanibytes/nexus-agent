@@ -309,6 +309,12 @@ pub async fn run_agent_turn(
             "startMs": inference_start_ms,
             "endMs": inference_start_ms + inference_duration,
             "durationMs": inference_duration,
+            "metadata": {
+                "input_tokens": round_input_tokens,
+                "output_tokens": round_output_tokens,
+                "cache_read": round_cache_read,
+                "cache_creation": round_cache_creation,
+            },
         }));
 
         // Accumulate and emit usage.

@@ -194,9 +194,15 @@ const AssistantActionBar: FC<{
           }}
         >
           <DropdownTrigger>
-            <TooltipIconButton tooltip="More" className="size-6 text-default-400">
+            <Button
+              isIconOnly
+              size="sm"
+              variant="light"
+              className="size-6 min-w-6 p-1 text-default-400"
+              aria-label="More"
+            >
               <MoreHorizontalIcon className="size-3" />
-            </TooltipIconButton>
+            </Button>
           </DropdownTrigger>
           <DropdownMenu aria-label="Message actions">
             <DropdownItem
