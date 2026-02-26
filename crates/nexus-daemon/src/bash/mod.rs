@@ -35,6 +35,13 @@ pub fn tool_definition() -> Tool {
                     "maximum": MAX_TIMEOUT_MS,
                     "description": "Timeout in milliseconds (default 120000, max 600000).",
                 },
+                "run_in_background": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Run the command in the background. Returns immediately with a process ID. \
+                        Use process_output to read output, process_status to check status, \
+                        and process_stop to cancel. You will be notified when the process completes.",
+                },
             },
             "required": ["command"],
         }),

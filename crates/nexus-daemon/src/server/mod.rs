@@ -11,7 +11,8 @@ pub mod sse;
 pub mod turn;
 pub mod workspace_api;
 
-use axum::extract::State;
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
 use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
 use std::sync::Arc;
@@ -126,6 +127,15 @@ pub fn build_router(state: AppState, ui_dist_path: &str) -> Router {
             "/api/workspaces/{id}",
             put(workspace_api::update).delete(workspace_api::delete),
         )
+        // Background processes
+        .route(
+            "/api/processes/{conversationId}",
+            get(list_processes),
+        )
+        .route(
+            "/api/processes/{processId}/stop",
+            post(stop_process),
+        )
         // Folder browser (for workspace picker)
         .route("/api/browse", get(browse::browse))
         // Ask-user answer endpoint
@@ -181,4 +191,22 @@ async fn events_stream(
 ) -> axum::response::sse::Sse<impl futures::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>>
 {
     state.sse_hub.subscribe()
+}
+
+async fn list_processes(
+    State(state): State<Arc<AppState>>,
+    Path(conversation_id): Path<String>,
+) -> Json<serde_json::Value> {
+    let processes = state.chat.process_manager.list(&conversation_id).await;
+    Json(serde_json::to_value(&processes).unwrap_or_default())
+}
+
+async fn stop_process(
+    State(state): State<Arc<AppState>>,
+    Path(process_id): Path<String>,
+) -> StatusCode {
+    match state.chat.process_manager.cancel(&process_id).await {
+        Ok(()) => StatusCode::OK,
+        Err(_) => StatusCode::NOT_FOUND,
+    }
 }

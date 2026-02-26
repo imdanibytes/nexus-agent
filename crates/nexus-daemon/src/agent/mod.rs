@@ -2,6 +2,7 @@ pub mod events;
 pub mod sub_agent;
 pub mod tool_dispatch;
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Result;
@@ -12,6 +13,7 @@ use uuid::Uuid;
 
 use crate::anthropic::types::*;
 use crate::ask_user::PendingQuestionStore;
+use crate::bg_process::ProcessManager;
 use crate::mcp::McpManager;
 use crate::config::{FetchConfig, FilesystemConfig};
 use crate::provider::InferenceProvider;
@@ -23,6 +25,7 @@ use tool_dispatch::{
     AskUserHandler, BashHandler, FetchHandler, FilesystemHandler, McpToolHandler, TaskToolHandler,
     ToolContext,
 };
+use crate::bg_process::tools::BgProcessToolHandler;
 
 const MAX_ROUNDS: usize = 50;
 
@@ -74,6 +77,7 @@ pub async fn run_agent_turn(
     cancel: CancellationToken,
     depth: u32,
     prior_cost: f64,
+    process_manager: Option<Arc<ProcessManager>>,
 ) -> Result<AgentTurnResult> {
     let run_id = Uuid::new_v4().to_string();
 
@@ -358,6 +362,11 @@ pub async fn run_agent_turn(
                         .allowed_directories
                         .first()
                         .cloned(),
+                    process_manager: process_manager.clone()
+                        .unwrap_or_else(|| Arc::new(ProcessManager::new(
+                            std::path::PathBuf::from("/tmp/nexus-bg"),
+                            tx.clone(),
+                        ))),
                 };
                 let sub_agent_handler = SubAgentHandler {
                     provider,
@@ -373,11 +382,17 @@ pub async fn run_agent_turn(
                     parent_tools: &tools,
                     cumulative_cost: prior_cost + turn_cost,
                 };
+                let bg_handler = process_manager.as_ref().map(|pm| BgProcessToolHandler {
+                    process_manager: pm.as_ref(),
+                });
                 let mcp_handler = McpToolHandler { mcp };
                 let mut handlers: Vec<&dyn tool_dispatch::ToolHandler> =
                     vec![&ask_handler, &task_handler, &fetch_handler, &fs_handler, &bash_handler];
                 if depth == 0 {
                     handlers.push(&sub_agent_handler);
+                }
+                if let Some(ref bgh) = bg_handler {
+                    handlers.push(bgh);
                 }
                 handlers.push(&mcp_handler);
 

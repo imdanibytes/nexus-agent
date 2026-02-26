@@ -10,6 +10,7 @@ import { TooltipIconButton } from "../ui/TooltipIconButton";
 import { ContextRing } from "../ui/ContextRing";
 import { Composer } from "../ui/Composer";
 import { AgentSwitcher } from "../agent/AgentSwitcher";
+import { ProcessIndicator } from "./ProcessIndicator";
 import { ThreadWelcome } from "./ThreadWelcome";
 import { UserMessage } from "./UserMessage";
 import { AssistantMessage } from "./AssistantMessage";
@@ -163,6 +164,7 @@ const ComposerLeftSlot: FC = () => {
   return (
     <div className="flex items-center gap-1.5">
       <AgentSwitcher />
+      <ProcessIndicator />
       {usage && usage.contextWindow > 0 && (
         <ContextRing
           contextTokens={usage.inputTokens + usage.outputTokens}

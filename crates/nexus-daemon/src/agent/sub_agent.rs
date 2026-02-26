@@ -50,6 +50,13 @@ pub fn tool_definition() -> Tool {
                     "enum": ["fresh", "branched"],
                     "default": "fresh",
                     "description": "Context mode: fresh (sub-agent gets only the task prompt) or branched (inherits parent conversation history + task appended)"
+                },
+                "run_in_background": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Run the sub-agent in the background. Returns immediately with a process ID. \
+                        Use process_output to read output, process_status to check status, \
+                        and process_stop to cancel. You will be notified when the sub-agent completes."
                 }
             },
             "required": ["task"]
@@ -322,6 +329,7 @@ impl ToolHandler for SubAgentHandler<'_> {
             ctx.cancel.clone(),
             1, // depth = 1: sub-agent won't get sub_agent tool
             self.cumulative_cost, // pass parent's running total for correct usage_update display
+            None, // sub-agents don't get background process management
         )
         .await;
 

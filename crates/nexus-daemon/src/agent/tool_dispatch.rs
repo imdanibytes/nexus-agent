@@ -3,8 +3,11 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use std::sync::Arc;
+
 use crate::ask_user::{self, AskUserArgs, PendingQuestion, PendingQuestionStore, UserAnswer};
 use crate::bash;
+use crate::bg_process::{ProcessKind, ProcessManager};
 use crate::config::{FetchConfig, FilesystemConfig};
 use crate::fetch;
 use crate::filesystem;
@@ -258,6 +261,7 @@ impl ToolHandler for FilesystemHandler {
 
 pub struct BashHandler {
     pub working_dir: Option<String>,
+    pub process_manager: Arc<ProcessManager>,
 }
 
 #[async_trait]
@@ -280,6 +284,15 @@ impl ToolHandler for BashHandler {
             }
         };
 
+        let run_in_background = args
+            .get("run_in_background")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        if run_in_background {
+            return self.spawn_background_bash(ctx, command).await;
+        }
+
         let timeout_ms = args.get("timeout_ms").and_then(|v| v.as_u64());
 
         let _ = ctx.tx.send(AgUiEvent::Custom {
@@ -298,6 +311,62 @@ impl ToolHandler for BashHandler {
         .await;
 
         ToolResult { content, is_error }
+    }
+}
+
+impl BashHandler {
+    async fn spawn_background_bash(&self, ctx: &ToolContext<'_>, command: &str) -> ToolResult {
+        // Extract label from the description field the model fills out
+        let label = serde_json::from_str::<serde_json::Value>(ctx.args_json)
+            .ok()
+            .and_then(|v| v.get("description").and_then(|d| d.as_str()).map(|s| s.to_string()))
+            .unwrap_or_else(|| {
+                let truncated = if command.len() > 60 { &command[..60] } else { command };
+                format!("Running: {}", truncated)
+            });
+
+        let spawn_result = match self.process_manager.spawn(
+            ctx.conversation_id,
+            label,
+            command.to_string(),
+            ProcessKind::Bash,
+        ).await {
+            Ok(r) => r,
+            Err(e) => return ToolResult { content: e, is_error: true },
+        };
+
+        let process_id = spawn_result.process_id.clone();
+        let cancel_token = spawn_result.cancel_token;
+        let output_path = spawn_result.output_path;
+        let command_owned = command.to_string();
+        let working_dir = self.working_dir.clone();
+        let pm = Arc::clone(&self.process_manager);
+
+        tokio::spawn(async move {
+            let result = tokio::select! {
+                result = bash::execute(&command_owned, None, working_dir.as_deref()) => result,
+                _ = cancel_token.cancelled() => {
+                    ("Cancelled".to_string(), true)
+                }
+            };
+
+            let (output, is_error) = result;
+            let exit_code = if is_error { Some(1) } else { Some(0) };
+
+            // Write output to file
+            let _ = tokio::fs::write(&output_path, &output).await;
+
+            pm.complete(&process_id, exit_code, is_error).await;
+        });
+
+        ToolResult {
+            content: serde_json::json!({
+                "process_id": spawn_result.process_id,
+                "status": "running",
+                "message": "Process started in background. You will be notified when it completes. Use process_output to read output."
+            }).to_string(),
+            is_error: false,
+        }
     }
 }
 

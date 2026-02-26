@@ -3,6 +3,7 @@ mod agent_config;
 mod anthropic;
 mod ask_user;
 mod bash;
+mod bg_process;
 mod compaction;
 mod config;
 mod conversation;
@@ -129,12 +130,18 @@ async fn main() -> Result<()> {
     let mcp_configs = McpServerStore::new(mcp_servers);
     let factory = Arc::new(ProviderFactory::new());
 
+    let process_manager = Arc::new(bg_process::ProcessManager::new(
+        nexus_dir.join("bg-processes"),
+        event_bridge.agent_tx(),
+    ));
+
     let chat = Arc::new(ChatService {
         conversations: tokio::sync::RwLock::new(conversations),
         active_cancel: tokio::sync::Mutex::new(None),
         event_bridge,
         pending_questions: tokio::sync::RwLock::new(ask_user::PendingQuestionStore::new()),
         task_store: tokio::sync::RwLock::new(tasks::store::TaskStateStore::new(nexus_dir.join("tasks"))),
+        process_manager,
     });
 
     let agents_svc = Arc::new(AgentService {

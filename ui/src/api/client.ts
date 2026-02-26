@@ -529,3 +529,32 @@ export async function fetchProviderModels(
   const data = await res.json();
   return data.models ?? [];
 }
+
+// ── Background Processes ──
+
+export interface BgProcessResponse {
+  id: string;
+  conversationId: string;
+  label: string;
+  command: string;
+  kind: "bash" | "sub_agent";
+  status: "running" | "completed" | "failed" | "cancelled";
+  startedAt: string;
+  completedAt?: string;
+  exitCode?: number;
+  isError: boolean;
+  outputPreview?: string;
+  outputSize?: number;
+}
+
+export async function fetchProcesses(
+  conversationId: string,
+): Promise<BgProcessResponse[]> {
+  const res = await fetch(`/api/processes/${conversationId}`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function stopProcess(processId: string): Promise<void> {
+  await fetch(`/api/processes/${processId}/stop`, { method: "POST" });
+}

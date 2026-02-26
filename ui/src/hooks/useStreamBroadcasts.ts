@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useThreadListStore } from "../stores/threadListStore";
 import { useThreadStore } from "../stores/threadStore";
 import { useUsageStore } from "../stores/usageStore";
+import { useProcessStore, type BgProcess } from "../stores/processStore";
 import { eventBus } from "../runtime/event-bus";
 
 /** Register broadcast event handlers (title_update, usage_update). */
@@ -44,10 +45,44 @@ export function useStreamBroadcasts(): void {
       }
     });
 
+    const unsubBgStarted = eventBus.on("bg_process_started", (event) => {
+      const proc = event.value as BgProcess | undefined;
+      if (proc) {
+        useProcessStore.getState().addProcess(proc);
+      }
+    });
+
+    const unsubBgCompleted = eventBus.on("bg_process_completed", (event) => {
+      const proc = event.value as BgProcess | undefined;
+      if (proc) {
+        useProcessStore.getState().updateProcess(proc.id, {
+          status: proc.status,
+          completedAt: proc.completedAt,
+          exitCode: proc.exitCode,
+          isError: proc.isError,
+          outputPreview: proc.outputPreview,
+          outputSize: proc.outputSize,
+        });
+      }
+    });
+
+    const unsubBgCancelled = eventBus.on("bg_process_cancelled", (event) => {
+      const proc = event.value as BgProcess | undefined;
+      if (proc) {
+        useProcessStore.getState().updateProcess(proc.id, {
+          status: "cancelled",
+          completedAt: proc.completedAt,
+        });
+      }
+    });
+
     return () => {
       unsubTitle();
       unsubUsage();
       unsubCompaction();
+      unsubBgStarted();
+      unsubBgCompleted();
+      unsubBgCancelled();
     };
   }, []);
 }

@@ -108,6 +108,8 @@ pub fn spawn_agent_turn(
         }
         // Bash tool
         tools.push(crate::bash::tool_definition());
+        // Background process tools
+        tools.extend(crate::bg_process::tools::tool_definitions());
         // Use effective filesystem config (workspaces + base allowed_directories)
         let effective_fs = state_clone.effective_fs_config.read().await.clone();
         tools.extend(crate::filesystem::tool_definitions(&effective_fs));
@@ -291,6 +293,7 @@ pub fn spawn_agent_turn(
             cancel,
             0, // depth=0: parent turn, sub_agent tool available
             prior_cost,
+            Some(state_clone.chat.process_manager.clone()),
         )
         .await;
         drop(mcp_guard);
@@ -384,6 +387,49 @@ pub fn spawn_agent_turn(
                         &active,
                     )
                     .await;
+                }
+
+                // Check for pending background process notifications
+                let notifications = state_clone
+                    .chat
+                    .process_manager
+                    .drain_notifications(&conversation_id)
+                    .await;
+                if !notifications.is_empty() {
+                    let text = crate::bg_process::manager::format_notifications(&notifications);
+                    let notify_msg = ChatMessage {
+                        id: Uuid::new_v4().to_string(),
+                        role: MessageRole::User,
+                        parts: vec![MessagePart::Text { text }],
+                        timestamp: Utc::now(),
+                        parent_id: conv.active_path.last().cloned(),
+                        metadata: Some(serde_json::json!({ "synthetic": true, "source": "bg_process" })),
+                    };
+                    conv.active_path.push(notify_msg.id.clone());
+                    conv.messages.push(notify_msg);
+
+                    let mut store = state_clone.chat.conversations.write().await;
+                    if let Err(e) = store.save(&conv) {
+                        tracing::error!("Failed to save notification message: {}", e);
+                    }
+                    drop(store);
+
+                    // Rebuild API messages and spawn a follow-up turn
+                    let api_messages = conv.build_api_messages();
+                    let mcp_guard = state_clone.mcp.mcp.read().await;
+                    let tools: Vec<crate::anthropic::types::Tool> = mcp_guard.tools();
+                    drop(mcp_guard);
+
+                    let follow_up_cancel = tokio_util::sync::CancellationToken::new();
+                    spawn_agent_turn(
+                        state_clone.clone(),
+                        conv,
+                        api_messages,
+                        tools,
+                        conversation_id.clone(),
+                        follow_up_cancel,
+                        None,
+                    );
                 }
             }
             Err(e) => {

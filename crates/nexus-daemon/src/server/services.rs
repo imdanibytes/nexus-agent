@@ -4,6 +4,7 @@ use tokio::sync::{Mutex, RwLock};
 
 use crate::agent_config::AgentStore;
 use crate::ask_user::PendingQuestionStore;
+use crate::bg_process::ProcessManager;
 use crate::conversation::ConversationStore;
 use crate::mcp::store::McpServerStore;
 use crate::mcp::McpManager;
@@ -18,6 +19,7 @@ pub struct ChatService {
     pub event_bridge: AgentEventBridge,
     pub pending_questions: RwLock<PendingQuestionStore>,
     pub task_store: RwLock<TaskStateStore>,
+    pub process_manager: Arc<ProcessManager>,
 }
 
 /// Agent + provider configuration and client creation.

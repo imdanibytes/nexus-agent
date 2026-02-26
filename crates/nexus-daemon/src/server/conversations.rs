@@ -52,6 +52,9 @@ pub async fn delete(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> StatusCode {
+    // Cancel running background processes and clean up output files
+    state.chat.process_manager.cleanup_conversation(&id).await;
+
     let mut store = state.chat.conversations.write().await;
     match store.delete(&id) {
         Ok(()) => {
