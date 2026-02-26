@@ -194,7 +194,7 @@ async fn events_stream(
 {
     let active_runs: Vec<String> = state
         .chat
-        .active_cancels
+        .active_turns
         .lock()
         .await
         .keys()
@@ -231,7 +231,7 @@ fn start_queue_watcher(
     tokio::spawn(async move {
         while let Some(conv_id) = rx.recv().await {
             // If a turn is active, the after-turn drain will handle it
-            let active = state.chat.active_cancels.lock().await;
+            let active = state.chat.active_turns.lock().await;
             let turn_active = active.contains_key(&conv_id);
             drop(active);
 

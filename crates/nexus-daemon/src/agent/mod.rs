@@ -56,30 +56,52 @@ pub struct AgentTurnResult {
     pub error_details: Option<serde_json::Value>,
 }
 
+/// Inference configuration for a single turn.
+pub struct InferenceConfig<'a> {
+    pub provider: &'a dyn InferenceProvider,
+    pub model: &'a str,
+    pub max_tokens: u32,
+    pub temperature: Option<f32>,
+    pub thinking_budget: Option<u32>,
+    pub system_prompt: Option<String>,
+    pub state_update: Option<String>,
+}
+
+/// Conversation context for a single turn.
+pub struct TurnContext {
+    pub conversation_id: String,
+    pub messages: Vec<Message>,
+    pub tools: Vec<Tool>,
+    pub prior_cost: f64,
+    pub depth: u32,
+}
+
+/// Shared service references for tool dispatch.
+pub struct TurnServices<'a> {
+    pub mcp: &'a McpManager,
+    pub fetch_config: &'a FetchConfig,
+    pub filesystem_config: &'a FilesystemConfig,
+    pub task_store: &'a tokio::sync::RwLock<TaskStateStore>,
+    pub pending_questions: &'a tokio::sync::RwLock<PendingQuestionStore>,
+    pub process_manager: Option<Arc<ProcessManager>>,
+    pub bg_sub_agent_deps: Option<Arc<sub_agent::BgSubAgentDeps>>,
+}
+
 /// Runs a single agent turn: inference → tool calls → loop.
 pub async fn run_agent_turn(
-    provider: &dyn InferenceProvider,
-    conversation_id: &str,
-    messages: Vec<Message>,
-    tools: Vec<Tool>,
-    system_prompt: Option<String>,
-    state_update: Option<String>,
-    model: &str,
-    max_tokens: u32,
-    temperature: Option<f32>,
-    thinking_budget: Option<u32>,
-    mcp: &McpManager,
-    fetch_config: &FetchConfig,
-    filesystem_config: &FilesystemConfig,
-    task_store: &tokio::sync::RwLock<TaskStateStore>,
-    pending_questions: &tokio::sync::RwLock<PendingQuestionStore>,
+    inference: &InferenceConfig<'_>,
+    context: TurnContext,
+    services: &TurnServices<'_>,
     tx: &broadcast::Sender<AgUiEvent>,
     cancel: CancellationToken,
-    depth: u32,
-    prior_cost: f64,
-    process_manager: Option<Arc<ProcessManager>>,
-    bg_sub_agent_deps: Option<Arc<sub_agent::BgSubAgentDeps>>,
 ) -> Result<AgentTurnResult> {
+    // Bind struct fields to local names for ergonomics
+    let conversation_id = &context.conversation_id;
+    let mut messages = context.messages;
+    let mut tools = context.tools;
+    let depth = context.depth;
+    let prior_cost = context.prior_cost;
+
     let run_id = Uuid::new_v4().to_string();
 
     let _ = tx.send(AgUiEvent::RunStarted {
@@ -87,7 +109,6 @@ pub async fn run_agent_turn(
         run_id: run_id.clone(),
     });
 
-    let mut messages = messages;
     let mut new_messages = Vec::new();
     let turn_start = Instant::now();
     let mut round_count: usize = 0;
@@ -97,7 +118,7 @@ pub async fn run_agent_turn(
     let mut cumulative_output: u32 = 0;
     let mut cumulative_cache_creation: u32 = 0;
     let mut cumulative_cache_read: u32 = 0;
-    let context_window = context_window_for_model(model);
+    let context_window = context_window_for_model(inference.model);
     let mut turn_error: Option<String> = None;
     let mut turn_error_details: Option<serde_json::Value> = None;
     let mut turn_cost: f64 = 0.0;
@@ -112,7 +133,7 @@ pub async fn run_agent_turn(
 
         // Log system prompt hash on first round to track stability across turns.
         if round == 0 {
-            if let Some(ref sp) = system_prompt {
+            if let Some(ref sp) = inference.system_prompt {
                 use std::hash::{Hash, Hasher};
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 sp.hash(&mut hasher);
@@ -125,7 +146,7 @@ pub async fn run_agent_turn(
         if round > 0 {
             let estimated = crate::compaction::estimate_tokens(
                 &messages,
-                system_prompt.as_deref(),
+                inference.system_prompt.as_deref(),
                 &tools,
             );
             let prune_threshold = (context_window as f64 * 0.70) as u32;
@@ -160,17 +181,17 @@ pub async fn run_agent_turn(
         let inference_start_ms = turn_start.elapsed().as_millis() as u64;
 
         let mut messages_for_api = messages.clone();
-        if let Some(ref state) = state_update {
+        if let Some(ref state) = inference.state_update {
             inject_state_update(&mut messages_for_api, state);
         }
 
-        let stream = match provider
+        let stream = match inference.provider
             .create_message_stream(
-                model,
-                max_tokens,
-                system_prompt.clone(),
-                temperature,
-                thinking_budget,
+                inference.model,
+                inference.max_tokens,
+                inference.system_prompt.clone(),
+                inference.temperature,
+                inference.thinking_budget,
                 messages_for_api,
                 tools.clone(),
             )
@@ -342,7 +363,7 @@ pub async fn run_agent_turn(
 
         // Calculate cost for this round (cache-aware)
         let round_cost = crate::pricing::calculate_cost_with_cache(
-            model,
+            inference.model,
             round_input_tokens,
             round_cache_creation,
             round_cache_read,
@@ -380,16 +401,16 @@ pub async fn run_agent_turn(
                 let tool_exec_span_id = format!("t-toolexec-{}", round);
                 let tool_exec_start = Instant::now();
 
-                let ask_handler = AskUserHandler { pending_questions };
-                let task_handler = TaskToolHandler { task_store };
-                let fetch_handler = FetchHandler { fetch_config };
-                let fs_handler = FilesystemHandler::new(filesystem_config);
+                let ask_handler = AskUserHandler { pending_questions: services.pending_questions };
+                let task_handler = TaskToolHandler { task_store: services.task_store };
+                let fetch_handler = FetchHandler { fetch_config: services.fetch_config };
+                let fs_handler = FilesystemHandler::new(services.filesystem_config);
                 let bash_handler = BashHandler {
-                    working_dir: filesystem_config
+                    working_dir: services.filesystem_config
                         .allowed_directories
                         .first()
                         .cloned(),
-                    process_manager: process_manager.clone()
+                    process_manager: services.process_manager.clone()
                         .unwrap_or_else(|| {
                             let (queue, _rx) = crate::server::message_queue::MessageQueue::new();
                             Arc::new(ProcessManager::new(
@@ -400,24 +421,24 @@ pub async fn run_agent_turn(
                         }),
                 };
                 let sub_agent_handler = SubAgentHandler {
-                    provider,
-                    model,
-                    max_tokens,
-                    temperature,
-                    mcp,
-                    fetch_config,
-                    filesystem_config,
-                    task_store,
-                    pending_questions,
+                    provider: inference.provider,
+                    model: inference.model,
+                    max_tokens: inference.max_tokens,
+                    temperature: inference.temperature,
+                    mcp: services.mcp,
+                    fetch_config: services.fetch_config,
+                    filesystem_config: services.filesystem_config,
+                    task_store: services.task_store,
+                    pending_questions: services.pending_questions,
                     parent_messages: &messages,
                     parent_tools: &tools,
                     cumulative_cost: prior_cost + turn_cost,
-                    bg_deps: bg_sub_agent_deps.clone(),
+                    bg_deps: services.bg_sub_agent_deps.clone(),
                 };
-                let bg_handler = process_manager.as_ref().map(|pm| BgProcessToolHandler {
+                let bg_handler = services.process_manager.as_ref().map(|pm| BgProcessToolHandler {
                     process_manager: pm.as_ref(),
                 });
-                let mcp_handler = McpToolHandler { mcp };
+                let mcp_handler = McpToolHandler { mcp: services.mcp };
                 let mut handlers: Vec<&dyn tool_dispatch::ToolHandler> =
                     vec![&ask_handler, &task_handler, &fetch_handler, &fs_handler, &bash_handler];
                 if depth == 0 {
@@ -570,7 +591,7 @@ pub async fn run_agent_turn(
         "Turn complete"
     );
 
-    let has_running_processes = match &process_manager {
+    let has_running_processes = match &services.process_manager {
         Some(pm) => pm.has_running(conversation_id).await,
         None => false,
     };

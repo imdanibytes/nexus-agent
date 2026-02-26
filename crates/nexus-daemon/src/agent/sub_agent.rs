@@ -336,28 +336,37 @@ impl ToolHandler for SubAgentHandler<'_> {
         );
 
         // Run the sub-agent turn (depth=1 prevents recursive sub-agent spawning)
-        let result = super::run_agent_turn(
-            self.provider,
-            ctx.conversation_id,
+        let sub_inference = super::InferenceConfig {
+            provider: self.provider,
+            model: self.model,
+            max_tokens: self.max_tokens,
+            temperature: self.temperature,
+            thinking_budget: None,
+            system_prompt: Some(config.system_prompt),
+            state_update: None,
+        };
+        let sub_context = super::TurnContext {
+            conversation_id: ctx.conversation_id.to_string(),
             messages,
             tools,
-            Some(config.system_prompt),
-            None, // sub-agents don't use state injection
-            self.model,
-            self.max_tokens,
-            self.temperature,
-            None, // sub-agents don't use extended thinking
-            self.mcp,
-            self.fetch_config,
-            self.filesystem_config,
-            self.task_store,
-            self.pending_questions,
+            prior_cost: self.cumulative_cost,
+            depth: 1,
+        };
+        let sub_services = super::TurnServices {
+            mcp: self.mcp,
+            fetch_config: self.fetch_config,
+            filesystem_config: self.filesystem_config,
+            task_store: self.task_store,
+            pending_questions: self.pending_questions,
+            process_manager: None,
+            bg_sub_agent_deps: None,
+        };
+        let result = super::run_agent_turn(
+            &sub_inference,
+            sub_context,
+            &sub_services,
             ctx.tx,
             ctx.cancel.clone(),
-            1, // depth = 1: sub-agent won't get sub_agent tool
-            self.cumulative_cost, // pass parent's running total for correct usage_update display
-            None, // sub-agents don't get background process management
-            None, // sub-agents don't get bg_deps (no nested background spawning)
         )
         .await;
 
@@ -475,29 +484,35 @@ impl SubAgentHandler<'_> {
             let tx = bg_deps.chat.event_bridge.agent_tx();
             let mcp_guard = bg_deps.mcp.mcp.read().await;
 
+            let bg_inference = super::InferenceConfig {
+                provider: bg_deps.provider.as_ref(),
+                model: &model,
+                max_tokens,
+                temperature,
+                thinking_budget: None,
+                system_prompt: Some(system_prompt),
+                state_update: None,
+            };
+            let bg_context = super::TurnContext {
+                conversation_id: conversation_id.clone(),
+                messages,
+                tools,
+                prior_cost: cumulative_cost,
+                depth: 1,
+            };
+            let bg_services = super::TurnServices {
+                mcp: &mcp_guard,
+                fetch_config: &bg_deps.fetch_config,
+                filesystem_config: &bg_deps.filesystem_config,
+                task_store: &bg_deps.chat.task_store,
+                pending_questions: &bg_deps.chat.pending_questions,
+                process_manager: Some(bg_deps.chat.process_manager.clone()),
+                bg_sub_agent_deps: None,
+            };
+
             let result = tokio::select! {
                 result = super::run_agent_turn(
-                    bg_deps.provider.as_ref(),
-                    &conversation_id,
-                    messages,
-                    tools,
-                    Some(system_prompt),
-                    None,
-                    &model,
-                    max_tokens,
-                    temperature,
-                    None,
-                    &mcp_guard,
-                    &bg_deps.fetch_config,
-                    &bg_deps.filesystem_config,
-                    &bg_deps.chat.task_store,
-                    &bg_deps.chat.pending_questions,
-                    &tx,
-                    cancel_token.clone(),
-                    1,
-                    cumulative_cost,
-                    Some(bg_deps.chat.process_manager.clone()),
-                    None,
+                    &bg_inference, bg_context, &bg_services, &tx, cancel_token.clone(),
                 ) => result,
                 _ = cancel_token.cancelled() => {
                     Err(anyhow::anyhow!("Cancelled"))

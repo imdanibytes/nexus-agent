@@ -140,7 +140,7 @@ async fn main() -> Result<()> {
 
     let chat = Arc::new(ChatService {
         conversations: tokio::sync::RwLock::new(conversations),
-        active_cancels: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+        active_turns: tokio::sync::Mutex::new(std::collections::HashMap::new()),
         event_bridge,
         pending_questions: tokio::sync::RwLock::new(ask_user::PendingQuestionStore::new()),
         task_store: tokio::sync::RwLock::new(tasks::store::TaskStateStore::new(nexus_dir.join("tasks"))),

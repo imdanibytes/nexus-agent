@@ -45,9 +45,9 @@ pub async fn start_turn(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let conversation_id = body.conversation_id.clone();
 
-    let cancel = cancel_existing_turn(&state, &conversation_id).await;
+    let (cancel, run_id) = cancel_existing_turn(&state, &conversation_id).await;
 
-    let (conv, api_messages, tools, user_msg_id) = {
+    let (setup, api_messages, tools, user_msg_id) = {
         let mut store = state.chat.conversations.write().await;
 
         let mut conv = store
@@ -79,24 +79,19 @@ pub async fn start_turn(
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         let api_messages = conv.build_api_messages();
+        let tools = resolve_mcp_tools(&state).await;
 
-
-        // Filter MCP tools based on active agent's mcp_server_ids
-        let tools = {
-            let mcp = state.mcp.mcp.read().await;
-            let agents = state.agents.agents.read().await;
-            let active_id = agents.active_agent_id().map(|s| s.to_string());
-            let agent = active_id.as_deref().and_then(|id| agents.get(id));
-            match agent.and_then(|a| a.mcp_server_ids.as_ref()) {
-                Some(ids) => mcp.tools_for(Some(ids)),
-                None => mcp.tools(),
-            }
+        let setup = super::turn::TurnSetup {
+            last_active_id: conv.active_path.last().cloned(),
+            prior_cost: conv.usage.as_ref().map(|u| u.total_cost).unwrap_or(0.0),
+            title: conv.title.clone(),
+            message_count: conv.active_path.len(),
         };
 
-        (conv, api_messages, tools, user_msg_id)
+        (setup, api_messages, tools, user_msg_id)
     };
 
-    spawn_agent_turn(state, conv, api_messages, tools, conversation_id, cancel, body.assistant_message_id);
+    spawn_agent_turn(state, setup, api_messages, tools, conversation_id, cancel, body.assistant_message_id, run_id);
 
     Ok(Json(
         serde_json::json!({
@@ -113,9 +108,9 @@ pub async fn branch_turn(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let conversation_id = body.conversation_id.clone();
 
-    let cancel = cancel_existing_turn(&state, &conversation_id).await;
+    let (cancel, run_id) = cancel_existing_turn(&state, &conversation_id).await;
 
-    let (conv, api_messages, tools, new_msg_id) = {
+    let (setup, api_messages, tools, new_msg_id) = {
         let mut store = state.chat.conversations.write().await;
 
         let mut conv = store
@@ -171,31 +166,27 @@ pub async fn branch_turn(
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         let api_messages = conv.build_api_messages();
+        let tools = resolve_mcp_tools(&state).await;
 
-
-        // Filter MCP tools based on active agent's mcp_server_ids
-        let tools = {
-            let mcp = state.mcp.mcp.read().await;
-            let agents = state.agents.agents.read().await;
-            let active_id = agents.active_agent_id().map(|s| s.to_string());
-            let agent = active_id.as_deref().and_then(|id| agents.get(id));
-            match agent.and_then(|a| a.mcp_server_ids.as_ref()) {
-                Some(ids) => mcp.tools_for(Some(ids)),
-                None => mcp.tools(),
-            }
+        let setup = super::turn::TurnSetup {
+            last_active_id: conv.active_path.last().cloned(),
+            prior_cost: conv.usage.as_ref().map(|u| u.total_cost).unwrap_or(0.0),
+            title: conv.title.clone(),
+            message_count: conv.active_path.len(),
         };
 
-        (conv, api_messages, tools, new_msg_id)
+        (setup, api_messages, tools, new_msg_id)
     };
 
     spawn_agent_turn(
         state,
-        conv,
+        setup,
         api_messages,
         tools,
         conversation_id.clone(),
         cancel,
         body.assistant_message_id,
+        run_id,
     );
 
     Ok(Json(
@@ -221,9 +212,9 @@ pub async fn regenerate_turn(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let conversation_id = body.conversation_id.clone();
 
-    let cancel = cancel_existing_turn(&state, &conversation_id).await;
+    let (cancel, run_id) = cancel_existing_turn(&state, &conversation_id).await;
 
-    let (conv, api_messages, tools) = {
+    let (setup, api_messages, tools) = {
         let mut store = state.chat.conversations.write().await;
 
         let mut conv = store
@@ -256,30 +247,27 @@ pub async fn regenerate_turn(
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         let api_messages = conv.build_api_messages();
+        let tools = resolve_mcp_tools(&state).await;
 
-
-        let tools = {
-            let mcp = state.mcp.mcp.read().await;
-            let agents = state.agents.agents.read().await;
-            let active_id = agents.active_agent_id().map(|s| s.to_string());
-            let agent = active_id.as_deref().and_then(|id| agents.get(id));
-            match agent.and_then(|a| a.mcp_server_ids.as_ref()) {
-                Some(ids) => mcp.tools_for(Some(ids)),
-                None => mcp.tools(),
-            }
+        let setup = super::turn::TurnSetup {
+            last_active_id: conv.active_path.last().cloned(),
+            prior_cost: conv.usage.as_ref().map(|u| u.total_cost).unwrap_or(0.0),
+            title: conv.title.clone(),
+            message_count: conv.active_path.len(),
         };
 
-        (conv, api_messages, tools)
+        (setup, api_messages, tools)
     };
 
     spawn_agent_turn(
         state,
-        conv,
+        setup,
         api_messages,
         tools,
         conversation_id.clone(),
         cancel,
         body.assistant_message_id,
+        run_id,
     );
 
     Ok(Json(
@@ -317,9 +305,9 @@ pub async fn tool_invoke(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let cancel = cancel_existing_turn(&state, &conversation_id).await;
+    let (cancel, run_id) = cancel_existing_turn(&state, &conversation_id).await;
 
-    let (conv, api_messages, tools) = {
+    let (setup, api_messages, tools) = {
         let mut store = state.chat.conversations.write().await;
 
         let mut conv = store
@@ -366,30 +354,28 @@ pub async fn tool_invoke(
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         let api_messages = conv.build_api_messages();
+        let tools = resolve_mcp_tools(&state).await;
 
-        let tools = {
-            let mcp = state.mcp.mcp.read().await;
-            let agents = state.agents.agents.read().await;
-            let active_id = agents.active_agent_id().map(|s| s.to_string());
-            let agent = active_id.as_deref().and_then(|id| agents.get(id));
-            match agent.and_then(|a| a.mcp_server_ids.as_ref()) {
-                Some(ids) => mcp.tools_for(Some(ids)),
-                None => mcp.tools(),
-            }
+        let setup = super::turn::TurnSetup {
+            last_active_id: conv.active_path.last().cloned(),
+            prior_cost: conv.usage.as_ref().map(|u| u.total_cost).unwrap_or(0.0),
+            title: conv.title.clone(),
+            message_count: conv.active_path.len(),
         };
 
-        (conv, api_messages, tools)
+        (setup, api_messages, tools)
     };
 
     // Start agent turn — model will see the tool result and continue naturally
     spawn_agent_turn(
         state,
-        conv,
+        setup,
         api_messages,
         tools,
         conversation_id.clone(),
         cancel,
         body.assistant_message_id,
+        run_id,
     );
 
     Ok(Json(serde_json::json!({
@@ -402,9 +388,9 @@ pub async fn abort_turn(
     State(state): State<Arc<AppState>>,
     Json(body): Json<AbortRequest>,
 ) -> StatusCode {
-    let mut active = state.chat.active_cancels.lock().await;
-    if let Some(token) = active.remove(&body.conversation_id) {
-        token.cancel();
+    let mut active = state.chat.active_turns.lock().await;
+    if let Some(turn) = active.remove(&body.conversation_id) {
+        turn.cancel.cancel();
     }
     StatusCode::OK
 }
@@ -420,14 +406,21 @@ pub struct AbortRequest {
 async fn cancel_existing_turn(
     state: &Arc<AppState>,
     conversation_id: &str,
-) -> tokio_util::sync::CancellationToken {
-    let mut active = state.chat.active_cancels.lock().await;
-    if let Some(token) = active.remove(conversation_id) {
-        token.cancel();
+) -> (tokio_util::sync::CancellationToken, String) {
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let mut active = state.chat.active_turns.lock().await;
+    if let Some(prev) = active.remove(conversation_id) {
+        prev.cancel.cancel();
     }
     let cancel = tokio_util::sync::CancellationToken::new();
-    active.insert(conversation_id.to_string(), cancel.clone());
-    cancel
+    active.insert(
+        conversation_id.to_string(),
+        super::services::ActiveTurn {
+            run_id: run_id.clone(),
+            cancel: cancel.clone(),
+        },
+    );
+    (cancel, run_id)
 }
 
 // ── Ask-user answer endpoint ──
@@ -472,4 +465,16 @@ pub async fn answer_question(
         "ok": true,
         "questionId": body.question_id,
     })))
+}
+
+/// Resolve MCP tools filtered by the active agent's mcp_server_ids.
+async fn resolve_mcp_tools(state: &AppState) -> Vec<crate::anthropic::types::Tool> {
+    let mcp = state.mcp.mcp.read().await;
+    let agents = state.agents.agents.read().await;
+    let active_id = agents.active_agent_id().map(|s| s.to_string());
+    let agent = active_id.as_deref().and_then(|id| agents.get(id));
+    match agent.and_then(|a| a.mcp_server_ids.as_ref()) {
+        Some(ids) => mcp.tools_for(Some(ids)),
+        None => mcp.tools(),
+    }
 }

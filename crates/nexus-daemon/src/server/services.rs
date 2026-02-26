@@ -14,10 +14,16 @@ use crate::tasks::store::TaskStateStore;
 use super::message_queue::MessageQueue;
 use super::sse::AgentEventBridge;
 
+/// A turn that is currently active for a conversation.
+pub struct ActiveTurn {
+    pub run_id: String,
+    pub cancel: tokio_util::sync::CancellationToken,
+}
+
 /// Chat execution: conversations, cancellation, events, questions, tasks.
 pub struct ChatService {
     pub conversations: RwLock<ConversationStore>,
-    pub active_cancels: Mutex<HashMap<String, tokio_util::sync::CancellationToken>>,
+    pub active_turns: Mutex<HashMap<String, ActiveTurn>>,
     pub event_bridge: AgentEventBridge,
     pub pending_questions: RwLock<PendingQuestionStore>,
     pub task_store: RwLock<TaskStateStore>,

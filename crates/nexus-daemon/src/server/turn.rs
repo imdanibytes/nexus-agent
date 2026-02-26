@@ -8,10 +8,20 @@ use crate::agent::events::AgUiEvent;
 use crate::agent::AgentTurnResult;
 use crate::anthropic::types::{ContentBlock, Message, Role};
 use crate::conversation::types::{
-    ChatMessage, Conversation, ConversationUsage, MessagePart, MessageRole, Span,
+    ChatMessage, ConversationUsage, MessagePart, MessageRole, Span,
 };
 use crate::server::AppState;
 use crate::system_prompt::{SystemPromptBuilder, SystemPromptContext};
+
+/// Read-only setup data extracted from the conversation before spawning
+/// the turn task. Avoids holding a stale `Conversation` across the
+/// (potentially long-running) agent loop.
+pub struct TurnSetup {
+    pub last_active_id: Option<String>,
+    pub prior_cost: f64,
+    pub title: String,
+    pub message_count: usize,
+}
 
 /// Spawn an agent turn as a background tokio task.
 ///
@@ -19,18 +29,18 @@ use crate::system_prompt::{SystemPromptBuilder, SystemPromptContext};
 /// agent loop, persists results, and optionally generates a title.
 pub fn spawn_agent_turn(
     state: Arc<AppState>,
-    mut conv: Conversation,
+    setup: TurnSetup,
     api_messages: Vec<Message>,
     tools: Vec<crate::anthropic::types::Tool>,
     conversation_id: String,
     cancel: tokio_util::sync::CancellationToken,
     assistant_message_id: Option<String>,
+    run_id: String,
 ) {
     let agent_tx = state.chat.event_bridge.agent_tx();
     let state_clone = Arc::clone(&state);
 
-
-    let last_active_id = conv.active_path.last().cloned();
+    let last_active_id = setup.last_active_id.clone();
 
     tokio::spawn(async move {
         let setup_start = std::time::Instant::now();
@@ -172,11 +182,11 @@ pub fn spawn_agent_turn(
 
         // Build composable system prompt (split: static cached, dynamic injected)
         let context_window = crate::agent::context_window_for_model(&model);
-        let prior_cost = conv.usage.as_ref().map(|u| u.total_cost).unwrap_or(0.0);
+        let prior_cost = setup.prior_cost;
         let builder = SystemPromptBuilder::default_builder();
         let prompt_parts = builder.build_parts(&SystemPromptContext {
-            conversation_title: conv.title.clone(),
-            message_count: conv.active_path.len(),
+            conversation_title: setup.title.clone(),
+            message_count: setup.message_count,
             tool_names: tools.iter().map(|t| t.name.clone()).collect(),
             agent_name: agent_meta["agent_name"]
                 .as_str()
@@ -217,59 +227,69 @@ pub fn spawn_agent_turn(
         let summarize_threshold = (effective_window as f64 * summarize_pct) as u32;
         if estimated_tokens > summarize_threshold {
             if let Some(ref title_client) = state_clone.title_client {
-                match crate::compaction::summarize_messages(
-                    title_client,
-                    &conv.active_messages(),
-                    10,
-                )
-                .await
-                {
-                    Ok((summary_text, consumed_ids)) => {
-                        // Create spans: seal current, open new
-                        if conv.spans.is_empty() {
-                            // First compaction — bootstrap span chain
-                            conv.spans.push(Span {
-                                index: 0,
-                                message_ids: consumed_ids.clone(),
-                                summary: Some(summary_text),
-                                sealed_at: Some(Utc::now()),
-                            });
-                            conv.spans.push(Span {
-                                index: 1,
-                                message_ids: Vec::new(),
-                                summary: None,
-                                sealed_at: None,
-                            });
-                        } else {
-                            conv.seal_current_span(&consumed_ids, summary_text);
-                            conv.open_new_span();
-                        }
+                // Load fresh conversation for compaction (atomic: load → modify → save)
+                let compact_conv = {
+                    let store = state_clone.chat.conversations.read().await;
+                    store.get(&conversation_id).ok().flatten()
+                };
 
-                        // Remove consumed IDs from active_path
-                        conv.active_path.retain(|id| !consumed_ids.contains(id));
-
-                        // Rebuild API messages (span summaries injected automatically)
-                        api_messages = conv.build_api_messages();
-
-                        // Save compacted conversation
-                        {
-                            let mut store = state_clone.chat.conversations.write().await;
-                            if let Err(e) = store.save(&conv) {
-                                tracing::error!("Failed to save compacted conversation: {}", e);
+                if let Some(mut compact_conv) = compact_conv {
+                    match crate::compaction::summarize_messages(
+                        title_client,
+                        &compact_conv.active_messages(),
+                        10,
+                    )
+                    .await
+                    {
+                        Ok((summary_text, consumed_ids)) => {
+                            // Create spans: seal current, open new
+                            if compact_conv.spans.is_empty() {
+                                // First compaction — bootstrap span chain
+                                compact_conv.spans.push(Span {
+                                    index: 0,
+                                    message_ids: consumed_ids.clone(),
+                                    summary: Some(summary_text),
+                                    sealed_at: Some(Utc::now()),
+                                });
+                                compact_conv.spans.push(Span {
+                                    index: 1,
+                                    message_ids: Vec::new(),
+                                    summary: None,
+                                    sealed_at: None,
+                                });
+                            } else {
+                                compact_conv.seal_current_span(&consumed_ids, summary_text);
+                                compact_conv.open_new_span();
                             }
-                        }
 
-                        let _ = agent_tx.send(AgUiEvent::Custom {
-                            thread_id: conversation_id.clone(),
-                            name: "compaction".to_string(),
-                            value: serde_json::json!({
-                                "sealed_span_index": conv.spans.len() - 2,
-                                "consumed_count": consumed_ids.len(),
-                            }),
-                        });
-                    }
-                    Err(e) => {
-                        tracing::warn!("Compaction failed, continuing with full context: {}", e);
+                            // Remove consumed IDs from active_path
+                            compact_conv.active_path.retain(|id| !consumed_ids.contains(id));
+
+                            // Rebuild API messages from compacted state
+                            api_messages = compact_conv.build_api_messages();
+
+                            let sealed_span_count = compact_conv.spans.len();
+
+                            // Save compacted conversation
+                            {
+                                let mut store = state_clone.chat.conversations.write().await;
+                                if let Err(e) = store.save(&compact_conv) {
+                                    tracing::error!("Failed to save compacted conversation: {}", e);
+                                }
+                            }
+
+                            let _ = agent_tx.send(AgUiEvent::Custom {
+                                thread_id: conversation_id.clone(),
+                                name: "compaction".to_string(),
+                                value: serde_json::json!({
+                                    "sealed_span_index": sealed_span_count - 2,
+                                    "consumed_count": consumed_ids.len(),
+                                }),
+                            });
+                        }
+                        Err(e) => {
+                            tracing::warn!("Compaction failed, continuing with full context: {}", e);
+                        }
                     }
                 }
             }
@@ -286,28 +306,40 @@ pub fn spawn_agent_turn(
 
         let setup_duration_ms = setup_start.elapsed().as_millis() as u64;
 
-        let result = agent::run_agent_turn(
-            provider.as_ref(),
-            &conversation_id,
-            api_messages,
-            tools,
-            Some(prompt_parts.system),
-            prompt_parts.state,
-            &model,
+        let inference_cfg = agent::InferenceConfig {
+            provider: provider.as_ref(),
+            model: &model,
             max_tokens,
             temperature,
             thinking_budget,
-            &mcp_guard,
-            &state_clone.config.fetch,
-            &effective_fs,
-            &state_clone.chat.task_store,
-            &state_clone.chat.pending_questions,
+            system_prompt: Some(prompt_parts.system),
+            state_update: prompt_parts.state,
+        };
+
+        let turn_ctx = agent::TurnContext {
+            conversation_id: conversation_id.clone(),
+            messages: api_messages,
+            tools,
+            prior_cost,
+            depth: 0,
+        };
+
+        let turn_svc = agent::TurnServices {
+            mcp: &mcp_guard,
+            fetch_config: &state_clone.config.fetch,
+            filesystem_config: &effective_fs,
+            task_store: &state_clone.chat.task_store,
+            pending_questions: &state_clone.chat.pending_questions,
+            process_manager: Some(state_clone.chat.process_manager.clone()),
+            bg_sub_agent_deps: Some(bg_sub_agent_deps),
+        };
+
+        let result = agent::run_agent_turn(
+            &inference_cfg,
+            turn_ctx,
+            &turn_svc,
             &agent_tx,
             cancel,
-            0, // depth=0: parent turn, sub_agent tool available
-            prior_cost,
-            Some(state_clone.chat.process_manager.clone()),
-            Some(bg_sub_agent_deps),
         )
         .await;
         drop(mcp_guard);
@@ -415,9 +447,9 @@ pub fn spawn_agent_turn(
                     let new_ids: Vec<String> =
                         chat_messages.iter().map(|m| m.id.clone()).collect();
 
-                    // Bug 5 fix: Reload conversation from store to avoid
-                    // overwriting changes made by other subsystems during
-                    // the (potentially long-running) agent turn.
+                    // Reload fresh conversation — no stale in-memory copy.
+                    // Compaction (if it ran) already saved spans to the store,
+                    // so fresh_conv has the correct spans without copying.
                     let mut store = state_clone.chat.conversations.write().await;
                     let save_result = match store.get(&conversation_id) {
                         Ok(Some(mut fresh_conv)) => {
@@ -434,29 +466,14 @@ pub fn spawn_agent_turn(
                                 context_window,
                                 total_cost: prior_cost + turn_cost,
                             });
-                            // Preserve span updates from compaction above
-                            if !conv.spans.is_empty() {
-                                fresh_conv.spans = conv.spans.clone();
-                            }
-                            conv = fresh_conv.clone();
                             store.save(&fresh_conv)
                         }
                         Ok(None) => {
-                            tracing::warn!("Conversation {} not found at save time, saving local copy", conversation_id);
-                            conv.messages.extend(chat_messages);
-                            conv.active_path.extend(new_ids);
-                            conv.updated_at = Utc::now();
-                            conv.agent_id =
-                                agent_meta["agent_id"].as_str().map(|s| s.to_string());
-                            conv.usage = Some(ConversationUsage {
-                                input_tokens,
-                                output_tokens,
-                                cache_read_input_tokens,
-                                cache_creation_input_tokens,
-                                context_window,
-                                total_cost: prior_cost + turn_cost,
-                            });
-                            store.save(&conv)
+                            tracing::warn!(
+                                "Conversation {} deleted during turn, discarding results",
+                                conversation_id
+                            );
+                            Ok(())
                         }
                         Err(e) => {
                             tracing::error!("Failed to reload conversation: {}", e);
@@ -470,24 +487,38 @@ pub fn spawn_agent_turn(
                 }
 
                 if turn_error.is_none() {
-                    let active = conv.active_messages();
-                    crate::mechanics::auto_title::generate_title(
-                        &state_clone,
-                        &conversation_id,
-                        &conv.title,
-                        &active,
-                    )
-                    .await;
+                    let title_conv = {
+                        let store = state_clone.chat.conversations.read().await;
+                        store.get(&conversation_id).ok().flatten()
+                    };
+                    if let Some(title_conv) = title_conv {
+                        let active = title_conv.active_messages();
+                        crate::mechanics::auto_title::generate_title(
+                            &state_clone,
+                            &conversation_id,
+                            &title_conv.title,
+                            &active,
+                        )
+                        .await;
+                    }
                 }
 
-                // Bug 3 fix: Hold active_cancels lock across clear + drain
-                // to prevent TOCTOU race with the queue watcher.
+                // Hold active_turns lock across removal + drain to prevent
+                // TOCTOU race with the queue watcher. Only remove our own
+                // entry (run_id check) to avoid clobbering a newer turn.
                 let queued = {
-                    let mut active = state_clone.chat.active_cancels.lock().await;
-                    active.remove(&conversation_id);
-                    // Drain while still holding the lock so the queue watcher
-                    // cannot see "no active turn" before we've drained.
-                    state_clone.chat.message_queue.drain(&conversation_id).await
+                    let mut active = state_clone.chat.active_turns.lock().await;
+                    let is_mine = active
+                        .get(&conversation_id)
+                        .map(|t| t.run_id == run_id)
+                        .unwrap_or(false);
+                    if is_mine {
+                        active.remove(&conversation_id);
+                        state_clone.chat.message_queue.drain(&conversation_id).await
+                    } else {
+                        // Superseded by a newer turn — don't touch the map or drain
+                        vec![]
+                    }
                 };
 
                 if !queued.is_empty() {
@@ -501,10 +532,12 @@ pub fn spawn_agent_turn(
             }
             Err(e) => {
                 tracing::error!("Agent turn panicked: {}", e);
-                // Clear active_cancels on error too
+                // Only clear our own entry
                 {
-                    let mut active = state_clone.chat.active_cancels.lock().await;
-                    active.remove(&conversation_id);
+                    let mut active = state_clone.chat.active_turns.lock().await;
+                    if active.get(&conversation_id).map(|t| t.run_id == run_id).unwrap_or(false) {
+                        active.remove(&conversation_id);
+                    }
                 }
                 let _ = agent_tx.send(AgUiEvent::RunError {
                     thread_id: conversation_id.clone(),
@@ -565,26 +598,42 @@ pub async fn drain_queue_and_follow_up(
     }
     drop(store);
 
+    let setup = TurnSetup {
+        last_active_id: conv.active_path.last().cloned(),
+        prior_cost: conv.usage.as_ref().map(|u| u.total_cost).unwrap_or(0.0),
+        title: conv.title.clone(),
+        message_count: conv.active_path.len(),
+    };
     let api_messages = conv.build_api_messages();
+    drop(conv);
+
     let mcp_guard = state.mcp.mcp.read().await;
     let tools: Vec<crate::anthropic::types::Tool> = mcp_guard.tools();
     drop(mcp_guard);
 
     // Register the follow-up turn so the queue watcher skips this conversation
+    let follow_up_run_id = Uuid::new_v4().to_string();
     let follow_up_cancel = tokio_util::sync::CancellationToken::new();
     {
-        let mut active = state.chat.active_cancels.lock().await;
-        active.insert(conversation_id.clone(), follow_up_cancel.clone());
+        let mut active = state.chat.active_turns.lock().await;
+        active.insert(
+            conversation_id.clone(),
+            crate::server::services::ActiveTurn {
+                run_id: follow_up_run_id.clone(),
+                cancel: follow_up_cancel.clone(),
+            },
+        );
     }
 
     spawn_agent_turn(
         state,
-        conv,
+        setup,
         api_messages,
         tools,
         conversation_id,
         follow_up_cancel,
         None,
+        follow_up_run_id,
     );
 }
 
