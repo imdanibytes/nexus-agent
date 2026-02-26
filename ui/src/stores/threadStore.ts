@@ -77,6 +77,8 @@ export interface ChatMessage {
       agent_name: string;
       model: string;
     };
+    synthetic?: boolean;
+    source?: string;
   };
 }
 

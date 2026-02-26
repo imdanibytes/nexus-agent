@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use chrono::Utc;
 use tokio::sync::{broadcast, Mutex};
@@ -299,6 +300,76 @@ impl ProcessManager {
             .values()
             .any(|p| p.conversation_id == conversation_id && p.status == ProcessStatus::Running)
     }
+}
+
+/// Start a background task that polls for pending notifications on idle conversations.
+///
+/// When a background process completes while no agent turn is active for that conversation,
+/// this watcher picks up the notification and spawns a follow-up turn.
+pub fn start_idle_watcher(
+    process_manager: Arc<ProcessManager>,
+    state: Arc<crate::server::AppState>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+        loop {
+            interval.tick().await;
+
+            let pending_convs = process_manager.conversations_with_pending().await;
+            if pending_convs.is_empty() {
+                continue;
+            }
+
+            for conv_id in pending_convs {
+                // Skip if a turn is currently active for this conversation
+                let active = state.chat.active_cancel.lock().await;
+                let turn_active = active
+                    .as_ref()
+                    .map(|(id, _)| id == &conv_id)
+                    .unwrap_or(false);
+                drop(active);
+
+                if turn_active {
+                    continue;
+                }
+
+                let notifications = process_manager.drain_notifications(&conv_id).await;
+                if notifications.is_empty() {
+                    continue;
+                }
+
+                tracing::info!(
+                    conversation_id = %conv_id,
+                    count = notifications.len(),
+                    "Idle watcher: injecting background process notifications"
+                );
+
+                // Load conversation
+                let conv = {
+                    let store = state.chat.conversations.read().await;
+                    match store.get(&conv_id) {
+                        Ok(Some(c)) => c,
+                        Ok(None) => {
+                            tracing::warn!(conversation_id = %conv_id, "Idle watcher: conversation not found");
+                            continue;
+                        }
+                        Err(e) => {
+                            tracing::warn!(conversation_id = %conv_id, "Idle watcher: failed to load conversation: {}", e);
+                            continue;
+                        }
+                    }
+                };
+
+                crate::server::turn::inject_notifications_and_follow_up(
+                    Arc::clone(&state),
+                    conv,
+                    conv_id,
+                    notifications,
+                )
+                .await;
+            }
+        }
+    })
 }
 
 #[cfg(test)]

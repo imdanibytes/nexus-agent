@@ -63,6 +63,10 @@ export function useStreamBroadcasts(): void {
           outputPreview: proc.outputPreview,
           outputSize: proc.outputSize,
         });
+        // Auto-remove from indicator after 5s
+        setTimeout(() => {
+          useProcessStore.getState().removeProcess(proc.id);
+        }, 5000);
       }
     });
 
@@ -73,6 +77,10 @@ export function useStreamBroadcasts(): void {
           status: "cancelled",
           completedAt: proc.completedAt,
         });
+        // Auto-remove from indicator after 5s
+        setTimeout(() => {
+          useProcessStore.getState().removeProcess(proc.id);
+        }, 5000);
       }
     });
 

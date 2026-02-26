@@ -21,6 +21,7 @@ interface ProcessState {
 
   addProcess: (process: BgProcess) => void;
   updateProcess: (processId: string, patch: Partial<BgProcess>) => void;
+  removeProcess: (processId: string) => void;
   removeConversation: (conversationId: string) => void;
   setProcesses: (conversationId: string, processes: BgProcess[]) => void;
 }
@@ -46,6 +47,18 @@ export const useProcessStore = create<ProcessState>((set) => ({
         updated[convId] = procs.map((p) =>
           p.id === processId ? { ...p, ...patch } : p,
         );
+      }
+      return { processes: updated };
+    }),
+
+  removeProcess: (processId) =>
+    set((s) => {
+      const updated: Record<string, BgProcess[]> = {};
+      for (const [convId, procs] of Object.entries(s.processes)) {
+        const filtered = procs.filter((p) => p.id !== processId);
+        if (filtered.length > 0) {
+          updated[convId] = filtered;
+        }
       }
       return { processes: updated };
     }),

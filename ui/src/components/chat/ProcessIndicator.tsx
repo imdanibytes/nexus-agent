@@ -33,7 +33,7 @@ export const ProcessIndicator: FC = () => {
           )}
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-72 p-1.5 bg-default-50 border border-default-200/50 backdrop-blur">
+      <PopoverContent className="w-72 max-h-60 overflow-hidden px-2 py-1.5 bg-default-50 border border-default-200/50 backdrop-blur">
         {activeThreadId && (
           <ProcessPanel conversationId={activeThreadId} />
         )}

@@ -45,6 +45,12 @@ pub struct AppState {
 pub fn build_router(state: AppState, ui_dist_path: &str) -> Router {
     let state = Arc::new(state);
 
+    // Start background process idle watcher
+    crate::bg_process::manager::start_idle_watcher(
+        state.chat.process_manager.clone(),
+        Arc::clone(&state),
+    );
+
     let mut router = Router::new()
         // Chat
         .route("/api/chat", post(chat::start_turn))

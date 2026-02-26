@@ -11,6 +11,7 @@ import { ContextRing } from "../ui/ContextRing";
 import { Composer } from "../ui/Composer";
 import { AgentSwitcher } from "../agent/AgentSwitcher";
 import { ProcessIndicator } from "./ProcessIndicator";
+import { SystemNotification } from "./SystemNotification";
 import { ThreadWelcome } from "./ThreadWelcome";
 import { UserMessage } from "./UserMessage";
 import { AssistantMessage } from "./AssistantMessage";
@@ -95,6 +96,10 @@ export const Thread: FC = () => {
             }
 
             if (msg.role === "user") {
+              // Synthetic bg_process notifications render as system bars
+              if (msg.metadata?.synthetic && msg.metadata?.source === "bg_process") {
+                return <SystemNotification key={msg.id} message={msg} />;
+              }
               return (
                 <UserMessage
                   key={msg.id}

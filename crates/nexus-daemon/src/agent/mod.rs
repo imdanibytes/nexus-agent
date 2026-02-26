@@ -78,6 +78,7 @@ pub async fn run_agent_turn(
     depth: u32,
     prior_cost: f64,
     process_manager: Option<Arc<ProcessManager>>,
+    bg_sub_agent_deps: Option<Arc<sub_agent::BgSubAgentDeps>>,
 ) -> Result<AgentTurnResult> {
     let run_id = Uuid::new_v4().to_string();
 
@@ -371,6 +372,7 @@ pub async fn run_agent_turn(
                     parent_messages: &messages,
                     parent_tools: &tools,
                     cumulative_cost: prior_cost + turn_cost,
+                    bg_deps: bg_sub_agent_deps.clone(),
                 };
                 let bg_handler = process_manager.as_ref().map(|pm| BgProcessToolHandler {
                     process_manager: pm.as_ref(),

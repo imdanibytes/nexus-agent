@@ -1,4 +1,4 @@
-import { type FC, useCallback } from "react";
+import { type FC, useCallback, useEffect, useState } from "react";
 import {
   CheckCircle2Icon,
   XCircleIcon,
@@ -86,6 +86,15 @@ export const ProcessPanel: FC<{ conversationId: string }> = ({
   conversationId,
 }) => {
   const processes = useProcessStore((s) => s.processes[conversationId] ?? EMPTY);
+  const hasRunning = processes.some((p) => p.status === "running");
+
+  // Tick every second to update elapsed timers for running processes
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!hasRunning) return;
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [hasRunning]);
 
   if (processes.length === 0) return null;
 
@@ -97,7 +106,7 @@ export const ProcessPanel: FC<{ conversationId: string }> = ({
   });
 
   return (
-    <div className="flex flex-col gap-0.5 py-1 max-h-48 overflow-y-auto">
+    <div className="flex flex-col gap-0.5 py-1 max-h-44 overflow-y-auto overflow-x-hidden">
       {sorted.map((p) => (
         <ProcessRow key={p.id} process={p} />
       ))}

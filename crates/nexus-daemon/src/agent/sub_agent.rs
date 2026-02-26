@@ -1,11 +1,15 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::anthropic::types::{ContentBlock, Message, Role, Tool};
 use crate::ask_user::PendingQuestionStore;
+use crate::bg_process::ProcessKind;
 use crate::config::{FetchConfig, FilesystemConfig};
 use crate::mcp::McpManager;
 use crate::provider::InferenceProvider;
+use crate::server::services::{ChatService, McpService};
 use crate::tasks::store::TaskStateStore;
 
 use super::events::AgUiEvent;
@@ -228,6 +232,18 @@ fn extract_text_from_messages(messages: &[Message]) -> String {
     }
 }
 
+// ── Background dispatch deps ──
+
+/// Owned dependencies for spawning a sub-agent in a background tokio task.
+/// Constructed in `spawn_agent_turn` (turn.rs) where Arc<AppState> is available.
+pub struct BgSubAgentDeps {
+    pub provider: Arc<dyn InferenceProvider>,
+    pub chat: Arc<ChatService>,
+    pub mcp: Arc<McpService>,
+    pub fetch_config: FetchConfig,
+    pub filesystem_config: FilesystemConfig,
+}
+
 // ── Handler ──
 
 pub struct SubAgentHandler<'a> {
@@ -245,6 +261,8 @@ pub struct SubAgentHandler<'a> {
     /// Cumulative cost so far (prior_cost + parent turn_cost) so sub-agent
     /// usage_update events show the correct running total.
     pub cumulative_cost: f64,
+    /// Owned deps for background sub-agent dispatch. None at depth > 0.
+    pub bg_deps: Option<Arc<BgSubAgentDeps>>,
 }
 
 #[async_trait]
@@ -266,6 +284,15 @@ impl ToolHandler for SubAgentHandler<'_> {
                 };
             }
         };
+
+        let run_in_background = args
+            .get("run_in_background")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        if run_in_background {
+            return self.spawn_background_sub_agent(ctx, &config).await;
+        }
 
         // Emit sub_agent_start event
         let _ = ctx.tx.send(AgUiEvent::Custom {
@@ -330,6 +357,7 @@ impl ToolHandler for SubAgentHandler<'_> {
             1, // depth = 1: sub-agent won't get sub_agent tool
             self.cumulative_cost, // pass parent's running total for correct usage_update display
             None, // sub-agents don't get background process management
+            None, // sub-agents don't get bg_deps (no nested background spawning)
         )
         .await;
 
@@ -380,6 +408,133 @@ impl ToolHandler for SubAgentHandler<'_> {
         };
 
         ToolResult { content, is_error }
+    }
+}
+
+impl SubAgentHandler<'_> {
+    async fn spawn_background_sub_agent(
+        &self,
+        ctx: &ToolContext<'_>,
+        config: &SubAgentConfig,
+    ) -> ToolResult {
+        let bg_deps = match &self.bg_deps {
+            Some(deps) => Arc::clone(deps),
+            None => {
+                return ToolResult {
+                    content: "Background sub-agent dispatch is not available at this depth."
+                        .to_string(),
+                    is_error: true,
+                };
+            }
+        };
+
+        let pm = &bg_deps.chat.process_manager;
+        let label = format!("{} sub-agent: {}", config.agent_type,
+            if config.task.len() > 50 { &config.task[..50] } else { &config.task });
+
+        let spawn_result = match pm
+            .spawn(ctx.conversation_id, label, config.task.clone(), ProcessKind::SubAgent)
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => return ToolResult { content: e, is_error: true },
+        };
+
+        // Build messages for the background sub-agent
+        let messages = match config.context_mode {
+            ContextMode::Fresh => vec![Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text {
+                    text: config.task.clone(),
+                }],
+            }],
+            ContextMode::Branched => {
+                let mut msgs = self.parent_messages.to_vec();
+                msgs.push(Message {
+                    role: Role::User,
+                    content: vec![ContentBlock::Text {
+                        text: config.task.clone(),
+                    }],
+                });
+                msgs
+            }
+        };
+
+        let tools = filter_tools_for_sub_agent(self.parent_tools, config);
+        let system_prompt = config.system_prompt.clone();
+        let model = self.model.to_string();
+        let max_tokens = self.max_tokens;
+        let temperature = self.temperature;
+        let cumulative_cost = self.cumulative_cost;
+        let process_id = spawn_result.process_id.clone();
+        let cancel_token = spawn_result.cancel_token;
+        let output_path = spawn_result.output_path;
+        let conversation_id = ctx.conversation_id.to_string();
+
+        tokio::spawn(async move {
+            let tx = bg_deps.chat.event_bridge.agent_tx();
+            let mcp_guard = bg_deps.mcp.mcp.read().await;
+
+            let result = tokio::select! {
+                result = super::run_agent_turn(
+                    bg_deps.provider.as_ref(),
+                    &conversation_id,
+                    messages,
+                    tools,
+                    Some(system_prompt),
+                    None,
+                    &model,
+                    max_tokens,
+                    temperature,
+                    None,
+                    &mcp_guard,
+                    &bg_deps.fetch_config,
+                    &bg_deps.filesystem_config,
+                    &bg_deps.chat.task_store,
+                    &bg_deps.chat.pending_questions,
+                    &tx,
+                    cancel_token.clone(),
+                    1,
+                    cumulative_cost,
+                    Some(bg_deps.chat.process_manager.clone()),
+                    None,
+                ) => result,
+                _ = cancel_token.cancelled() => {
+                    Err(anyhow::anyhow!("Cancelled"))
+                }
+            };
+
+            drop(mcp_guard);
+
+            let (output, is_error) = match result {
+                Ok(turn_result) => {
+                    let text = extract_text_from_messages(&turn_result.messages);
+                    if let Some(err) = turn_result.error {
+                        (format!("Error: {}\n\n{}", err, text), true)
+                    } else {
+                        (text, false)
+                    }
+                }
+                Err(e) => (format!("Sub-agent failed: {}", e), true),
+            };
+
+            let _ = tokio::fs::write(&output_path, &output).await;
+            bg_deps
+                .chat
+                .process_manager
+                .complete(&process_id, None, is_error)
+                .await;
+        });
+
+        ToolResult {
+            content: serde_json::json!({
+                "process_id": spawn_result.process_id,
+                "status": "running",
+                "message": "Sub-agent started in background. You will be notified when it completes. Use process_output to read output."
+            })
+            .to_string(),
+            is_error: false,
+        }
     }
 }
 

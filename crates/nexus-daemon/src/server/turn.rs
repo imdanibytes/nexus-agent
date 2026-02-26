@@ -273,6 +273,15 @@ pub fn spawn_agent_turn(
             }
         }
 
+        // Construct owned deps bundle for background sub-agent dispatch
+        let bg_sub_agent_deps = Arc::new(agent::sub_agent::BgSubAgentDeps {
+            provider: provider.clone(),
+            chat: state_clone.chat.clone(),
+            mcp: state_clone.mcp.clone(),
+            fetch_config: state_clone.config.fetch.clone(),
+            filesystem_config: effective_fs.clone(),
+        });
+
         let result = agent::run_agent_turn(
             provider.as_ref(),
             &conversation_id,
@@ -294,6 +303,7 @@ pub fn spawn_agent_turn(
             0, // depth=0: parent turn, sub_agent tool available
             prior_cost,
             Some(state_clone.chat.process_manager.clone()),
+            Some(bg_sub_agent_deps),
         )
         .await;
         drop(mcp_guard);
@@ -396,40 +406,13 @@ pub fn spawn_agent_turn(
                     .drain_notifications(&conversation_id)
                     .await;
                 if !notifications.is_empty() {
-                    let text = crate::bg_process::manager::format_notifications(&notifications);
-                    let notify_msg = ChatMessage {
-                        id: Uuid::new_v4().to_string(),
-                        role: MessageRole::User,
-                        parts: vec![MessagePart::Text { text }],
-                        timestamp: Utc::now(),
-                        parent_id: conv.active_path.last().cloned(),
-                        metadata: Some(serde_json::json!({ "synthetic": true, "source": "bg_process" })),
-                    };
-                    conv.active_path.push(notify_msg.id.clone());
-                    conv.messages.push(notify_msg);
-
-                    let mut store = state_clone.chat.conversations.write().await;
-                    if let Err(e) = store.save(&conv) {
-                        tracing::error!("Failed to save notification message: {}", e);
-                    }
-                    drop(store);
-
-                    // Rebuild API messages and spawn a follow-up turn
-                    let api_messages = conv.build_api_messages();
-                    let mcp_guard = state_clone.mcp.mcp.read().await;
-                    let tools: Vec<crate::anthropic::types::Tool> = mcp_guard.tools();
-                    drop(mcp_guard);
-
-                    let follow_up_cancel = tokio_util::sync::CancellationToken::new();
-                    spawn_agent_turn(
+                    inject_notifications_and_follow_up(
                         state_clone.clone(),
                         conv,
-                        api_messages,
-                        tools,
                         conversation_id.clone(),
-                        follow_up_cancel,
-                        None,
-                    );
+                        notifications,
+                    )
+                    .await;
                 }
             }
             Err(e) => {
@@ -449,6 +432,51 @@ pub fn spawn_agent_turn(
 
 /// Strip `<tool_response>` fencing from tool results.
 /// Fencing is added for the Anthropic API but should not be stored.
+/// Inject background process notifications into a conversation and spawn a follow-up turn.
+///
+/// Used both by the after-turn drain (inline in spawn_agent_turn) and by the idle watcher
+/// (when a process completes while no turn is active).
+pub async fn inject_notifications_and_follow_up(
+    state: Arc<AppState>,
+    mut conv: Conversation,
+    conversation_id: String,
+    notifications: Vec<crate::bg_process::types::PendingNotification>,
+) {
+    let text = crate::bg_process::manager::format_notifications(&notifications);
+    let notify_msg = ChatMessage {
+        id: Uuid::new_v4().to_string(),
+        role: MessageRole::User,
+        parts: vec![MessagePart::Text { text }],
+        timestamp: Utc::now(),
+        parent_id: conv.active_path.last().cloned(),
+        metadata: Some(serde_json::json!({ "synthetic": true, "source": "bg_process" })),
+    };
+    conv.active_path.push(notify_msg.id.clone());
+    conv.messages.push(notify_msg);
+
+    let mut store = state.chat.conversations.write().await;
+    if let Err(e) = store.save(&conv) {
+        tracing::error!("Failed to save notification message: {}", e);
+    }
+    drop(store);
+
+    let api_messages = conv.build_api_messages();
+    let mcp_guard = state.mcp.mcp.read().await;
+    let tools: Vec<crate::anthropic::types::Tool> = mcp_guard.tools();
+    drop(mcp_guard);
+
+    let follow_up_cancel = tokio_util::sync::CancellationToken::new();
+    spawn_agent_turn(
+        state,
+        conv,
+        api_messages,
+        tools,
+        conversation_id,
+        follow_up_cancel,
+        None,
+    );
+}
+
 fn unfence_tool_result(content: &str) -> String {
     let trimmed = content.trim();
     if let Some(rest) = trimmed.strip_prefix("<tool_response>") {
