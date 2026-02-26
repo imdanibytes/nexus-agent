@@ -358,19 +358,11 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   conversations: {},
 
   loadHistory: async (convId) => {
-    const existing = get().conversations[convId];
-    if (existing?.isStreaming) return;
-
     set((s) => patchConv(s, convId, { isLoadingHistory: true }));
 
     try {
       const conv = await fetchConversation(convId);
       if (!conv) {
-        set((s) => patchConv(s, convId, { isLoadingHistory: false }));
-        return;
-      }
-
-      if (get().conversations[convId]?.isStreaming) {
         set((s) => patchConv(s, convId, { isLoadingHistory: false }));
         return;
       }
@@ -390,7 +382,7 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
         }
       }
 
-      const messages = mergeAssistantTurns(
+      const historyMessages = mergeAssistantTurns(
         resolveActiveBranch(repo, childrenMap, selections),
       );
 
@@ -406,16 +398,31 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
       hydrateUsage(convId, conv);
       hydrateTaskState(convId, conv);
 
-      set((s) =>
-        patchConv(s, convId, {
+      set((s) => {
+        const current = s.conversations[convId];
+        // If streaming started while we were fetching (reconnect scenario),
+        // prepend loaded history before the streaming message(s) so the user
+        // sees the full conversation while the new response streams in.
+        if (current?.isStreaming) {
+          const streamingMsgs = current.messages;
+          return patchConv(s, convId, {
+            repository: repo,
+            childrenMap,
+            branchSelections: selections,
+            messages: [...historyMessages, ...streamingMsgs],
+            sealedSpans,
+            isLoadingHistory: false,
+          });
+        }
+        return patchConv(s, convId, {
           repository: repo,
           childrenMap,
           branchSelections: selections,
-          messages,
+          messages: historyMessages,
           sealedSpans,
           isLoadingHistory: false,
-        }),
-      );
+        });
+      });
     } catch {
       set((s) => patchConv(s, convId, { isLoadingHistory: false }));
     }
