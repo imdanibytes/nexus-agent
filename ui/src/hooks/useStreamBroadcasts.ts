@@ -116,14 +116,19 @@ export function useStreamBroadcasts(): void {
     });
 
     // SYNC: sent on SSE connect with the list of active conversations.
-    // Start auto-consuming each so that reconnection (page refresh) picks
-    // up in-progress turns and replayed events render immediately.
+    // Load history first (so existing messages appear), then start
+    // auto-consuming so replayed/live events stream on top.
     const unsubSync = eventBus.on("SYNC", (event) => {
       const activeRuns = event.activeRuns as string[] | undefined;
       if (!activeRuns?.length) return;
       console.debug(`[SYNC] Active runs:`, activeRuns);
       for (const conversationId of activeRuns) {
-        autoConsume(conversationId);
+        // loadHistory bails if isStreaming=true, so we must load BEFORE
+        // autoConsume (which calls startStreaming). The stream consumer
+        // appends the streaming message on top of the loaded history.
+        useThreadStore.getState().loadHistory(conversationId).then(() => {
+          autoConsume(conversationId);
+        });
       }
     });
 
