@@ -10,6 +10,7 @@ use crate::agent::events::AgUiEvent;
 use crate::anthropic::types::{ContentBlock, Message, MessagesRequest, Role};
 use crate::anthropic::AnthropicClient;
 use crate::conversation::types::{ChatMessage, MessagePart, MessageRole};
+use crate::provider::types::ProviderType;
 use crate::server::AppState;
 
 const TITLE_PROMPT: &str = "\
@@ -31,7 +32,14 @@ pub async fn generate_title(
     current_title: &str,
     messages: &[&ChatMessage],
 ) -> Option<String> {
-    let title_client = state.title_client.as_ref()?;
+    // Use the dedicated title_client if available (from ANTHROPIC_API_KEY env),
+    // otherwise resolve a client from the active agent's Anthropic provider.
+    let fallback_client = if state.title_client.is_some() {
+        None
+    } else {
+        resolve_client_from_active_provider(state).await
+    };
+    let title_client = state.title_client.as_ref().or(fallback_client.as_ref())?;
 
     let summary = build_summary(messages, current_title);
     if summary.is_empty() {
@@ -49,6 +57,31 @@ pub async fn generate_title(
             None
         }
     }
+}
+
+/// Resolve an AnthropicClient from the active agent's provider.
+///
+/// Falls back through: active agent → its provider → Anthropic API key.
+/// Returns None if no suitable Anthropic provider is found.
+async fn resolve_client_from_active_provider(state: &Arc<AppState>) -> Option<AnthropicClient> {
+    let agents = state.agents.agents.read().await;
+    let providers = state.agents.providers.read().await;
+
+    let active_id = agents.active_agent_id()?;
+    let agent = agents.get(active_id)?;
+    let provider = providers.get(&agent.provider_id)?;
+
+    // Only Anthropic providers have direct API keys we can use
+    if provider.provider_type != ProviderType::Anthropic {
+        tracing::debug!("Active provider is not Anthropic, skipping title generation");
+        return None;
+    }
+
+    let api_key = provider.api_key.as_ref()?;
+    Some(match &provider.endpoint {
+        Some(endpoint) => AnthropicClient::with_base_url(api_key.clone(), endpoint.clone()),
+        None => AnthropicClient::new(api_key.clone()),
+    })
 }
 
 /// Build a compact summary of recent messages for the title prompt.
