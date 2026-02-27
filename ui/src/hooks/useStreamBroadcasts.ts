@@ -3,6 +3,9 @@ import { useThreadListStore } from "../stores/threadListStore";
 import { useThreadStore } from "../stores/threadStore";
 import { useUsageStore } from "../stores/usageStore";
 import { useProcessStore, type BgProcess } from "../stores/processStore";
+import { useAgentStore } from "../stores/agentStore";
+import { useProviderStore } from "../stores/providerStore";
+import { useWorkspaceStore } from "../stores/workspaceStore";
 import { eventBus } from "../runtime/event-bus";
 import { consumeStream } from "../lib/stream-consumer";
 import { snowflake } from "../lib/snowflake";
@@ -81,6 +84,60 @@ export function useStreamBroadcasts(): void {
       }
     });
 
+    // Thread list sync (cross-tab)
+    const unsubThreadCreated = eventBus.on("thread_created", () => {
+      useThreadListStore.getState().loadThreads();
+    });
+
+    const unsubThreadDeleted = eventBus.on("thread_deleted", (event) => {
+      const id = (event.value as { id?: string })?.id;
+      if (id) useThreadListStore.getState().removeThread(id);
+    });
+
+    // Agent sync (cross-tab)
+    const unsubAgentCreated = eventBus.on("agent_created", () => {
+      useAgentStore.getState().loadAgents();
+    });
+
+    const unsubAgentUpdated = eventBus.on("agent_updated", () => {
+      useAgentStore.getState().loadAgents();
+    });
+
+    const unsubAgentDeleted = eventBus.on("agent_deleted", () => {
+      useAgentStore.getState().loadAgents();
+    });
+
+    const unsubActiveAgent = eventBus.on("active_agent_changed", (event) => {
+      const id = (event.value as { agent_id?: string | null })?.agent_id ?? null;
+      useAgentStore.setState({ activeAgentId: id });
+    });
+
+    // Provider sync (cross-tab)
+    const unsubProviderCreated = eventBus.on("provider_created", () => {
+      useProviderStore.getState().loadProviders();
+    });
+
+    const unsubProviderUpdated = eventBus.on("provider_updated", () => {
+      useProviderStore.getState().loadProviders();
+    });
+
+    const unsubProviderDeleted = eventBus.on("provider_deleted", () => {
+      useProviderStore.getState().loadProviders();
+    });
+
+    // Workspace sync (cross-tab)
+    const unsubWsCreated = eventBus.on("workspace_created", () => {
+      useWorkspaceStore.getState().loadWorkspaces();
+    });
+
+    const unsubWsUpdated = eventBus.on("workspace_updated", () => {
+      useWorkspaceStore.getState().loadWorkspaces();
+    });
+
+    const unsubWsDeleted = eventBus.on("workspace_deleted", () => {
+      useWorkspaceStore.getState().loadWorkspaces();
+    });
+
     // Auto-consume server-initiated turns. This handles:
     // - Follow-up turns (e.g., after bg_process_completed)
     // - Reconnection (SYNC replays buffered events, then RUN_STARTED arrives)
@@ -135,6 +192,18 @@ export function useStreamBroadcasts(): void {
       unsubBgStarted();
       unsubBgCompleted();
       unsubBgCancelled();
+      unsubThreadCreated();
+      unsubThreadDeleted();
+      unsubAgentCreated();
+      unsubAgentUpdated();
+      unsubAgentDeleted();
+      unsubActiveAgent();
+      unsubProviderCreated();
+      unsubProviderUpdated();
+      unsubProviderDeleted();
+      unsubWsCreated();
+      unsubWsUpdated();
+      unsubWsDeleted();
       unsubRunStarted();
       unsubSync();
       for (const c of autoConsumeControllers.values()) c.abort();

@@ -44,17 +44,16 @@ impl AgentService {
 
     // -- Writes ---------------------------------------------------------------
 
-    #[allow(dead_code)] // part of service API
     pub async fn create(&self, params: CreateAgentParams) -> Result<AgentEntry> {
         let agent = self.store.write().await.create(params)?;
-        self.event_bus.emit_global("data:agent_created", serde_json::to_value(&agent).unwrap_or_default());
+        self.event_bus.emit_global("agent_created", serde_json::to_value(&agent).unwrap_or_default());
         Ok(agent)
     }
 
     pub async fn update(&self, id: &str, updates: AgentUpdate) -> Result<Option<AgentEntry>> {
         let result = self.store.write().await.update(id, updates)?;
         if let Some(ref agent) = result {
-            self.event_bus.emit_global("data:agent_updated", serde_json::to_value(agent).unwrap_or_default());
+            self.event_bus.emit_global("agent_updated", serde_json::to_value(agent).unwrap_or_default());
         }
         Ok(result)
     }
@@ -62,14 +61,14 @@ impl AgentService {
     pub async fn delete(&self, id: &str) -> Result<bool> {
         let deleted = self.store.write().await.delete(id)?;
         if deleted {
-            self.event_bus.emit_global("data:agent_deleted", serde_json::json!({ "id": id }));
+            self.event_bus.emit_global("agent_deleted", serde_json::json!({ "id": id }));
         }
         Ok(deleted)
     }
 
     pub async fn set_active(&self, id: Option<String>) -> Result<()> {
         self.store.write().await.set_active(id.clone())?;
-        self.event_bus.emit_global("data:active_agent_changed", serde_json::json!({ "agent_id": id }));
+        self.event_bus.emit_global("active_agent_changed", serde_json::json!({ "agent_id": id }));
         Ok(())
     }
 }

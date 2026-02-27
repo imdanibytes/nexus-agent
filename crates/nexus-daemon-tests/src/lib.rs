@@ -10,6 +10,7 @@ mod tests {
     mod chat;
     mod conversations;
     mod error_cases;
+    mod event_emission;
     mod health;
     mod mcp_servers;
     mod providers;

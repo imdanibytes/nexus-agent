@@ -68,7 +68,7 @@ impl ProviderService {
 
     pub async fn create(&self, params: CreateProviderParams) -> Result<Provider> {
         let provider = self.store.write().await.create(params)?;
-        self.event_bus.emit_global("data:provider_created", serde_json::to_value(&provider).unwrap_or_default());
+        self.event_bus.emit_global("provider_created", serde_json::to_value(&provider).unwrap_or_default());
         Ok(provider)
     }
 
@@ -77,7 +77,7 @@ impl ProviderService {
         if let Some(ref provider) = result {
             // Invalidate cached client so the next call rebuilds with new config
             self.factory.invalidate(id).await;
-            self.event_bus.emit_global("data:provider_updated", serde_json::to_value(provider).unwrap_or_default());
+            self.event_bus.emit_global("provider_updated", serde_json::to_value(provider).unwrap_or_default());
         }
         Ok(result)
     }
@@ -86,7 +86,7 @@ impl ProviderService {
         let deleted = self.store.write().await.delete(id)?;
         if deleted {
             self.factory.invalidate(id).await;
-            self.event_bus.emit_global("data:provider_deleted", serde_json::json!({ "id": id }));
+            self.event_bus.emit_global("provider_deleted", serde_json::json!({ "id": id }));
         }
         Ok(deleted)
     }

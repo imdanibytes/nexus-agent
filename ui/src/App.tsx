@@ -11,6 +11,7 @@ import { useProviderStore } from "./stores/providerStore";
 import { useAgentStore } from "./stores/agentStore";
 import { useMcpStore } from "./stores/mcpStore";
 import { useProjectStore } from "./stores/projectStore";
+import { useWorkspaceStore } from "./stores/workspaceStore";
 import { useUIStore, applyTheme } from "./stores/uiStore";
 import { eventBus } from "./runtime/event-bus";
 import { DebugPanel } from "./components/chat/DebugPanel";
@@ -26,6 +27,7 @@ export default function App() {
       useAgentStore.getState().loadAgents(),
       useMcpStore.getState().loadServers(),
       useProjectStore.getState().loadProjects(),
+      useWorkspaceStore.getState().loadWorkspaces(),
     ]);
     return () => eventBus.disconnect();
   }, []);

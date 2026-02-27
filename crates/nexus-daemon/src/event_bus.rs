@@ -8,7 +8,7 @@ use crate::agent::events::{AgUiEvent, EventEnvelope};
 /// the SSE layer and any other consumers subscribe. Two event categories
 /// flow through the same channel:
 ///
-/// - **Data events** (from services): `data:message_added`, `data:title_changed`, etc.
+/// - **Data events** (from services): `thread_created`, `agent_updated`, etc.
 /// - **Streaming events** (from TurnEmitter): `TEXT_MESSAGE_CONTENT`, `RUN_FINISHED`, etc.
 #[derive(Clone)]
 pub struct EventBus {
@@ -34,15 +34,12 @@ impl EventBus {
     }
 
     /// Convenience: emit a `CUSTOM` data event scoped to a thread.
-    ///
-    /// The event name is prefixed with `data:` so subscribers can distinguish
-    /// data-plane events from streaming events.
     pub fn emit_data(&self, thread_id: &str, name: &str, value: serde_json::Value) {
         self.emit(EventEnvelope {
             thread_id: Some(thread_id.to_string()),
             run_id: None,
             event: AgUiEvent::Custom {
-                name: format!("data:{}", name),
+                name: name.to_string(),
                 value,
             },
         });
@@ -79,7 +76,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn emit_data_prefixes_name() {
+    fn emit_data_uses_clean_name() {
         let bus = EventBus::new();
         let mut rx = bus.subscribe();
 
@@ -89,7 +86,7 @@ mod tests {
         assert_eq!(envelope.thread_id.as_deref(), Some("t1"));
         match &envelope.event {
             AgUiEvent::Custom { name, value } => {
-                assert_eq!(name, "data:thread_created");
+                assert_eq!(name, "thread_created");
                 assert_eq!(value["id"], "t1");
             }
             _ => panic!("expected Custom event"),

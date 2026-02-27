@@ -95,9 +95,19 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
         let (mode, mode_enum, plan_context) = resolve_task_mode(&state_clone, &conversation_id).await;
 
         // 4. Apply composable tool filter chain
+        let plan_snapshot = plan_context.as_ref().map(|pc| {
+            crate::tool_filter::PlanSnapshot {
+                approved: match mode_enum {
+                    AgentMode::Execution | AgentMode::Validation => Some(true),
+                    _ => Some(false),
+                },
+                task_count: pc.tasks.len(),
+                completed_count: pc.tasks.iter().filter(|t| t.status == "completed").count(),
+            }
+        });
         let filter_ctx = crate::tool_filter::ToolFilterContext {
             mode: mode_enum,
-            plan: None,
+            plan: plan_snapshot,
         };
         let tools = crate::tool_filter::ToolFilterChain::default_chain().apply(&filter_ctx, tools);
         tracing::debug!(mode = %mode, tool_count = tools.len(), "Tool filter applied");

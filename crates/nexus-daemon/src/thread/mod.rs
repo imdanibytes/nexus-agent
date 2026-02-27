@@ -116,7 +116,7 @@ impl ThreadService {
 
         self.event_bus.emit_data(
             id,
-            "title_changed",
+            "title_update",
             serde_json::json!({ "id": id, "title": title }),
         );
 

@@ -24,6 +24,8 @@ interface ThreadListState {
   /** @deprecated alias — use setActiveThread */
   switchThread: (id: string) => void;
   updateThreadTitle: (id: string, title: string) => void;
+  /** Remove a thread from the local list (e.g., after SSE thread_deleted event). */
+  removeThread: (id: string) => void;
   touchThread: (id: string) => void;
 }
 
@@ -98,6 +100,13 @@ export const useThreadListStore = create<ThreadListState>((set, get) => ({
         .sort(sortByDate);
       return { threads };
     });
+  },
+
+  removeThread: (id) => {
+    set((s) => ({
+      threads: s.threads.filter((t) => t.id !== id),
+      activeThreadId: s.activeThreadId === id ? null : s.activeThreadId,
+    }));
   },
 
   touchThread: (id) => {

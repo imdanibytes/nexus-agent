@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 
-use crate::agent::events::{AgUiEvent, EventEnvelope};
 use crate::anthropic::types::{
     ContentBlock, Delta, Message, Role, StreamEvent,
 };
@@ -216,21 +215,11 @@ async fn add_cost_to_conversation(state: &Arc<AppState>, conversation_id: &str, 
 }
 
 /// Persist the new title and broadcast via SSE.
+///
+/// ThreadService.rename() emits the `title_update` event, so no separate
+/// broadcast is needed here.
 async fn persist_and_broadcast(state: &Arc<AppState>, conversation_id: &str, title: &str) {
     if let Err(e) = state.threads.rename(conversation_id, title).await {
         tracing::error!("Failed to save title: {}", e);
     }
-
-    let _ = state
-        .turns
-        .event_bridge
-        .agent_tx()
-        .send(EventEnvelope {
-            thread_id: Some(conversation_id.to_string()),
-            run_id: None,
-            event: AgUiEvent::Custom {
-                name: "title_update".to_string(),
-                value: serde_json::json!({ "title": title }),
-            },
-        });
 }
