@@ -6,6 +6,7 @@ mod bash;
 mod bg_process;
 mod compaction;
 mod config;
+mod control_plane;
 mod conversation;
 mod event_bus;
 mod fetch;

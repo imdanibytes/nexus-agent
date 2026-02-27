@@ -12,8 +12,8 @@ use crate::system_prompt::fence_tool_result;
 use super::emitter::TurnEmitter;
 use super::sub_agent::SubAgentHandler;
 use super::tool_dispatch::{
-    self, AskUserHandler, BashHandler, FetchHandler, FilesystemHandler, McpToolHandler,
-    ResourceToolHandler, TaskToolHandler, ToolContext,
+    self, AskUserHandler, BashHandler, ControlPlaneHandler, FetchHandler, FilesystemHandler,
+    McpToolHandler, ResourceToolHandler, TaskToolHandler, ToolContext,
 };
 use crate::provider::InferenceRequest;
 use super::{AgentTurnResult, InferenceConfig, TimingSpan, TurnContext, TurnServices};
@@ -94,6 +94,9 @@ pub async fn run_agent_turn(
     };
     let bg_handler = services.process_manager.as_ref().map(|pm| BgProcessToolHandler {
         process_manager: pm.as_ref(),
+    });
+    let control_plane_handler = services.control_plane.as_ref().map(|deps| ControlPlaneHandler {
+        deps: Arc::clone(deps),
     });
     let resource_handler = ResourceToolHandler { mcp: services.mcp };
     let mcp_handler = McpToolHandler { mcp: services.mcp };
@@ -357,6 +360,9 @@ pub async fn run_agent_turn(
                 }
                 if let Some(ref bgh) = bg_handler {
                     handlers.push(bgh);
+                }
+                if let Some(ref cph) = control_plane_handler {
+                    handlers.push(cph);
                 }
                 handlers.push(&resource_handler);
                 handlers.push(&mcp_handler);

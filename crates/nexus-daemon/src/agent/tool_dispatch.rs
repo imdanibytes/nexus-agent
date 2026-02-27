@@ -369,6 +369,30 @@ impl ToolHandler for ResourceToolHandler<'_> {
     }
 }
 
+// ── ControlPlaneHandler ──
+
+pub struct ControlPlaneHandler {
+    pub deps: Arc<crate::control_plane::ControlPlaneDeps>,
+}
+
+#[async_trait]
+impl ToolHandler for ControlPlaneHandler {
+    fn can_handle(&self, tool_name: &str) -> bool {
+        crate::control_plane::is_control_plane(tool_name)
+    }
+
+    async fn handle(&self, ctx: &ToolContext<'_>) -> ToolResult {
+        ctx.emitter.activity(format!("{}...", ctx.tool_name));
+        let (content, is_error) = crate::control_plane::execute(
+            ctx.tool_name,
+            ctx.args_json,
+            &self.deps,
+        )
+        .await;
+        ToolResult { content, is_error }
+    }
+}
+
 // ── McpToolHandler ──
 
 pub struct McpToolHandler<'a> {

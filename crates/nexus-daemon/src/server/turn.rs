@@ -88,6 +88,7 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
         tools.push(crate::bash::tool_definition());
         tools.extend(crate::bg_process::tools::tool_definitions());
         tools.extend(crate::mcp_resources::tool_definitions());
+        tools.extend(crate::control_plane::tool_definitions());
         let effective_fs = state_clone.effective_fs_config.read().await.clone();
         tools.extend(crate::filesystem::tool_definitions(&effective_fs));
         crate::anthropic::types::inject_tool_description_field(&mut tools);
@@ -192,6 +193,14 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
             pending_questions: &state_clone.turns.pending_questions,
             process_manager: Some(state_clone.turns.process_manager.clone()),
             bg_sub_agent_deps: Some(bg_sub_agent_deps),
+            control_plane: Some(Arc::new(crate::control_plane::ControlPlaneDeps {
+                agents: Arc::clone(&state_clone.agents),
+                providers: Arc::clone(&state_clone.providers),
+                projects: Arc::clone(&state_clone.projects),
+                workspaces: Arc::clone(&state_clone.workspaces),
+                mcp_svc: Arc::clone(&state_clone.mcp),
+                event_bus: state_clone.event_bus.clone(),
+            })),
         };
 
         // 8. Run agent loop

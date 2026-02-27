@@ -78,6 +78,7 @@ pub struct TurnServices<'a> {
     pub pending_questions: &'a tokio::sync::RwLock<PendingQuestionStore>,
     pub process_manager: Option<Arc<ProcessManager>>,
     pub bg_sub_agent_deps: Option<Arc<sub_agent::BgSubAgentDeps>>,
+    pub control_plane: Option<Arc<crate::control_plane::ControlPlaneDeps>>,
 }
 
 pub fn context_window_for_model(model: &str) -> u32 {

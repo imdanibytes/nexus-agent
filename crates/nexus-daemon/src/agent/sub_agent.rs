@@ -335,6 +335,7 @@ impl ToolHandler for SubAgentHandler<'_> {
             pending_questions: self.services.pending_questions,
             process_manager: None,
             bg_sub_agent_deps: None,
+            control_plane: self.services.control_plane.clone(),
         };
         // Sub-agent gets its own emitter with a fresh run_id
         let sub_emitter = TurnEmitter::new(
@@ -483,6 +484,7 @@ impl SubAgentHandler<'_> {
                 pending_questions: &bg_deps.turns.pending_questions,
                 process_manager: Some(bg_deps.turns.process_manager.clone()),
                 bg_sub_agent_deps: None,
+                control_plane: None,
             };
 
             let result = tokio::select! {
