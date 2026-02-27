@@ -154,6 +154,34 @@ pub async fn test_inline(
     }
 }
 
+pub async fn list_resources(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let mcp = state.mcp.mcp.read().await;
+    match mcp.list_resources(&id).await {
+        Ok(resources) => Ok(Json(serde_json::to_value(&resources).unwrap())),
+        Err(_) => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+pub async fn read_resource(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(body): Json<ReadResourceRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let mcp = state.mcp.mcp.read().await;
+    match mcp.read_resource(&id, &body.uri).await {
+        Ok(result) => Ok(Json(serde_json::to_value(&result).unwrap())),
+        Err(_) => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReadResourceRequest {
+    pub uri: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct CreateMcpServerRequest {
     pub name: String,

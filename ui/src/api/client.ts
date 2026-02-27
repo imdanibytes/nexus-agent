@@ -386,13 +386,55 @@ export interface McpServerConfig {
   command: string;
   args: string[];
   env: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
 }
 
 export interface CreateMcpServerRequest {
   name: string;
-  command: string;
+  command?: string;
   args?: string[];
   env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
+}
+
+// ── MCP Resources ──
+
+export interface McpResource {
+  uri: string;
+  name: string;
+  description?: string;
+  mimeType?: string;
+}
+
+export interface McpResourceContent {
+  uri: string;
+  mimeType?: string;
+  text?: string;
+  blob?: string;
+}
+
+export async function fetchMcpResources(
+  serverId: string,
+): Promise<McpResource[]> {
+  const res = await fetch(`/api/mcp-servers/${serverId}/resources`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function readMcpResource(
+  serverId: string,
+  uri: string,
+): Promise<McpResourceContent[]> {
+  const res = await fetch(`/api/mcp-servers/${serverId}/resources/read`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ uri }),
+  });
+  if (!res.ok) throw new Error(`Read resource failed (${res.status})`);
+  const data = await res.json();
+  return data.contents ?? [];
 }
 
 export async function fetchMcpServers(): Promise<McpServerConfig[]> {

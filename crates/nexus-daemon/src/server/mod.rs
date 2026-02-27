@@ -121,6 +121,14 @@ pub fn build_router(state: AppState, queue_rx: tokio::sync::mpsc::UnboundedRecei
             "/api/mcp-servers/{id}",
             put(mcp_api::update).delete(mcp_api::delete),
         )
+        .route(
+            "/api/mcp-servers/{id}/resources",
+            get(mcp_api::list_resources),
+        )
+        .route(
+            "/api/mcp-servers/{id}/resources/read",
+            post(mcp_api::read_resource),
+        )
         // Workspaces
         .route(
             "/api/workspaces",
