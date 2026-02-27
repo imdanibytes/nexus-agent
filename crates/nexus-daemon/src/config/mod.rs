@@ -1,6 +1,7 @@
 mod fetch;
 
 pub use fetch::*;
+pub use nexus_tools::config::FilesystemConfig;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -96,17 +97,6 @@ pub struct AgentConfig {
     pub system_prompt: Option<String>,
 }
 
-/// Filesystem tool configuration — controls the built-in filesystem tools.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FilesystemConfig {
-    /// Whether filesystem tools are available at all.
-    #[serde(default = "default_fs_enabled")]
-    pub enabled: bool,
-    /// Directories the agent is allowed to access.  Paths outside these
-    /// are rejected.  Empty vec = no filesystem access.
-    #[serde(default)]
-    pub allowed_directories: Vec<String>,
-}
 
 /// MCP server configuration — persisted to ~/.nexus/mcp.json
 ///
@@ -139,9 +129,6 @@ fn default_model() -> String {
 fn default_max_tokens() -> u32 {
     8192
 }
-fn default_fs_enabled() -> bool {
-    true
-}
 fn default_host() -> String {
     "127.0.0.1".to_string()
 }
@@ -166,19 +153,6 @@ impl Default for ServerConfig {
         }
     }
 }
-
-// AgentConfig derives Default: all fields are Option<_> → None.
-// FilesystemConfig can't derive: `enabled` defaults to true, not false.
-
-impl Default for FilesystemConfig {
-    fn default() -> Self {
-        Self {
-            enabled: default_fs_enabled(),
-            allowed_directories: Vec::new(),
-        }
-    }
-}
-
 
 impl NexusConfig {
     /// Compute the effective filesystem config by merging project paths

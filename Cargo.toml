@@ -7,6 +7,7 @@ members = [
     "crates/nexus-lsp",
     "crates/nexus-pricing",
     "crates/nexus-compaction",
+    "crates/nexus-tools",
     "crates/nexus-daemon",
     "crates/nexus-daemon-tests",
 ]

@@ -42,3 +42,4 @@ nexus-aws-bedrock = { path = "../nexus-aws-bedrock" }
 nexus-lsp = { path = "../nexus-lsp" }
 nexus-pricing = { path = "../nexus-pricing" }
 nexus-compaction = { path = "../nexus-compaction" }
+nexus-tools = { path = "../nexus-tools" }
