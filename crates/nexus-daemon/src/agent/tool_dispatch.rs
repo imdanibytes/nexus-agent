@@ -345,6 +345,30 @@ impl BashHandler {
     }
 }
 
+// ── ResourceToolHandler ──
+
+pub struct ResourceToolHandler<'a> {
+    pub mcp: &'a McpManager,
+}
+
+#[async_trait]
+impl ToolHandler for ResourceToolHandler<'_> {
+    fn can_handle(&self, tool_name: &str) -> bool {
+        crate::mcp_resources::is_resource_tool(tool_name)
+    }
+
+    async fn handle(&self, ctx: &ToolContext<'_>) -> ToolResult {
+        ctx.emitter.activity(format!("{}...", ctx.tool_name));
+        let (content, is_error) = crate::mcp_resources::execute(
+            ctx.tool_name,
+            ctx.args_json,
+            self.mcp,
+        )
+        .await;
+        ToolResult { content, is_error }
+    }
+}
+
 // ── McpToolHandler ──
 
 pub struct McpToolHandler<'a> {

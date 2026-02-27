@@ -18,7 +18,7 @@ async fn create_returns_conversation() {
     let c = d.client();
 
     let (status, body) = c.post_empty("/api/conversations").await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::CREATED);
     assert!(body["id"].is_string());
 }
 
@@ -28,7 +28,7 @@ async fn create_with_explicit_id() {
     let c = d.client();
 
     let (status, body) = c.post("/api/conversations", &json!({ "id": "my-conv" })).await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::CREATED);
     assert_eq!(body["id"], "my-conv");
 }
 

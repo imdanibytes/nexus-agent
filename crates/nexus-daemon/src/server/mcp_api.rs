@@ -177,9 +177,39 @@ pub async fn read_resource(
     }
 }
 
+pub async fn list_prompts(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let mcp = state.mcp.mcp.read().await;
+    let prompts = mcp.prompts(&id);
+    Ok(Json(serde_json::to_value(&prompts).unwrap()))
+}
+
+pub async fn get_prompt(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(body): Json<GetPromptRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let mcp = state.mcp.mcp.read().await;
+    match mcp.get_prompt(&id, &body.name, body.arguments).await {
+        Ok(result) => Ok(Json(serde_json::to_value(&result).unwrap())),
+        Err(e) => {
+            tracing::warn!(server_id = %id, prompt = %body.name, error = %e, "get_prompt failed");
+            Err(StatusCode::NOT_FOUND)
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ReadResourceRequest {
     pub uri: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GetPromptRequest {
+    pub name: String,
+    pub arguments: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Deserialize)]

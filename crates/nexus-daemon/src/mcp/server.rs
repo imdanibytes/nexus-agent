@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, ReadResourceRequestParams, ReadResourceResult, Resource,
+    CallToolRequestParams, CallToolResult, GetPromptRequestParams, GetPromptResult,
+    ReadResourceRequestParams, ReadResourceResult, Resource,
 };
 use rmcp::service::{RunningService, Service, ServiceExt};
 use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
@@ -29,6 +30,15 @@ enum McpRequest {
         uri: String,
         reply: oneshot::Sender<Result<ReadResourceResult>>,
     },
+    #[allow(dead_code)] // plumbed for future live re-fetch
+    ListPrompts {
+        reply: oneshot::Sender<Result<Vec<rmcp::model::Prompt>>>,
+    },
+    GetPrompt {
+        name: String,
+        arguments: Option<serde_json::Map<String, serde_json::Value>>,
+        reply: oneshot::Sender<Result<GetPromptResult>>,
+    },
     Shutdown(oneshot::Sender<()>),
 }
 
@@ -39,6 +49,7 @@ pub struct McpServer {
     #[allow(dead_code)] // stored for display/logging purposes
     pub name: String,
     tools: Vec<rmcp::model::Tool>,
+    prompts: Vec<rmcp::model::Prompt>,
     tx: mpsc::Sender<McpRequest>,
 }
 
@@ -110,14 +121,27 @@ impl McpServer {
 
         let tools = tools_result.tools;
 
+        // Discover prompts (best-effort — not all servers support prompts)
+        let prompts = match service.list_all_prompts().await {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::debug!(server = %config.id, error = %e, "No prompts from MCP server");
+                Vec::new()
+            }
+        };
+
         tracing::info!(
             server = %config.id,
             tool_count = tools.len(),
+            prompt_count = prompts.len(),
             "MCP server connected"
         );
 
         for tool in &tools {
             tracing::debug!(server = %config.id, tool = %tool.name, "  Tool discovered");
+        }
+        for prompt in &prompts {
+            tracing::debug!(server = %config.id, prompt = %prompt.name, "  Prompt discovered");
         }
 
         let (tx, mut rx) = mpsc::channel::<McpRequest>(32);
@@ -157,6 +181,24 @@ impl McpServer {
                             .map_err(|e| anyhow::anyhow!("{}", e));
                         let _ = reply.send(result);
                     }
+                    McpRequest::ListPrompts { reply } => {
+                        let result = service
+                            .list_all_prompts()
+                            .await
+                            .map_err(|e| anyhow::anyhow!("{}", e));
+                        let _ = reply.send(result);
+                    }
+                    McpRequest::GetPrompt { name, arguments, reply } => {
+                        let result = service
+                            .get_prompt(GetPromptRequestParams {
+                                name: name.into(),
+                                arguments,
+                                meta: None,
+                            })
+                            .await
+                            .map_err(|e| anyhow::anyhow!("{}", e));
+                        let _ = reply.send(result);
+                    }
                     McpRequest::Shutdown(reply) => {
                         let _ = service.cancel().await;
                         let _ = reply.send(());
@@ -170,6 +212,7 @@ impl McpServer {
             id: config.id.clone(),
             name: config.name.clone(),
             tools,
+            prompts,
             tx,
         })
     }
@@ -219,6 +262,46 @@ impl McpServer {
         self.tx
             .send(McpRequest::ReadResource {
                 uri: uri.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("MCP server '{}' is not running", self.id))?;
+
+        reply_rx
+            .await
+            .map_err(|_| anyhow::anyhow!("MCP server '{}' dropped the response", self.id))?
+    }
+
+    /// Get the prompts this server provides.
+    pub fn prompts(&self) -> &[rmcp::model::Prompt] {
+        &self.prompts
+    }
+
+    /// List prompts from this server (re-fetches from the running server).
+    #[allow(dead_code)] // plumbed for future live re-fetch
+    pub async fn list_prompts(&self) -> Result<Vec<rmcp::model::Prompt>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.tx
+            .send(McpRequest::ListPrompts { reply: reply_tx })
+            .await
+            .map_err(|_| anyhow::anyhow!("MCP server '{}' is not running", self.id))?;
+
+        reply_rx
+            .await
+            .map_err(|_| anyhow::anyhow!("MCP server '{}' dropped the response", self.id))?
+    }
+
+    /// Get a specific prompt by name, optionally with arguments.
+    pub async fn get_prompt(
+        &self,
+        name: &str,
+        arguments: Option<serde_json::Map<String, serde_json::Value>>,
+    ) -> Result<GetPromptResult> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.tx
+            .send(McpRequest::GetPrompt {
+                name: name.to_string(),
+                arguments,
                 reply: reply_tx,
             })
             .await

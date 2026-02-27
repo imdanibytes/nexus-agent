@@ -198,6 +198,39 @@ impl McpManager {
         }
     }
 
+    /// List prompts from a specific MCP server (cached from connection time).
+    pub fn prompts(&self, server_id: &str) -> Vec<rmcp::model::Prompt> {
+        self.servers
+            .iter()
+            .find(|s| s.id == server_id)
+            .map(|s| s.prompts().to_vec())
+            .unwrap_or_default()
+    }
+
+    /// List prompts from all servers, grouped by server ID.
+    #[allow(dead_code)] // plumbed for future use
+    pub fn all_prompts(&self) -> Vec<(String, Vec<rmcp::model::Prompt>)> {
+        self.servers
+            .iter()
+            .filter(|s| !s.prompts().is_empty())
+            .map(|s| (s.id.clone(), s.prompts().to_vec()))
+            .collect()
+    }
+
+    /// Get a specific prompt by name from a server.
+    pub async fn get_prompt(
+        &self,
+        server_id: &str,
+        name: &str,
+        arguments: Option<serde_json::Map<String, serde_json::Value>>,
+    ) -> anyhow::Result<rmcp::model::GetPromptResult> {
+        let server = self.servers.iter().find(|s| s.id == server_id);
+        match server {
+            Some(s) => s.get_prompt(name, arguments).await,
+            None => anyhow::bail!("No MCP server with id '{}'", server_id),
+        }
+    }
+
     /// List resources from all servers, grouped by server ID.
     pub async fn all_resources(&self) -> Vec<(String, Vec<rmcp::model::Resource>)> {
         let mut results = Vec::new();

@@ -11,6 +11,7 @@ mod event_bus;
 mod fetch;
 mod filesystem;
 mod mcp;
+mod mcp_resources;
 mod mechanics;
 mod pricing;
 mod provider;

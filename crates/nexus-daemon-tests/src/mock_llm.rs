@@ -43,11 +43,10 @@ impl MockLlmServer {
     /// Start a mock server with a queue of responses.
     /// Each `POST /v1/messages` pops the next response from the queue.
     pub async fn start(responses: Vec<MockResponse>) -> Self {
-        // Allocate a free port (bind + release), then rebind with tokio
-        let port = {
-            let listener = TcpListener::bind("127.0.0.1:0").expect("bind for port");
-            listener.local_addr().unwrap().port()
-        };
+        // Bind port 0 and convert directly — no drop+rebind race
+        let std_listener = TcpListener::bind("127.0.0.1:0").expect("bind for port");
+        std_listener.set_nonblocking(true).expect("set nonblocking");
+        let port = std_listener.local_addr().unwrap().port();
         let url = format!("http://127.0.0.1:{port}");
 
         let state = MockState {
@@ -60,9 +59,8 @@ impl MockLlmServer {
             .route("/v1/messages", post(handle_messages))
             .with_state(state);
 
-        let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}"))
-            .await
-            .expect("bind mock server");
+        let listener = tokio::net::TcpListener::from_std(std_listener)
+            .expect("convert to tokio listener");
 
         let task = tokio::spawn(async move {
             axum::serve(listener, app).await.ok();

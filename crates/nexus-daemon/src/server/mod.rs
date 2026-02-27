@@ -141,6 +141,14 @@ pub fn build_router(state: AppState, queue_rx: tokio::sync::mpsc::UnboundedRecei
             "/api/mcp-servers/{id}/resources/read",
             post(mcp_api::read_resource),
         )
+        .route(
+            "/api/mcp-servers/{id}/prompts",
+            get(mcp_api::list_prompts),
+        )
+        .route(
+            "/api/mcp-servers/{id}/prompts/get",
+            post(mcp_api::get_prompt),
+        )
         // Projects (codebase roots — renamed from workspaces)
         .route(
             "/api/projects",
@@ -161,7 +169,9 @@ pub fn build_router(state: AppState, queue_rx: tokio::sync::mpsc::UnboundedRecei
         )
         .route(
             "/api/workspaces/{id}",
-            put(workspace_api::update).delete(workspace_api::delete),
+            get(workspace_api::get_by_id)
+                .put(workspace_api::update)
+                .delete(workspace_api::delete),
         )
         // Background processes
         .route(

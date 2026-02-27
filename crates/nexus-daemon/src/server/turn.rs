@@ -87,6 +87,7 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
         }
         tools.push(crate::bash::tool_definition());
         tools.extend(crate::bg_process::tools::tool_definitions());
+        tools.extend(crate::mcp_resources::tool_definitions());
         let effective_fs = state_clone.effective_fs_config.read().await.clone();
         tools.extend(crate::filesystem::tool_definitions(&effective_fs));
         crate::anthropic::types::inject_tool_description_field(&mut tools);

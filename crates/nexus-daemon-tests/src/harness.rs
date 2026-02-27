@@ -38,7 +38,7 @@ impl TestDaemon {
         let nexus_dir = home_path.join(".nexus");
         std::fs::create_dir_all(&nexus_dir)?;
 
-        let port = allocate_free_port()?;
+        let (port, port_guard) = allocate_free_port()?;
 
         let config = serde_json::json!({
             "server": { "host": "127.0.0.1", "port": port }
@@ -69,6 +69,8 @@ impl TestDaemon {
             cmd.env_remove("ANTHROPIC_API_KEY");
         }
 
+        // Release port guard just before spawn — daemon binds it immediately on startup
+        drop(port_guard);
         let child = cmd.spawn()?;
         let base_url = format!("http://127.0.0.1:{port}");
 
@@ -121,7 +123,7 @@ impl TestDaemon {
         let nexus_dir = home_path.join(".nexus");
         std::fs::create_dir_all(&nexus_dir)?;
 
-        let port = allocate_free_port()?;
+        let (port, port_guard) = allocate_free_port()?;
 
         // Write config if it doesn't exist yet
         let config_path = nexus_dir.join("nexus.json");
@@ -155,6 +157,7 @@ impl TestDaemon {
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
 
+        drop(port_guard);
         let child = cmd.spawn()?;
         let base_url = format!("http://127.0.0.1:{port}");
 
@@ -178,9 +181,13 @@ impl Drop for TestDaemon {
     }
 }
 
-fn allocate_free_port() -> anyhow::Result<u16> {
+/// Bind port 0 and return both the port and the held listener.
+/// Caller must drop the listener only right before the daemon process
+/// starts, to prevent other tests from stealing the port (TOCTOU race).
+fn allocate_free_port() -> anyhow::Result<(u16, TcpListener)> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
-    Ok(listener.local_addr()?.port())
+    let port = listener.local_addr()?.port();
+    Ok((port, listener))
 }
 
 fn nexus_binary_path() -> anyhow::Result<PathBuf> {

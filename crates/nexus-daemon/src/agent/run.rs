@@ -13,7 +13,7 @@ use super::emitter::TurnEmitter;
 use super::sub_agent::SubAgentHandler;
 use super::tool_dispatch::{
     self, AskUserHandler, BashHandler, FetchHandler, FilesystemHandler, McpToolHandler,
-    TaskToolHandler, ToolContext,
+    ResourceToolHandler, TaskToolHandler, ToolContext,
 };
 use crate::provider::InferenceRequest;
 use super::{AgentTurnResult, InferenceConfig, TimingSpan, TurnContext, TurnServices};
@@ -95,6 +95,7 @@ pub async fn run_agent_turn(
     let bg_handler = services.process_manager.as_ref().map(|pm| BgProcessToolHandler {
         process_manager: pm.as_ref(),
     });
+    let resource_handler = ResourceToolHandler { mcp: services.mcp };
     let mcp_handler = McpToolHandler { mcp: services.mcp };
 
     for round in 0..MAX_ROUNDS {
@@ -357,6 +358,7 @@ pub async fn run_agent_turn(
                 if let Some(ref bgh) = bg_handler {
                     handlers.push(bgh);
                 }
+                handlers.push(&resource_handler);
                 handlers.push(&mcp_handler);
 
                 for tc in &tool_calls {

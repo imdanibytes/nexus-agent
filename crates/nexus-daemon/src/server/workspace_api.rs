@@ -15,6 +15,17 @@ pub async fn list(
     Ok(Json(serde_json::to_value(workspaces).unwrap()))
 }
 
+pub async fn get_by_id(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let store = state.workspaces.read().await;
+    match store.get(&id) {
+        Some(ws) => Ok(Json(serde_json::to_value(ws).unwrap())),
+        None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
 pub async fn create(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateWorkspaceRequest>,
