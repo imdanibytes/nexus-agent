@@ -143,16 +143,28 @@ pub struct FetchPolicy {
 }
 
 /// MCP server configuration — persisted to ~/.nexus/mcp.json
+///
+/// Two transport modes:
+/// - **Stdio** (default): `command` + `args` + `env` spawn a child process.
+/// - **HTTP**: `url` points to a streamable-HTTP MCP endpoint; `headers` are
+///   sent with every request (e.g. auth tokens). `command` is ignored.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerConfig {
     pub id: String,
     #[serde(default)]
     pub name: String,
+    #[serde(default)]
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
     #[serde(default)]
     pub env: HashMap<String, String>,
+    /// If present, connect via streamable HTTP instead of stdio.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Custom HTTP headers (e.g. Authorization). Only used with `url`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub headers: Option<HashMap<String, String>>,
 }
 
 fn default_model() -> String {

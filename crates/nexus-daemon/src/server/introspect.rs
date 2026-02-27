@@ -107,6 +107,11 @@ fn tool_defs() -> &'static [ToolDef] {
                 "additionalProperties": false,
             }),
         },
+        ToolDef {
+            name: "list_mcp_resources",
+            description: "List resources exposed by connected MCP servers, grouped by server ID.",
+            schema: json!({ "type": "object", "properties": {}, "additionalProperties": false }),
+        },
     ])
 }
 
@@ -198,6 +203,29 @@ impl IntrospectMcpServer {
         let public: Vec<crate::provider::ProviderPublic> =
             store.list().iter().map(|p| p.into()).collect();
         ok_json(&public)
+    }
+
+    async fn handle_list_mcp_resources(&self) -> Result<CallToolResult, McpError> {
+        let mcp = self.state.mcp.mcp.read().await;
+        let grouped = mcp.all_resources().await;
+        let result: Vec<serde_json::Value> = grouped
+            .into_iter()
+            .map(|(server_id, resources)| {
+                let res: Vec<serde_json::Value> = resources
+                    .iter()
+                    .map(|r| {
+                        json!({
+                            "uri": r.uri.as_str(),
+                            "name": r.name,
+                            "description": r.description,
+                            "mime_type": r.mime_type,
+                        })
+                    })
+                    .collect();
+                json!({ "server_id": server_id, "resources": res })
+            })
+            .collect();
+        ok_json(&result)
     }
 
     // -- Write tools ---------------------------------------------------------
@@ -296,6 +324,7 @@ impl ServerHandler for IntrospectMcpServer {
             "list_providers" => self.handle_list_providers().await,
             "send_message" => self.handle_send_message(&args).await,
             "abort_turn" => self.handle_abort_turn(&args).await,
+            "list_mcp_resources" => self.handle_list_mcp_resources().await,
             _ => Err(McpError::invalid_request(format!("unknown tool: {}", request.name), None)),
         }
     }

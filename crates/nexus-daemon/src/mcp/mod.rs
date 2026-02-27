@@ -1,3 +1,4 @@
+pub mod handler;
 pub(crate) mod server;
 pub mod store;
 
@@ -6,6 +7,7 @@ use std::collections::HashSet;
 
 use crate::anthropic::types::Tool as AnthropicTool;
 use crate::config::McpServerConfig;
+pub use handler::ClientHandlerState;
 use server::McpServer;
 
 /// Manages all MCP server connections, routes tool calls.
@@ -44,12 +46,12 @@ impl McpManager {
     ///
     /// All MCP tools are namespaced as `mcp_<server_name>__<tool_name>` to
     /// avoid collisions with built-in tools or other MCP servers.
-    pub async fn from_configs(configs: &[McpServerConfig]) -> Self {
+    pub async fn from_configs(configs: &[McpServerConfig], handler_state: &ClientHandlerState) -> Self {
         let mut servers = Vec::new();
         let mut tool_routing = HashMap::new();
 
         for config in configs {
-            match McpServer::spawn(config).await {
+            match McpServer::spawn(config, handler_state).await {
                 Ok(srv) => {
                     let idx = servers.len();
                     let prefix = sanitize_name(&config.name);
@@ -169,6 +171,45 @@ impl McpManager {
             }
             Err(e) => (format!("Tool call failed: {}", e), true),
         }
+    }
+
+    /// List resources from a specific MCP server.
+    pub async fn list_resources(&self, server_id: &str) -> anyhow::Result<Vec<rmcp::model::Resource>> {
+        let server = self.servers.iter().find(|s| s.id == server_id);
+        match server {
+            Some(s) => s.list_resources().await,
+            None => anyhow::bail!("No MCP server with id '{}'", server_id),
+        }
+    }
+
+    /// Read a resource by URI from a specific MCP server.
+    pub async fn read_resource(
+        &self,
+        server_id: &str,
+        uri: &str,
+    ) -> anyhow::Result<rmcp::model::ReadResourceResult> {
+        let server = self.servers.iter().find(|s| s.id == server_id);
+        match server {
+            Some(s) => s.read_resource(uri).await,
+            None => anyhow::bail!("No MCP server with id '{}'", server_id),
+        }
+    }
+
+    /// List resources from all servers, grouped by server ID.
+    pub async fn all_resources(&self) -> Vec<(String, Vec<rmcp::model::Resource>)> {
+        let mut results = Vec::new();
+        for server in &self.servers {
+            match server.list_resources().await {
+                Ok(resources) if !resources.is_empty() => {
+                    results.push((server.id.clone(), resources));
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::debug!(server = %server.id, error = %e, "Failed to list resources");
+                }
+            }
+        }
+        results
     }
 
     /// Shut down all MCP servers.

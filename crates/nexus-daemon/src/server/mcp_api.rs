@@ -5,7 +5,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::mcp::McpManager;
+use crate::mcp::{ClientHandlerState, McpManager};
 use crate::mcp::store::McpServerUpdate;
 use crate::server::AppState;
 
@@ -16,7 +16,10 @@ async fn reload_mcp(state: &Arc<AppState>) {
         store.list().to_vec()
     };
 
-    let new_manager = McpManager::from_configs(&configs).await;
+    let handler_state = ClientHandlerState {
+        workspaces: Arc::clone(&state.workspaces),
+    };
+    let new_manager = McpManager::from_configs(&configs, &handler_state).await;
 
     let mut mcp = state.mcp.mcp.write().await;
     mcp.shutdown().await;
@@ -40,7 +43,14 @@ pub async fn create(
     let config = {
         let mut store = state.mcp.configs.write().await;
         store
-            .create(body.name, body.command, body.args.unwrap_or_default(), body.env.unwrap_or_default())
+            .create(
+                body.name,
+                body.command.unwrap_or_default(),
+                body.args.unwrap_or_default(),
+                body.env.unwrap_or_default(),
+                body.url,
+                body.headers,
+            )
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     };
 
@@ -64,6 +74,10 @@ pub async fn update(
             command: body.command,
             args: body.args,
             env: body.env,
+            set_url: body.set_url.unwrap_or(false),
+            url: body.url,
+            set_headers: body.set_headers.unwrap_or(false),
+            headers: body.headers,
         };
 
         store
@@ -101,6 +115,7 @@ pub async fn delete(
 
 /// Test an MCP server configuration by spawning it, listing tools, then shutting down.
 pub async fn test_inline(
+    State(state): State<Arc<AppState>>,
     Json(body): Json<CreateMcpServerRequest>,
 ) -> Json<serde_json::Value> {
     use crate::config::McpServerConfig;
@@ -109,12 +124,17 @@ pub async fn test_inline(
     let config = McpServerConfig {
         id: "test".to_string(),
         name: body.name.clone(),
-        command: body.command,
+        command: body.command.unwrap_or_default(),
         args: body.args.unwrap_or_default(),
         env: body.env.unwrap_or_default(),
+        url: body.url,
+        headers: body.headers,
     };
 
-    match McpServer::spawn(&config).await {
+    let handler_state = ClientHandlerState {
+        workspaces: Arc::clone(&state.workspaces),
+    };
+    match McpServer::spawn(&config, &handler_state).await {
         Ok(srv) => {
             let tool_names: Vec<String> = srv.tools().iter().map(|t| t.name.to_string()).collect();
             let count = tool_names.len();
@@ -137,9 +157,12 @@ pub async fn test_inline(
 #[derive(Debug, Deserialize)]
 pub struct CreateMcpServerRequest {
     pub name: String,
-    pub command: String,
+    #[serde(default)]
+    pub command: Option<String>,
     pub args: Option<Vec<String>>,
     pub env: Option<HashMap<String, String>>,
+    pub url: Option<String>,
+    pub headers: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -148,4 +171,10 @@ pub struct UpdateMcpServerRequest {
     pub command: Option<String>,
     pub args: Option<Vec<String>>,
     pub env: Option<HashMap<String, String>>,
+    pub url: Option<String>,
+    pub headers: Option<HashMap<String, String>>,
+    /// Set to true to explicitly clear/update the URL field.
+    pub set_url: Option<bool>,
+    /// Set to true to explicitly clear/update the headers field.
+    pub set_headers: Option<bool>,
 }

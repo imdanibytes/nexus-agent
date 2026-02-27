@@ -28,7 +28,7 @@ use crate::anthropic::AnthropicClient;
 use crate::config::NexusConfig;
 use crate::conversation::ConversationStore;
 use crate::mcp::store::McpServerStore;
-use crate::mcp::McpManager;
+use crate::mcp::{ClientHandlerState, McpManager};
 use crate::provider::{ProviderFactory, ProviderStore, ProviderType};
 use crate::server::sse::AgentEventBridge;
 use crate::server::{AppState, AgentService, ChatService, McpService};
@@ -125,7 +125,15 @@ async fn main() -> Result<()> {
         "Nexus daemon starting"
     );
 
-    let mcp = McpManager::from_configs(&mcp_servers).await;
+    // Build shared handler state for MCP client connections.
+    // Uses Arc to the same RwLock<WorkspaceStore> that AppState will hold,
+    // avoiding a reference cycle (handler doesn't hold Arc<McpService>).
+    let workspaces_lock = std::sync::Arc::new(tokio::sync::RwLock::new(workspace_store));
+    let handler_state = ClientHandlerState {
+        workspaces: std::sync::Arc::clone(&workspaces_lock),
+    };
+
+    let mcp = McpManager::from_configs(&mcp_servers, &handler_state).await;
     let mcp_configs = McpServerStore::new(mcp_servers);
     let factory = Arc::new(ProviderFactory::new());
 
@@ -162,7 +170,7 @@ async fn main() -> Result<()> {
     let state = AppState {
         base_filesystem_config: config.filesystem.clone(),
         effective_fs_config: tokio::sync::RwLock::new(effective_fs),
-        workspaces: tokio::sync::RwLock::new(workspace_store),
+        workspaces: workspaces_lock,
         config: config.clone(),
         chat,
         agents: agents_svc,

@@ -28,6 +28,8 @@ impl McpServerStore {
         command: String,
         args: Vec<String>,
         env: std::collections::HashMap<String, String>,
+        url: Option<String>,
+        headers: Option<std::collections::HashMap<String, String>>,
     ) -> Result<McpServerConfig> {
         let config = McpServerConfig {
             id: Uuid::new_v4().to_string(),
@@ -35,6 +37,8 @@ impl McpServerStore {
             command,
             args,
             env,
+            url,
+            headers,
         };
         self.configs.push(config.clone());
         self.save()?;
@@ -57,6 +61,12 @@ impl McpServerStore {
         }
         if let Some(env) = updates.env {
             config.env = env;
+        }
+        if updates.set_url {
+            config.url = updates.url;
+        }
+        if updates.set_headers {
+            config.headers = updates.headers;
         }
 
         let updated = config.clone();
@@ -85,4 +95,10 @@ pub struct McpServerUpdate {
     pub command: Option<String>,
     pub args: Option<Vec<String>>,
     pub env: Option<std::collections::HashMap<String, String>>,
+    /// If true, `url` replaces the current value (even if None = clear).
+    pub set_url: bool,
+    pub url: Option<String>,
+    /// If true, `headers` replaces the current value.
+    pub set_headers: bool,
+    pub headers: Option<std::collections::HashMap<String, String>>,
 }

@@ -33,7 +33,7 @@ pub struct AppState {
     pub chat: Arc<ChatService>,
     pub agents: Arc<AgentService>,
     pub mcp: Arc<McpService>,
-    pub workspaces: RwLock<WorkspaceStore>,
+    pub workspaces: Arc<RwLock<WorkspaceStore>>,
     /// Base filesystem config from nexus.json (without workspace paths merged).
     pub base_filesystem_config: FilesystemConfig,
     /// Effective filesystem config (workspaces + base). Updated on workspace CRUD.
