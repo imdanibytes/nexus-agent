@@ -278,6 +278,100 @@ async fn delete_provider_emits_provider_deleted() {
     assert!(event.is_some(), "Expected 'provider_deleted' CUSTOM event");
 }
 
+// ── Project events ──
+
+#[tokio::test]
+async fn create_project_emits_project_created() {
+    let d = TestDaemon::spawn().await.unwrap();
+    let c = d.client();
+    let mut sse = d.sse();
+    sse.expect_sync().await;
+
+    c.post("/api/projects", &fixtures::project_body("Test Proj", "/tmp"))
+        .await;
+
+    let event = sse
+        .next_matching(
+            |e| is_custom(e, "project_created"),
+            Duration::from_secs(3),
+        )
+        .await;
+    assert!(
+        event.is_some(),
+        "Expected 'project_created' CUSTOM event"
+    );
+}
+
+#[tokio::test]
+async fn update_project_emits_project_updated() {
+    let d = TestDaemon::spawn().await.unwrap();
+    let c = d.client();
+    let mut sse = d.sse();
+    sse.expect_sync().await;
+
+    let (_, proj) = c
+        .post("/api/projects", &fixtures::project_body("Test Proj", "/tmp"))
+        .await;
+    let id = proj["id"].as_str().unwrap();
+
+    // Drain project_created
+    sse.next_matching(
+        |e| is_custom(e, "project_created"),
+        Duration::from_secs(3),
+    )
+    .await;
+
+    c.put(
+        &format!("/api/projects/{id}"),
+        &json!({ "name": "Renamed Proj" }),
+    )
+    .await;
+
+    let event = sse
+        .next_matching(
+            |e| is_custom(e, "project_updated"),
+            Duration::from_secs(3),
+        )
+        .await;
+    assert!(
+        event.is_some(),
+        "Expected 'project_updated' CUSTOM event"
+    );
+}
+
+#[tokio::test]
+async fn delete_project_emits_project_deleted() {
+    let d = TestDaemon::spawn().await.unwrap();
+    let c = d.client();
+    let mut sse = d.sse();
+    sse.expect_sync().await;
+
+    let (_, proj) = c
+        .post("/api/projects", &fixtures::project_body("Test Proj", "/tmp"))
+        .await;
+    let id = proj["id"].as_str().unwrap();
+
+    // Drain project_created
+    sse.next_matching(
+        |e| is_custom(e, "project_created"),
+        Duration::from_secs(3),
+    )
+    .await;
+
+    c.delete(&format!("/api/projects/{id}")).await;
+
+    let event = sse
+        .next_matching(
+            |e| is_custom(e, "project_deleted"),
+            Duration::from_secs(3),
+        )
+        .await;
+    assert!(
+        event.is_some(),
+        "Expected 'project_deleted' CUSTOM event"
+    );
+}
+
 // ── Workspace events ──
 
 #[tokio::test]

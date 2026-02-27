@@ -1,4 +1,3 @@
-use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
@@ -38,10 +37,10 @@ impl TestDaemon {
         let nexus_dir = home_path.join(".nexus");
         std::fs::create_dir_all(&nexus_dir)?;
 
-        let (port, port_guard) = allocate_free_port()?;
-
+        // Use port 0 — the daemon will bind an OS-assigned port and write
+        // the actual port to ~/.nexus/port. No TOCTOU race possible.
         let config = serde_json::json!({
-            "server": { "host": "127.0.0.1", "port": port }
+            "server": { "host": "127.0.0.1", "port": 0 }
         });
         std::fs::write(
             nexus_dir.join("nexus.json"),
@@ -69,9 +68,10 @@ impl TestDaemon {
             cmd.env_remove("ANTHROPIC_API_KEY");
         }
 
-        // Release port guard just before spawn — daemon binds it immediately on startup
-        drop(port_guard);
         let child = cmd.spawn()?;
+
+        // Wait for the daemon to write its actual port
+        let port = wait_for_port_file(&nexus_dir, Duration::from_secs(10)).await?;
         let base_url = format!("http://127.0.0.1:{port}");
 
         let daemon = Self {
@@ -123,26 +123,26 @@ impl TestDaemon {
         let nexus_dir = home_path.join(".nexus");
         std::fs::create_dir_all(&nexus_dir)?;
 
-        let (port, port_guard) = allocate_free_port()?;
-
-        // Write config if it doesn't exist yet
+        // Always use port 0 for OS-assigned port
         let config_path = nexus_dir.join("nexus.json");
         if !config_path.exists() {
             let config = serde_json::json!({
-                "server": { "host": "127.0.0.1", "port": port }
+                "server": { "host": "127.0.0.1", "port": 0 }
             });
             std::fs::write(&config_path, serde_json::to_string_pretty(&config)?)?;
         } else {
-            // Update port in existing config
             let raw = std::fs::read_to_string(&config_path)?;
             let mut config: serde_json::Value = serde_json::from_str(&raw)?;
-            config["server"]["port"] = serde_json::json!(port);
+            config["server"]["port"] = serde_json::json!(0);
             std::fs::write(&config_path, serde_json::to_string_pretty(&config)?)?;
         }
 
         if !nexus_dir.join("mcp.json").exists() {
             std::fs::write(nexus_dir.join("mcp.json"), "[]")?;
         }
+
+        // Remove stale port file from previous run
+        let _ = std::fs::remove_file(nexus_dir.join("port"));
 
         let binary = nexus_binary_path()?;
         let mut cmd = Command::new(&binary);
@@ -157,8 +157,9 @@ impl TestDaemon {
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
 
-        drop(port_guard);
         let child = cmd.spawn()?;
+
+        let port = wait_for_port_file(&nexus_dir, Duration::from_secs(10)).await?;
         let base_url = format!("http://127.0.0.1:{port}");
 
         let daemon = Self {
@@ -181,13 +182,26 @@ impl Drop for TestDaemon {
     }
 }
 
-/// Bind port 0 and return both the port and the held listener.
-/// Caller must drop the listener only right before the daemon process
-/// starts, to prevent other tests from stealing the port (TOCTOU race).
-fn allocate_free_port() -> anyhow::Result<(u16, TcpListener)> {
-    let listener = TcpListener::bind("127.0.0.1:0")?;
-    let port = listener.local_addr()?.port();
-    Ok((port, listener))
+/// Wait for the daemon to write its actual bound port to ~/.nexus/port.
+async fn wait_for_port_file(nexus_dir: &std::path::Path, timeout: Duration) -> anyhow::Result<u16> {
+    let port_file = nexus_dir.join("port");
+    let deadline = tokio::time::Instant::now() + timeout;
+
+    loop {
+        if let Ok(contents) = std::fs::read_to_string(&port_file) {
+            if let Ok(port) = contents.trim().parse::<u16>() {
+                if port > 0 {
+                    return Ok(port);
+                }
+            }
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!("Daemon did not write port file within {timeout:?}");
+        }
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 fn nexus_binary_path() -> anyhow::Result<PathBuf> {

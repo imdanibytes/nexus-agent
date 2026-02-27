@@ -26,8 +26,13 @@ pub async fn create(
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     };
 
-    // Refresh effective filesystem config
     reload_effective_config(&state).await;
+
+    state.event_bus.emit_data(
+        &project.id,
+        "project_created",
+        serde_json::json!({ "id": &project.id, "name": &project.name }),
+    );
 
     Ok((
         StatusCode::CREATED,
@@ -54,6 +59,11 @@ pub async fn update(
     match result {
         Some(proj) => {
             reload_effective_config(&state).await;
+            state.event_bus.emit_data(
+                &proj.id,
+                "project_updated",
+                serde_json::json!({ "id": &proj.id, "name": &proj.name }),
+            );
             Ok(Json(serde_json::to_value(&proj).unwrap()))
         }
         None => Err(StatusCode::NOT_FOUND),
@@ -72,6 +82,11 @@ pub async fn delete(
     match deleted {
         Ok(true) => {
             reload_effective_config(&state).await;
+            state.event_bus.emit_data(
+                &id,
+                "project_deleted",
+                serde_json::json!({ "id": &id }),
+            );
             StatusCode::NO_CONTENT
         }
         Ok(false) => StatusCode::NOT_FOUND,

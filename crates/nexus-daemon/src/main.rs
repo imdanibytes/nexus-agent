@@ -201,7 +201,13 @@ async fn main() -> Result<()> {
 
     let addr = format!("{}:{}", config.server.host, config.server.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    tracing::info!("Listening on http://{}", addr);
+    let actual_addr = listener.local_addr()?;
+    tracing::info!("Listening on http://{}", actual_addr);
+
+    // Write actual port to file (useful when port=0 is used for OS-assigned ports)
+    let port_file = nexus_dir.join("port");
+    let _ = std::fs::write(&port_file, actual_addr.port().to_string());
+
     axum::serve(listener, router).await?;
 
     Ok(())

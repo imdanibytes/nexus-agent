@@ -5,6 +5,7 @@ import { useUsageStore } from "../stores/usageStore";
 import { useProcessStore, type BgProcess } from "../stores/processStore";
 import { useAgentStore } from "../stores/agentStore";
 import { useProviderStore } from "../stores/providerStore";
+import { useProjectStore } from "../stores/projectStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { eventBus } from "../runtime/event-bus";
 import { consumeStream } from "../lib/stream-consumer";
@@ -125,6 +126,19 @@ export function useStreamBroadcasts(): void {
       useProviderStore.getState().loadProviders();
     });
 
+    // Project sync (cross-tab)
+    const unsubProjCreated = eventBus.on("project_created", () => {
+      useProjectStore.getState().loadProjects();
+    });
+
+    const unsubProjUpdated = eventBus.on("project_updated", () => {
+      useProjectStore.getState().loadProjects();
+    });
+
+    const unsubProjDeleted = eventBus.on("project_deleted", () => {
+      useProjectStore.getState().loadProjects();
+    });
+
     // Workspace sync (cross-tab)
     const unsubWsCreated = eventBus.on("workspace_created", () => {
       useWorkspaceStore.getState().loadWorkspaces();
@@ -201,6 +215,9 @@ export function useStreamBroadcasts(): void {
       unsubProviderCreated();
       unsubProviderUpdated();
       unsubProviderDeleted();
+      unsubProjCreated();
+      unsubProjUpdated();
+      unsubProjDeleted();
       unsubWsCreated();
       unsubWsUpdated();
       unsubWsDeleted();

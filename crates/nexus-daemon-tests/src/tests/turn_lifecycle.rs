@@ -124,15 +124,23 @@ async fn text_response_persists_messages() {
     sse.expect_event_type("RUN_FINISHED", Duration::from_secs(10))
         .await;
 
-    // Fetch conversation — should have messages
-    let (status, conv) = client.get(&format!("/api/conversations/{conv_id}")).await;
-    assert_eq!(status.as_u16(), 200);
-
-    let messages = conv["messages"].as_array().expect("messages should be array");
+    // Fetch conversation — should have messages. Retry briefly since
+    // persistence may flush slightly after the RUN_FINISHED event.
+    let mut messages_len = 0;
+    for _ in 0..10 {
+        let (status, conv) = client.get(&format!("/api/conversations/{conv_id}")).await;
+        assert_eq!(status.as_u16(), 200);
+        let messages = conv["messages"].as_array().expect("messages should be array");
+        messages_len = messages.len();
+        if messages_len >= 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     assert!(
-        messages.len() >= 2,
+        messages_len >= 2,
         "Expected at least 2 messages (user + assistant), got {}",
-        messages.len()
+        messages_len
     );
 }
 
