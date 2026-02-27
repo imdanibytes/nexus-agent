@@ -41,6 +41,7 @@ impl ConversationStore {
             created_at: now,
             updated_at: now,
             message_count: 0,
+            workspace_id: workspace_id.clone(),
         };
 
         let conv = Conversation {
@@ -81,6 +82,7 @@ impl ConversationStore {
             meta.title = conv.title.clone();
             meta.updated_at = conv.updated_at;
             meta.message_count = conv.messages.len();
+            meta.workspace_id = conv.workspace_id.clone();
         }
         self.save_index()?;
         Ok(())
@@ -93,6 +95,21 @@ impl ConversationStore {
         }
         self.index.retain(|m| m.id != id);
         self.save_index()?;
+        Ok(())
+    }
+
+    pub fn set_workspace(&mut self, id: &str, workspace_id: Option<String>) -> Result<()> {
+        if let Some(mut conv) = self.get(id)? {
+            conv.workspace_id = workspace_id.clone();
+            conv.updated_at = Utc::now();
+            self.write_conversation(&conv)?;
+
+            if let Some(meta) = self.index.iter_mut().find(|m| m.id == id) {
+                meta.workspace_id = workspace_id;
+                meta.updated_at = conv.updated_at;
+            }
+            self.save_index()?;
+        }
         Ok(())
     }
 

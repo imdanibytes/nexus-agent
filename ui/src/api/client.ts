@@ -3,6 +3,7 @@ export interface ConversationMeta {
   title: string;
   created_at: string;
   updated_at: string;
+  workspace_id?: string | null;
 }
 
 export interface ConversationUsage {
@@ -28,6 +29,7 @@ export interface ConversationFull {
   active_path: string[];
   usage?: ConversationUsage;
   agent_id?: string;
+  workspace_id?: string | null;
   task_state?: {
     plan: import("../types/tasks").Plan | null;
     tasks: Record<string, import("../types/tasks").Task>;
@@ -103,6 +105,17 @@ export async function renameConversation(
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title }),
+  });
+}
+
+export async function updateConversationWorkspace(
+  id: string,
+  workspaceId: string | null,
+): Promise<void> {
+  await fetch(`/api/conversations/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workspace_id: workspaceId ?? "" }),
   });
 }
 

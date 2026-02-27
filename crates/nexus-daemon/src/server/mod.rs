@@ -76,7 +76,7 @@ pub fn build_router(state: AppState, queue_rx: tokio::sync::mpsc::UnboundedRecei
             "/api/conversations/{id}",
             get(conversations::get)
                 .delete(conversations::delete)
-                .patch(conversations::rename),
+                .patch(conversations::update),
         )
         .route(
             "/api/conversations/{id}/path",

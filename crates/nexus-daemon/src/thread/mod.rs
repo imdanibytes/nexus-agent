@@ -107,6 +107,22 @@ impl ThreadService {
         Ok(())
     }
 
+    pub async fn set_workspace(&self, id: &str, workspace_id: Option<String>) -> Result<()> {
+        let mut store = self.store.write().await;
+        store.set_workspace(id, workspace_id.clone())?;
+        drop(store);
+
+        self.cache.invalidate(id).await;
+
+        self.event_bus.emit_data(
+            id,
+            "workspace_changed",
+            serde_json::json!({ "id": id, "workspace_id": workspace_id }),
+        );
+
+        Ok(())
+    }
+
     pub async fn rename(&self, id: &str, title: &str) -> Result<()> {
         let mut store = self.store.write().await;
         store.rename(id, title)?;

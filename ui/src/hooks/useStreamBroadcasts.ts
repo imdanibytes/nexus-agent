@@ -139,6 +139,16 @@ export function useStreamBroadcasts(): void {
       useProjectStore.getState().loadProjects();
     });
 
+    // Per-conversation workspace change
+    const unsubWorkspaceChanged = eventBus.on("workspace_changed", (event) => {
+      const val = event.value as { id?: string; workspace_id?: string | null };
+      if (val?.id) {
+        useThreadListStore
+          .getState()
+          .updateThreadWorkspace(val.id, val.workspace_id ?? null);
+      }
+    });
+
     // Workspace sync (cross-tab)
     const unsubWsCreated = eventBus.on("workspace_created", () => {
       useWorkspaceStore.getState().loadWorkspaces();
@@ -218,6 +228,7 @@ export function useStreamBroadcasts(): void {
       unsubProjCreated();
       unsubProjUpdated();
       unsubProjDeleted();
+      unsubWorkspaceChanged();
       unsubWsCreated();
       unsubWsUpdated();
       unsubWsDeleted();

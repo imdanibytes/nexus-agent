@@ -3,6 +3,7 @@ import { MenuIcon, SettingsIcon } from "lucide-react";
 import { useThreadListStore } from "../../stores/threadListStore";
 import { useUIStore } from "../../stores/uiStore";
 import { AgentSwitcher } from "../agent/AgentSwitcher";
+import { WorkspaceSwitcher } from "../workspace/WorkspaceSwitcher";
 
 interface TopBarProps {
   onMenuPress: () => void;
@@ -36,6 +37,7 @@ export const TopBar: FC<TopBarProps> = ({ onMenuPress }) => {
 
       <span className="flex-1" />
 
+      <WorkspaceSwitcher />
       <AgentSwitcher />
 
       <button

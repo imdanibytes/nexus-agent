@@ -68,15 +68,28 @@ pub async fn delete(
     }
 }
 
-pub async fn rename(
+pub async fn update(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-    Json(body): Json<RenameRequest>,
+    Json(body): Json<UpdateRequest>,
 ) -> StatusCode {
-    match state.threads.rename(&id, &body.title).await {
-        Ok(()) => StatusCode::OK,
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    if let Some(ref title) = body.title {
+        if let Err(_) = state.threads.rename(&id, title).await {
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
     }
+    if let Some(ref workspace_id) = body.workspace_id {
+        // Empty string means clear workspace, otherwise set it
+        let ws = if workspace_id.is_empty() {
+            None
+        } else {
+            Some(workspace_id.clone())
+        };
+        if let Err(_) = state.threads.set_workspace(&id, ws).await {
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+    }
+    StatusCode::OK
 }
 
 #[derive(Debug, Deserialize)]
@@ -85,8 +98,10 @@ pub struct CreateRequest {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct RenameRequest {
-    pub title: String,
+pub struct UpdateRequest {
+    pub title: Option<String>,
+    /// Empty string = clear workspace, non-empty = set, absent = no change
+    pub workspace_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

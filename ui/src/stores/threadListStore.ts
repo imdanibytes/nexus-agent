@@ -4,6 +4,7 @@ import {
   createConversation,
   deleteConversation,
   renameConversation,
+  updateConversationWorkspace,
   type ConversationMeta,
 } from "../api/client";
 import { snowflake } from "../lib/snowflake";
@@ -24,6 +25,9 @@ interface ThreadListState {
   /** @deprecated alias — use setActiveThread */
   switchThread: (id: string) => void;
   updateThreadTitle: (id: string, title: string) => void;
+  setThreadWorkspace: (id: string, workspaceId: string | null) => Promise<void>;
+  /** Update workspace_id locally (e.g., from SSE workspace_changed event). */
+  updateThreadWorkspace: (id: string, workspaceId: string | null) => void;
   /** Remove a thread from the local list (e.g., after SSE thread_deleted event). */
   removeThread: (id: string) => void;
   touchThread: (id: string) => void;
@@ -100,6 +104,23 @@ export const useThreadListStore = create<ThreadListState>((set, get) => ({
         .sort(sortByDate);
       return { threads };
     });
+  },
+
+  setThreadWorkspace: async (id, workspaceId) => {
+    await updateConversationWorkspace(id, workspaceId);
+    set((s) => ({
+      threads: s.threads.map((t) =>
+        t.id === id ? { ...t, workspace_id: workspaceId } : t,
+      ),
+    }));
+  },
+
+  updateThreadWorkspace: (id, workspaceId) => {
+    set((s) => ({
+      threads: s.threads.map((t) =>
+        t.id === id ? { ...t, workspace_id: workspaceId } : t,
+      ),
+    }));
   },
 
   removeThread: (id) => {
