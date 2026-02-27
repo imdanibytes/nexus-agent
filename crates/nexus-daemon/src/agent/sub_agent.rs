@@ -236,6 +236,7 @@ fn extract_text_from_messages(messages: &[Message]) -> String {
 pub struct BgSubAgentDeps {
     pub provider: Arc<dyn InferenceProvider>,
     pub chat: Arc<ChatService>,
+    pub tasks: Arc<crate::tasks::TaskService>,
     pub mcp: Arc<McpService>,
     pub fetch_config: FetchConfig,
     pub filesystem_config: FilesystemConfig,
@@ -488,7 +489,7 @@ impl SubAgentHandler<'_> {
                 mcp: &mcp_guard,
                 fetch_config: &bg_deps.fetch_config,
                 filesystem_config: &bg_deps.filesystem_config,
-                task_store: &bg_deps.chat.task_store,
+                task_store: bg_deps.tasks.store(),
                 pending_questions: &bg_deps.chat.pending_questions,
                 process_manager: Some(bg_deps.chat.process_manager.clone()),
                 bg_sub_agent_deps: None,

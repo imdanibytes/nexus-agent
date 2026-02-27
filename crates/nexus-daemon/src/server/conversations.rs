@@ -39,10 +39,9 @@ pub async fn get(
         .ok_or(StatusCode::NOT_FOUND)?;
     let mut value = serde_json::to_value(&conv).unwrap();
     // Include task state (triggers lazy disk load via get_or_default)
-    let mut task_store = state.chat.task_store.write().await;
-    let task_state = task_store.get_or_default(&id);
+    let task_state = state.tasks.get_or_default(&id).await;
     if task_state.plan.is_some() {
-        value["task_state"] = serde_json::to_value(&*task_state).unwrap();
+        value["task_state"] = serde_json::to_value(&task_state).unwrap();
     }
     Ok(Json(value))
 }
@@ -57,8 +56,7 @@ pub async fn delete(
     match state.threads.delete(&id).await {
         Ok(()) => {
             // Clean up associated task state (memory + disk)
-            let mut task_store = state.chat.task_store.write().await;
-            task_store.remove(&id);
+            state.tasks.remove(&id).await;
             StatusCode::NO_CONTENT
         }
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -123,10 +121,9 @@ pub async fn switch_path(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     // Include task state if it exists
-    let mut task_store = state.chat.task_store.write().await;
-    let task_state = task_store.get_or_default(&id);
+    let task_state = state.tasks.get_or_default(&id).await;
     if task_state.plan.is_some() {
-        value["task_state"] = serde_json::to_value(&*task_state).unwrap();
+        value["task_state"] = serde_json::to_value(&task_state).unwrap();
     }
     Ok(Json(value))
 }

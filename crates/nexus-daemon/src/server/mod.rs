@@ -26,6 +26,7 @@ use crate::anthropic::AnthropicClient;
 use crate::config::{FilesystemConfig, NexusConfig};
 use crate::event_bus::EventBus;
 use crate::provider::ProviderService;
+use crate::tasks::TaskService;
 use crate::thread::ThreadService;
 use crate::workspace::WorkspaceStore;
 use tokio::sync::RwLock;
@@ -38,6 +39,7 @@ pub struct AppState {
     pub agents: Arc<AgentService>,
     pub providers: Arc<ProviderService>,
     pub mcp: Arc<McpService>,
+    pub tasks: Arc<TaskService>,
     pub threads: Arc<ThreadService>,
     pub event_bus: EventBus,
     pub workspaces: Arc<RwLock<WorkspaceStore>>,

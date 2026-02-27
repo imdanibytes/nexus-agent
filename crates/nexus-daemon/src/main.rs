@@ -157,13 +157,13 @@ async fn main() -> Result<()> {
         active_turns: tokio::sync::Mutex::new(std::collections::HashMap::new()),
         event_bridge,
         pending_questions: tokio::sync::RwLock::new(ask_user::PendingQuestionStore::new()),
-        task_store: tokio::sync::RwLock::new(tasks::store::TaskStateStore::new(nexus_dir.join("tasks"))),
         process_manager,
         message_queue,
     });
 
     let agents_svc = Arc::new(AgentService::new(agent_store, event_bus.clone()));
     let providers_svc = Arc::new(ProviderService::new(provider_store, event_bus.clone()));
+    let task_svc = Arc::new(tasks::TaskService::new(nexus_dir.join("tasks"), event_bus.clone()));
 
     let mcp_svc = Arc::new(McpService {
         mcp: tokio::sync::RwLock::new(mcp),
@@ -179,6 +179,7 @@ async fn main() -> Result<()> {
         agents: agents_svc,
         providers: providers_svc,
         mcp: mcp_svc,
+        tasks: task_svc,
         threads,
         event_bus,
         title_client,

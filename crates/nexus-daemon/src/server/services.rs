@@ -7,7 +7,6 @@ use crate::ask_user::PendingQuestionStore;
 use crate::bg_process::ProcessManager;
 use crate::mcp::store::McpServerStore;
 use crate::mcp::McpManager;
-use crate::tasks::store::TaskStateStore;
 use super::message_queue::MessageQueue;
 use super::sse::AgentEventBridge;
 
@@ -17,14 +16,13 @@ pub struct ActiveTurn {
     pub cancel: tokio_util::sync::CancellationToken,
 }
 
-/// Chat execution: cancellation, events, questions, tasks, processes.
+/// Chat execution: cancellation, events, questions, processes.
 ///
-/// Conversation CRUD has moved to `ThreadService` on `AppState`.
+/// Conversation CRUD → `ThreadService`. Task state → `TaskService`.
 pub struct ChatService {
     pub active_turns: Mutex<HashMap<String, ActiveTurn>>,
     pub event_bridge: AgentEventBridge,
     pub pending_questions: RwLock<PendingQuestionStore>,
-    pub task_store: RwLock<TaskStateStore>,
     pub process_manager: Arc<ProcessManager>,
     pub message_queue: Arc<MessageQueue>,
 }

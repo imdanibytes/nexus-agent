@@ -317,28 +317,10 @@ pub async fn set_task_state(
 
     let mode = task_state.mode;
 
-    // Persist task state
-    let mut ts = state.chat.task_store.write().await;
-    *ts.get_or_default(&id) = task_state.clone();
-    if let Err(e) = ts.save(&id) {
+    // Persist task state (TaskService::set handles saving + event emission)
+    if let Err(e) = state.tasks.set(&id, task_state).await {
         tracing::warn!("Failed to persist debug task state: {}", e);
     }
-    drop(ts);
-
-    // Emit task_state_changed event
-    let _ = state.chat.event_bridge.agent_tx().send(EventEnvelope {
-        thread_id: Some(id.clone()),
-        run_id: None,
-        event: AgUiEvent::Custom {
-            name: "task_state_changed".to_string(),
-            value: serde_json::json!({
-                "conversationId": id,
-                "plan": task_state.plan,
-                "tasks": task_state.tasks,
-                "mode": mode,
-            }),
-        },
-    });
 
     Ok(Json(serde_json::json!({
         "ok": true,

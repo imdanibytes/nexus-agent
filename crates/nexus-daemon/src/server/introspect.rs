@@ -169,8 +169,7 @@ impl IntrospectMcpServer {
 
     async fn handle_get_task_state(&self, args: &serde_json::Map<String, serde_json::Value>) -> Result<CallToolResult, McpError> {
         let conv_id = require_str(args, "conversation_id")?;
-        let mut store = self.state.chat.task_store.write().await;
-        match store.get(&conv_id) {
+        match self.state.tasks.get(&conv_id).await {
             Some(state) => ok_json(&state),
             None => ok_json(&serde_json::Value::Null),
         }

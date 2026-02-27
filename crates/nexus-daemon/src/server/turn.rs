@@ -141,6 +141,7 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
         let bg_sub_agent_deps = Arc::new(agent::sub_agent::BgSubAgentDeps {
             provider: resolved.provider.clone(),
             chat: state_clone.chat.clone(),
+            tasks: state_clone.tasks.clone(),
             mcp: state_clone.mcp.clone(),
             fetch_config: state_clone.config.fetch.clone(),
             filesystem_config: effective_fs.clone(),
@@ -170,7 +171,7 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
             mcp: &mcp_guard,
             fetch_config: &state_clone.config.fetch,
             filesystem_config: &effective_fs,
-            task_store: &state_clone.chat.task_store,
+            task_store: state_clone.tasks.store(),
             pending_questions: &state_clone.chat.pending_questions,
             process_manager: Some(state_clone.chat.process_manager.clone()),
             bg_sub_agent_deps: Some(bg_sub_agent_deps),
@@ -340,8 +341,7 @@ async fn resolve_task_mode(
 ) -> (String, AgentMode, Option<crate::system_prompt::PlanContext>) {
     use crate::system_prompt::{PlanContext, PlanTaskSnapshot};
 
-    let mut ts = state.chat.task_store.write().await;
-    match ts.get(conversation_id) {
+    match state.tasks.get(conversation_id).await {
         Some(task_state) => {
             let mode_enum = task_state.mode;
             let mode = task_state.mode.to_string();

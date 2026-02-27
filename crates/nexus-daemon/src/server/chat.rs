@@ -307,7 +307,7 @@ pub async fn tool_invoke(
             &body.tool_name,
             &body.args,
             &conversation_id,
-            &state.chat.task_store,
+            state.tasks.store(),
             &tool_emitter,
         )
         .await;
