@@ -1,4 +1,4 @@
-use crate::anthropic::types::{ContentBlock, Message, Role};
+use nexus_provider::types::{ContentBlock, Message, Role};
 
 /// Prune old tool results from API messages to reclaim context space.
 ///
@@ -30,7 +30,8 @@ pub fn prune_tool_results(messages: &mut [Message], keep_recent: usize) {
     let to_prune = &tool_result_positions[..prune_count];
 
     // Build a map of tool_use_id → tool_name from assistant messages
-    let mut tool_names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut tool_names: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
     for msg in messages.iter() {
         if msg.role != Role::Assistant {
             continue;
@@ -43,7 +44,8 @@ pub fn prune_tool_results(messages: &mut [Message], keep_recent: usize) {
     }
 
     // Collect tool_use_ids that we're pruning (for stubbing their args too)
-    let mut pruned_tool_use_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut pruned_tool_use_ids: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
 
     // Second pass: replace pruned tool results with stubs
     for &(msg_idx, block_idx) in to_prune {

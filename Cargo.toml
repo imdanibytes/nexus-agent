@@ -5,6 +5,8 @@ members = [
     "crates/nexus-anthropic",
     "crates/nexus-aws-bedrock",
     "crates/nexus-lsp",
+    "crates/nexus-pricing",
+    "crates/nexus-compaction",
     "crates/nexus-daemon",
     "crates/nexus-daemon-tests",
 ]

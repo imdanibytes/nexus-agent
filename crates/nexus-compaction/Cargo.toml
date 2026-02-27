@@ -1,0 +1,11 @@
+[package]
+name = "nexus-compaction"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+nexus-provider = { path = "../nexus-provider" }
+nexus-anthropic = { path = "../nexus-anthropic" }
+anyhow = "1"
+serde_json = "1"
+tracing = "0.1"

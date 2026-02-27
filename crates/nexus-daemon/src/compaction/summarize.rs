@@ -1,24 +1,7 @@
 use anyhow::Result;
 
-use crate::anthropic::types::{ContentBlock, Message, MessagesRequest, Role};
 use crate::anthropic::AnthropicClient;
 use crate::conversation::types::{ChatMessage, MessagePart, MessageRole};
-
-const SUMMARIZE_MODEL: &str = "claude-sonnet-4-6";
-const SUMMARIZE_MAX_TOKENS: u32 = 2048;
-
-const SUMMARIZE_PROMPT: &str = "\
-Summarize this conversation into a compact reference that preserves all \
-context needed to continue the work. Include:
-
-1. **Original request**: What the user asked for
-2. **Key decisions**: Technical choices made and why
-3. **Files modified**: Paths of files created, modified, or read (paths only)
-4. **Current state**: What has been accomplished so far
-5. **Unresolved items**: Open questions, next steps, or blockers
-
-Be extremely concise — this summary replaces the original messages. \
-Use bullet points, not prose. Omit pleasantries and filler.";
 
 /// Find a safe split point that doesn't separate tool calls from their results.
 ///
@@ -45,33 +28,10 @@ fn safe_split_point(messages: &[&ChatMessage], keep_recent: usize) -> usize {
     split_at
 }
 
-/// Summarize old messages into a compact structured reference.
-///
-/// Keeps the last `keep_recent` messages intact. Everything before is fed
-/// to Sonnet for summarization. Returns the summary text and the list of
-/// consumed message IDs. The caller is responsible for creating spans
-/// and updating `active_path`.
-pub async fn summarize_messages(
-    client: &AnthropicClient,
-    messages: &[&ChatMessage],
-    keep_recent: usize,
-) -> Result<(String, Vec<String>)> {
-    if messages.len() <= keep_recent {
-        anyhow::bail!("Not enough messages to summarize");
-    }
-
-    let split_at = safe_split_point(messages, keep_recent);
-
-    // After boundary adjustment we may have consumed too many messages
-    if split_at == 0 {
-        anyhow::bail!("No messages to summarize after safe boundary adjustment");
-    }
-
-    let to_summarize = &messages[..split_at];
-
-    // Build a text representation of old messages for the summarizer
+/// Build a text representation of messages for the summarizer LLM.
+fn build_conversation_text(messages: &[&ChatMessage]) -> String {
     let mut conversation_text = String::new();
-    for msg in to_summarize {
+    for msg in messages {
         let role = match msg.role {
             MessageRole::User => "User",
             MessageRole::Assistant => "Assistant",
@@ -112,36 +72,36 @@ pub async fn summarize_messages(
             }
         }
     }
+    conversation_text
+}
 
-    let request = MessagesRequest {
-        model: SUMMARIZE_MODEL.to_string(),
-        max_tokens: SUMMARIZE_MAX_TOKENS,
-        system: Some(SUMMARIZE_PROMPT.to_string()),
-        messages: vec![Message {
-            role: Role::User,
-            content: vec![ContentBlock::Text {
-                text: conversation_text,
-            }],
-        }],
-        tools: Vec::new(),
-        stream: false,
-        temperature: Some(0.0),
-        thinking: None,
-    };
+/// Summarize old messages into a compact structured reference.
+///
+/// Keeps the last `keep_recent` messages intact. Everything before is fed
+/// to Sonnet for summarization. Returns the summary text and the list of
+/// consumed message IDs. The caller is responsible for creating spans
+/// and updating `active_path`.
+pub async fn summarize_messages(
+    client: &AnthropicClient,
+    messages: &[&ChatMessage],
+    keep_recent: usize,
+) -> Result<(String, Vec<String>)> {
+    if messages.len() <= keep_recent {
+        anyhow::bail!("Not enough messages to summarize");
+    }
 
-    let response = client.create_message(request).await?;
+    let split_at = safe_split_point(messages, keep_recent);
 
-    let summary_text = response
-        .content
-        .iter()
-        .find_map(|block| {
-            if let ContentBlock::Text { text } = block {
-                Some(text.clone())
-            } else {
-                None
-            }
-        })
-        .unwrap_or_else(|| "[Compaction summary unavailable]".to_string());
+    // After boundary adjustment we may have consumed too many messages
+    if split_at == 0 {
+        anyhow::bail!("No messages to summarize after safe boundary adjustment");
+    }
+
+    let to_summarize = &messages[..split_at];
+    let conversation_text = build_conversation_text(to_summarize);
+
+    let summary_text =
+        nexus_compaction::summarize_conversation(client, &conversation_text).await?;
 
     let consumed_ids: Vec<String> = to_summarize.iter().map(|m| m.id.clone()).collect();
 

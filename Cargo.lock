@@ -1811,6 +1811,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "nexus-compaction"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "nexus-anthropic",
+ "nexus-provider",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "nexus-core"
 version = "0.1.0"
 dependencies = [
@@ -1840,8 +1851,10 @@ dependencies = [
  "lsp-types",
  "nexus-anthropic",
  "nexus-aws-bedrock",
+ "nexus-compaction",
  "nexus-core",
  "nexus-lsp",
+ "nexus-pricing",
  "nexus-provider",
  "reqwest",
  "rmcp",
@@ -1886,6 +1899,13 @@ dependencies = [
  "tokio",
  "tracing",
  "which",
+]
+
+[[package]]
+name = "nexus-pricing"
+version = "0.1.0"
+dependencies = [
+ "tracing",
 ]
 
 [[package]]
