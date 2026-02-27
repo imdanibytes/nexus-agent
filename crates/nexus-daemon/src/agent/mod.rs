@@ -79,6 +79,10 @@ pub struct TurnServices<'a> {
     pub process_manager: Option<Arc<ProcessManager>>,
     pub bg_sub_agent_deps: Option<Arc<sub_agent::BgSubAgentDeps>>,
     pub control_plane: Option<Arc<crate::control_plane::ControlPlaneDeps>>,
+    /// LSP service for diagnostics decoration on file operations.
+    pub lsp: Option<Arc<crate::lsp::LspService>>,
+    /// Project paths from the conversation's active workspace (for LSP scoping).
+    pub workspace_project_paths: Vec<String>,
 }
 
 pub fn context_window_for_model(model: &str) -> u32 {

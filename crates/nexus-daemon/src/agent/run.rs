@@ -77,6 +77,27 @@ pub async fn run_agent_turn(
     let task_handler = TaskToolHandler { task_store: services.task_store };
     let fetch_handler = FetchHandler { fetch_config: services.fetch_config };
     let fs_handler = FilesystemHandler::new(services.filesystem_config);
+    // LSP-decorated filesystem handler: wraps fs_handler with diagnostic decoration
+    // scoped to the conversation's workspace projects.
+    let lsp_fs_handler = if !services.workspace_project_paths.is_empty() {
+        services.lsp.as_ref().map(|lsp| {
+            tracing::info!(
+                project_paths = ?services.workspace_project_paths,
+                "LSP decorator active for this turn"
+            );
+            crate::lsp::decorator::LspDecoratedFsHandler {
+                inner: FilesystemHandler::new(services.filesystem_config),
+                lsp: Arc::clone(lsp),
+                project_paths: services.workspace_project_paths.clone(),
+            }
+        })
+    } else {
+        tracing::debug!(
+            lsp_available = services.lsp.is_some(),
+            "LSP decorator skipped: no project paths"
+        );
+        None
+    };
     let bash_handler = BashHandler {
         working_dir: services.filesystem_config
             .allowed_directories
@@ -354,7 +375,14 @@ pub async fn run_agent_turn(
                     cumulative_cost: prior_cost + turn_cost,
                 };
                 let mut handlers: Vec<&dyn tool_dispatch::ToolHandler> =
-                    vec![&ask_handler, &task_handler, &fetch_handler, &fs_handler, &bash_handler];
+                    vec![&ask_handler, &task_handler, &fetch_handler];
+                // Use LSP-decorated handler when available, plain handler otherwise
+                if let Some(ref decorated) = lsp_fs_handler {
+                    handlers.push(decorated);
+                } else {
+                    handlers.push(&fs_handler);
+                }
+                handlers.push(&bash_handler);
                 if depth == 0 {
                     handlers.push(&sub_agent_handler);
                 }
@@ -763,7 +791,6 @@ fn inject_state_update(messages: &mut Vec<Message>, state: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::anthropic::types::*;
 
     fn user_text(text: &str) -> Message {
         Message {

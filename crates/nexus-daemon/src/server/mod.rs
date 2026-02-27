@@ -5,6 +5,7 @@ pub mod conversations;
 #[cfg(debug_assertions)]
 pub mod debug;
 pub mod introspect;
+pub mod lsp_api;
 pub mod mcp_api;
 pub mod message_queue;
 pub mod providers;
@@ -52,6 +53,8 @@ pub struct AppState {
     pub effective_fs_config: RwLock<FilesystemConfig>,
     /// Anthropic client used only for title generation (from ANTHROPIC_API_KEY env)
     pub title_client: Option<AnthropicClient>,
+    /// LSP integration — manages language servers and diagnostics
+    pub lsp: Arc<crate::lsp::LspService>,
 }
 
 pub fn build_router(state: AppState, queue_rx: tokio::sync::mpsc::UnboundedReceiver<String>, ui_dist_path: &str) -> Router {
@@ -168,6 +171,23 @@ pub fn build_router(state: AppState, queue_rx: tokio::sync::mpsc::UnboundedRecei
             get(workspace_api::get_by_id)
                 .put(workspace_api::update)
                 .delete(workspace_api::delete),
+        )
+        // LSP Servers
+        .route(
+            "/api/lsp-servers",
+            get(lsp_api::list),
+        )
+        .route(
+            "/api/lsp-servers/detect",
+            post(lsp_api::detect),
+        )
+        .route(
+            "/api/lsp-servers/{id}",
+            patch(lsp_api::toggle),
+        )
+        .route(
+            "/api/lsp-settings",
+            patch(lsp_api::update_settings),
         )
         // Background processes
         .route(

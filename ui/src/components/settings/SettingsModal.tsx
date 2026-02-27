@@ -10,6 +10,7 @@ import {
   CpuIcon,
   FolderIcon,
   LayersIcon,
+  CodeIcon,
 } from "lucide-react";
 import { LazyMotion, domAnimation, m, AnimatePresence } from "framer-motion";
 import { useUIStore, type Theme } from "../../stores/uiStore";
@@ -19,6 +20,7 @@ import { AgentsTab } from "./AgentsTab";
 import { McpTab } from "./McpTab";
 import { ProjectsTab } from "./ProjectsTab";
 import { WorkspacesTab } from "./WorkspacesTab";
+import { LspTab } from "./LspTab";
 
 interface SettingsTab {
   id: string;
@@ -33,6 +35,7 @@ const TABS: SettingsTab[] = [
   { id: "providers", label: "Providers", icon: CloudIcon },
   { id: "agents", label: "Agents", icon: CpuIcon },
   { id: "mcp", label: "MCP Servers", icon: ServerIcon },
+  { id: "lsp", label: "Language Servers", icon: CodeIcon },
 ];
 
 const THEME_OPTIONS: { value: Theme; label: string; icon: FC<{ className?: string }> }[] = [
@@ -87,6 +90,7 @@ const TAB_COMPONENTS: Record<string, FC> = {
   providers: ProvidersTab,
   agents: AgentsTab,
   mcp: McpTab,
+  lsp: LspTab,
 };
 
 export const SettingsModal: FC = () => {

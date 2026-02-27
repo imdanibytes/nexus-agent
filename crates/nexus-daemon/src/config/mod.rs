@@ -300,6 +300,36 @@ impl NexusConfig {
         Ok(())
     }
 
+    fn lsp_path() -> PathBuf {
+        Self::nexus_dir().join("lsp.json")
+    }
+
+    pub fn load_lsp_settings() -> Result<crate::lsp::config::LspSettings> {
+        let path = Self::lsp_path();
+        if path.exists() {
+            let content = fs::read_to_string(&path)
+                .with_context(|| format!("Failed to read LSP config from {}", path.display()))?;
+            let settings = serde_json::from_str(&content)
+                .with_context(|| format!("Failed to parse LSP config at {}", path.display()))?;
+            Ok(settings)
+        } else {
+            let settings = crate::lsp::config::LspSettings::default();
+            Self::save_lsp_settings(&settings)?;
+            Ok(settings)
+        }
+    }
+
+    pub fn save_lsp_settings(settings: &crate::lsp::config::LspSettings) -> Result<()> {
+        let path = Self::lsp_path();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let content = serde_json::to_string_pretty(settings)?;
+        fs::write(&path, content)
+            .with_context(|| format!("Failed to write LSP config to {}", path.display()))?;
+        Ok(())
+    }
+
     pub fn save(&self) -> Result<()> {
         let path = Self::config_path();
         if let Some(parent) = path.parent() {

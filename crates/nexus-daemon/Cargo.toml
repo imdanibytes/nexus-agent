@@ -2,6 +2,7 @@
 name = "nexus-daemon"
 version = "0.1.0"
 edition = "2021"
+default-run = "nexus"
 
 [[bin]]
 name = "nexus"
@@ -32,3 +33,5 @@ url = "2"
 aws-config = { version = "1", features = ["behavior-version-latest", "credentials-login"] }
 aws-sdk-bedrock = "1"
 aws-sdk-bedrockruntime = "1"
+lsp-types = "0.97"
+which = "7"

@@ -24,4 +24,5 @@ mod tests {
     mod turn_lifecycle;
     mod workspace_projects;
     mod workspaces;
+    mod lsp;
 }

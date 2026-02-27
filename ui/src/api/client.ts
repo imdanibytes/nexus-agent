@@ -511,6 +511,61 @@ export async function testMcpServerInline(
   return res.json();
 }
 
+// ── LSP Servers ──
+
+export interface LspServerConfig {
+  id: string;
+  name: string;
+  language_ids: string[];
+  command: string;
+  args: string[];
+  enabled: boolean;
+  auto_detected: boolean;
+}
+
+export interface LspSettingsResponse {
+  enabled: boolean;
+  diagnostics_timeout_ms: number;
+  servers: LspServerConfig[];
+}
+
+export async function fetchLspSettings(): Promise<LspSettingsResponse> {
+  const res = await fetch("/api/lsp-servers");
+  if (!res.ok) throw new Error(`Failed to load LSP settings (${res.status})`);
+  return res.json();
+}
+
+export async function toggleLspServer(
+  id: string,
+  enabled: boolean,
+): Promise<LspServerConfig> {
+  const res = await fetch(`/api/lsp-servers/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) throw new Error(`Toggle LSP server failed (${res.status})`);
+  return res.json();
+}
+
+export async function updateLspSettings(
+  data: { enabled?: boolean; diagnostics_timeout_ms?: number },
+): Promise<LspSettingsResponse> {
+  const res = await fetch("/api/lsp-settings", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(`Update LSP settings failed (${res.status})`);
+  return res.json();
+}
+
+export async function detectLspServers(): Promise<LspSettingsResponse> {
+  const res = await fetch("/api/lsp-servers/detect", { method: "POST" });
+  if (!res.ok) throw new Error(`LSP detection failed (${res.status})`);
+  return res.json();
+}
+
 // ── Projects (path-bearing codebase roots) ──
 
 export interface ProjectConfig {

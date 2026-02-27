@@ -7,6 +7,10 @@ publish = false
 [lib]
 name = "nexus_daemon_tests"
 
+[[bin]]
+name = "mock-lsp"
+path = "src/bin/mock_lsp.rs"
+
 [dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
 reqwest = { version = "0.13", features = ["json", "stream"] }
