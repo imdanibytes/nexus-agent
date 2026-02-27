@@ -486,9 +486,9 @@ export async function testMcpServerInline(
   return res.json();
 }
 
-// ── Workspaces ──
+// ── Projects (path-bearing codebase roots) ──
 
-export interface WorkspaceConfig {
+export interface ProjectConfig {
   id: string;
   name: string;
   path: string;
@@ -496,9 +496,61 @@ export interface WorkspaceConfig {
   updated_at: string;
 }
 
-export interface CreateWorkspaceRequest {
+export interface CreateProjectRequest {
   name: string;
   path: string;
+}
+
+export async function fetchProjects(): Promise<ProjectConfig[]> {
+  const res = await fetch("/api/projects");
+  if (!res.ok) throw new Error(`Failed to load projects (${res.status})`);
+  return res.json();
+}
+
+export async function createProject(
+  data: CreateProjectRequest,
+): Promise<ProjectConfig> {
+  const res = await fetch("/api/projects", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(`Create project failed (${res.status})`);
+  return res.json();
+}
+
+export async function updateProject(
+  id: string,
+  data: Partial<CreateProjectRequest>,
+): Promise<ProjectConfig> {
+  const res = await fetch(`/api/projects/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(`Update project failed (${res.status})`);
+  return res.json();
+}
+
+export async function deleteProject(id: string): Promise<void> {
+  await fetch(`/api/projects/${id}`, { method: "DELETE" });
+}
+
+// ── Workspaces (logical project groupings) ──
+
+export interface WorkspaceConfig {
+  id: string;
+  name: string;
+  description: string | null;
+  project_ids: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateWorkspaceRequest {
+  name: string;
+  description?: string;
+  project_ids?: string[];
 }
 
 export async function fetchWorkspaces(): Promise<WorkspaceConfig[]> {
@@ -534,6 +586,22 @@ export async function updateWorkspace(
 
 export async function deleteWorkspace(id: string): Promise<void> {
   await fetch(`/api/workspaces/${id}`, { method: "DELETE" });
+}
+
+export async function fetchActiveWorkspace(): Promise<WorkspaceConfig | null> {
+  const res = await fetch("/api/workspaces/active");
+  if (!res.ok) throw new Error(`Failed to load active workspace (${res.status})`);
+  const data = await res.json();
+  return data ?? null;
+}
+
+export async function setActiveWorkspace(id: string | null): Promise<void> {
+  const res = await fetch("/api/workspaces/active", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id }),
+  });
+  if (!res.ok) throw new Error(`Set active workspace failed (${res.status})`);
 }
 
 // ── Folder Picking ──

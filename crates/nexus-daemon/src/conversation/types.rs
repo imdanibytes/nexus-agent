@@ -62,6 +62,9 @@ pub struct Conversation {
     /// The agent that was last used in this conversation
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
+    /// The workspace this conversation belongs to (stamped at creation)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
     /// Conversation spans — sealed segments behind compaction boundaries.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spans: Vec<Span>,
@@ -594,6 +597,7 @@ mod tests {
             active_path: vec!["a".into(), "c".into()], // skip "b"
             usage: None,
             agent_id: None,
+            workspace_id: None,
             spans: vec![],
         };
 
@@ -614,6 +618,7 @@ mod tests {
             active_path: vec![],
             usage: None,
             agent_id: None,
+            workspace_id: None,
             spans: vec![
                 Span {
                     index: 0,
@@ -649,6 +654,7 @@ mod tests {
             active_path: vec!["m1".into()],
             usage: None,
             agent_id: None,
+            workspace_id: None,
             spans: vec![Span {
                 index: 0,
                 message_ids: vec!["old".into()],

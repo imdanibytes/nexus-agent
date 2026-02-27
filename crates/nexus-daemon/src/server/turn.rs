@@ -102,7 +102,10 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
         let tools = crate::tool_filter::ToolFilterChain::default_chain().apply(&filter_ctx, tools);
         tracing::debug!(mode = %mode, tool_count = tools.len(), "Tool filter applied");
 
-        // 5. Build system prompt
+        // 5. Resolve workspace context for system prompt
+        let (ws_name, ws_desc, ws_projects) = resolve_workspace_context(&state_clone, &conversation_id).await;
+
+        // 6. Build system prompt
         let context_window = crate::agent::context_window_for_model(&resolved.model);
         let builder = SystemPromptBuilder::default_builder();
         let prompt_parts = builder.build_parts(&SystemPromptContext {
@@ -119,6 +122,9 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
             plan_context,
             working_directory: effective_fs.allowed_directories.first().cloned(),
             total_cost: prior_cost,
+            workspace_name: ws_name,
+            workspace_description: ws_desc,
+            workspace_projects: ws_projects,
         });
 
         let mcp_guard = state_clone.mcp.mcp.read().await;
@@ -753,4 +759,43 @@ fn api_messages_to_chat(
             chat_msg
         })
         .collect()
+}
+
+/// Look up workspace context for a conversation's workspace_id.
+/// Returns (workspace_name, workspace_description, project (name, path) pairs).
+async fn resolve_workspace_context(
+    state: &Arc<AppState>,
+    conversation_id: &str,
+) -> (Option<String>, Option<String>, Vec<(String, String)>) {
+    // Get the conversation's workspace_id
+    let workspace_id = match state.threads.get(conversation_id).await {
+        Ok(Some(conv)) => conv.workspace_id,
+        _ => None,
+    };
+
+    let workspace_id = match workspace_id {
+        Some(id) => id,
+        None => return (None, None, Vec::new()),
+    };
+
+    let ws_store = state.workspaces.read().await;
+    let ws = match ws_store.get(&workspace_id) {
+        Some(ws) => ws.clone(),
+        None => return (None, None, Vec::new()),
+    };
+    drop(ws_store);
+
+    // Resolve project names + paths
+    let proj_store = state.projects.read().await;
+    let projects: Vec<(String, String)> = ws
+        .project_ids
+        .iter()
+        .filter_map(|pid| {
+            proj_store
+                .get(pid)
+                .map(|p| (p.name.clone(), p.path.clone()))
+        })
+        .collect();
+
+    (Some(ws.name), ws.description, projects)
 }

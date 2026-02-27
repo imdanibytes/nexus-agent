@@ -8,7 +8,7 @@ import {
   CheckIcon,
   XIcon,
 } from "lucide-react";
-import { useWorkspaceStore } from "../../stores/workspaceStore";
+import { useProjectStore } from "../../stores/projectStore";
 import { FolderPickerModal } from "./FolderPickerModal";
 import { cn } from "../../lib/utils";
 
@@ -17,17 +17,17 @@ type EditorMode =
   | { type: "create" }
   | { type: "edit"; id: string; name: string; path: string };
 
-export const WorkspacesTab: FC = () => {
-  const { workspaces, deleteWorkspace } = useWorkspaceStore();
+export const ProjectsTab: FC = () => {
+  const { projects, deleteProject } = useProjectStore();
   const [mode, setMode] = useState<EditorMode>({ type: "closed" });
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-medium text-foreground">Workspaces</h3>
+          <h3 className="text-sm font-medium text-foreground">Projects</h3>
           <p className="text-[11px] text-default-400 mt-0.5">
-            Folders the agent can access. Workspace paths are automatically
+            Codebase roots the agent can access. Project paths are automatically
             added to the filesystem sandbox.
           </p>
         </div>
@@ -40,32 +40,32 @@ export const WorkspacesTab: FC = () => {
         </button>
       </div>
 
-      {workspaces.length === 0 && mode.type === "closed" && (
+      {projects.length === 0 && mode.type === "closed" && (
         <p className="text-xs text-default-400">
-          No workspaces configured. Add a workspace to give agents access to
-          your project files.
+          No projects configured. Add a project to give agents access to
+          your codebase files.
         </p>
       )}
 
-      {workspaces.map((ws) => (
+      {projects.map((proj) => (
         <div
-          key={ws.id}
+          key={proj.id}
           className="flex items-center gap-3 rounded-lg border border-default-200/50 bg-default-50/30 p-3"
         >
           <FolderIcon className="size-4 text-default-400 shrink-0" />
           <div className="flex-1 min-w-0">
-            <div className="text-sm font-medium text-foreground">{ws.name}</div>
+            <div className="text-sm font-medium text-foreground">{proj.name}</div>
             <div className="text-[11px] text-default-400 font-mono truncate">
-              {ws.path}
+              {proj.path}
             </div>
           </div>
           <button
             onClick={() =>
               setMode({
                 type: "edit",
-                id: ws.id,
-                name: ws.name,
-                path: ws.path,
+                id: proj.id,
+                name: proj.name,
+                path: proj.path,
               })
             }
             className="text-default-400 hover:text-foreground p-1 rounded hover:bg-default-200/40 transition-colors"
@@ -74,8 +74,8 @@ export const WorkspacesTab: FC = () => {
           </button>
           <button
             onClick={async () => {
-              if (confirm(`Remove workspace "${ws.name}"?`)) {
-                await deleteWorkspace(ws.id);
+              if (confirm(`Remove project "${proj.name}"?`)) {
+                await deleteProject(proj.id);
               }
             }}
             className="text-default-400 hover:text-danger p-1 rounded hover:bg-danger/10 transition-colors"
@@ -86,7 +86,7 @@ export const WorkspacesTab: FC = () => {
       ))}
 
       {mode.type !== "closed" && (
-        <WorkspaceEditor
+        <ProjectEditor
           editId={mode.type === "edit" ? mode.id : undefined}
           initialName={mode.type === "edit" ? mode.name : ""}
           initialPath={mode.type === "edit" ? mode.path : ""}
@@ -97,13 +97,13 @@ export const WorkspacesTab: FC = () => {
   );
 };
 
-const WorkspaceEditor: FC<{
+const ProjectEditor: FC<{
   editId?: string;
   initialName: string;
   initialPath: string;
   onClose: () => void;
 }> = ({ editId, initialName, initialPath, onClose }) => {
-  const { createWorkspace, updateWorkspace } = useWorkspaceStore();
+  const { createProject, updateProject } = useProjectStore();
   const isEdit = !!editId;
 
   const [name, setName] = useState(initialName);
@@ -126,9 +126,9 @@ const WorkspaceEditor: FC<{
     setSaving(true);
     try {
       if (isEdit) {
-        await updateWorkspace(editId!, { name: name.trim(), path: path.trim() });
+        await updateProject(editId!, { name: name.trim(), path: path.trim() });
       } else {
-        await createWorkspace({ name: name.trim(), path: path.trim() });
+        await createProject({ name: name.trim(), path: path.trim() });
       }
       onClose();
     } finally {
@@ -145,7 +145,7 @@ const WorkspaceEditor: FC<{
     <>
       <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 space-y-3">
         <h4 className="text-xs font-semibold text-foreground">
-          {isEdit ? "Edit Workspace" : "New Workspace"}
+          {isEdit ? "Edit Project" : "New Project"}
         </h4>
 
         <div>
@@ -188,7 +188,7 @@ const WorkspaceEditor: FC<{
             onKeyDown={handleKeyDown}
             placeholder={
               path
-                ? path.split("/").filter(Boolean).pop() || "Workspace"
+                ? path.split("/").filter(Boolean).pop() || "Project"
                 : "My Project"
             }
             className="input-field"
@@ -208,7 +208,7 @@ const WorkspaceEditor: FC<{
             )}
           >
             <CheckIcon className="size-3" />
-            {saving ? "Saving..." : isEdit ? "Update" : "Add Workspace"}
+            {saving ? "Saving..." : isEdit ? "Update" : "Add Project"}
           </button>
           <button
             onClick={onClose}

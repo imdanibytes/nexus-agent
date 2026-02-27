@@ -76,9 +76,9 @@ impl ThreadService {
 
     // ── Writes ──
 
-    pub async fn create(&self, client_id: Option<String>) -> Result<ConversationMeta> {
+    pub async fn create(&self, client_id: Option<String>, workspace_id: Option<String>) -> Result<ConversationMeta> {
         let mut store = self.store.write().await;
-        let meta = store.create(client_id)?;
+        let meta = store.create(client_id, workspace_id)?;
 
         self.event_bus.emit_data(
             &meta.id,

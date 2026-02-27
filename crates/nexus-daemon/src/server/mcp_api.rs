@@ -17,7 +17,7 @@ async fn reload_mcp(state: &Arc<AppState>) {
     };
 
     let handler_state = ClientHandlerState {
-        workspaces: Arc::clone(&state.workspaces),
+        projects: Arc::clone(&state.projects),
     };
     let new_manager = McpManager::from_configs(&configs, &handler_state).await;
 
@@ -132,7 +132,7 @@ pub async fn test_inline(
     };
 
     let handler_state = ClientHandlerState {
-        workspaces: Arc::clone(&state.workspaces),
+        projects: Arc::clone(&state.projects),
     };
     match McpServer::spawn(&config, &handler_state).await {
         Ok(srv) => {

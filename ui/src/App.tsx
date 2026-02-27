@@ -10,7 +10,7 @@ import { useThreadListStore } from "./stores/threadListStore";
 import { useProviderStore } from "./stores/providerStore";
 import { useAgentStore } from "./stores/agentStore";
 import { useMcpStore } from "./stores/mcpStore";
-import { useWorkspaceStore } from "./stores/workspaceStore";
+import { useProjectStore } from "./stores/projectStore";
 import { useUIStore, applyTheme } from "./stores/uiStore";
 import { eventBus } from "./runtime/event-bus";
 import { DebugPanel } from "./components/chat/DebugPanel";
@@ -25,7 +25,7 @@ export default function App() {
       useProviderStore.getState().loadProviders(),
       useAgentStore.getState().loadAgents(),
       useMcpStore.getState().loadServers(),
-      useWorkspaceStore.getState().loadWorkspaces(),
+      useProjectStore.getState().loadProjects(),
     ]);
     return () => eventBus.disconnect();
   }, []);

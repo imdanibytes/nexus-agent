@@ -11,16 +11,35 @@ use std::path::PathBuf;
 use crate::agent_config::types::AgentEntry;
 use crate::provider::types::Provider;
 
-/// A workspace — a named folder the agent can access.
+/// A project — a single codebase root the agent can access.
 ///
-/// Workspaces form the basis of `allowed_directories` for the built-in
+/// Projects form the basis of `allowed_directories` for the built-in
 /// filesystem tools. Future extensions: LSP configuration, build system
-/// settings, workspace-specific MCP servers/rules, etc.
+/// settings, project-specific MCP servers/rules, etc.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Project {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    #[serde(default = "chrono_now")]
+    pub created_at: String,
+    #[serde(default = "chrono_now")]
+    pub updated_at: String,
+}
+
+/// A workspace — a logical grouping of projects by intent.
+///
+/// Workspaces give the agent mission context ("what am I working on and why")
+/// while projects provide the concrete codebase paths. A workspace can span
+/// multiple unrelated repos/directories.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Workspace {
     pub id: String,
     pub name: String,
-    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub project_ids: Vec<String>,
     #[serde(default = "chrono_now")]
     pub created_at: String,
     #[serde(default = "chrono_now")]
@@ -45,7 +64,11 @@ pub struct NexusConfig {
     #[serde(default)]
     pub fetch: FetchConfig,
     #[serde(default)]
+    pub projects: Vec<Project>,
+    #[serde(default)]
     pub workspaces: Vec<Workspace>,
+    #[serde(default)]
+    pub active_workspace_id: Option<String>,
     #[serde(default)]
     pub providers: Vec<Provider>,
     #[serde(default)]
@@ -160,16 +183,16 @@ impl Default for FilesystemConfig {
 
 
 impl NexusConfig {
-    /// Compute the effective filesystem config by merging workspace paths
+    /// Compute the effective filesystem config by merging project paths
     /// with the explicit `allowed_directories`.
     ///
-    /// Workspace paths always contribute to allowed_directories.  The user
-    /// can add additional directories beyond workspaces via the config.
+    /// Project paths always contribute to allowed_directories.  The user
+    /// can add additional directories beyond projects via the config.
     pub fn effective_filesystem_config(&self) -> FilesystemConfig {
         let mut dirs = Vec::new();
-        for ws in &self.workspaces {
-            if !dirs.contains(&ws.path) {
-                dirs.push(ws.path.clone());
+        for proj in &self.projects {
+            if !dirs.contains(&proj.path) {
+                dirs.push(proj.path.clone());
             }
         }
         for dir in &self.filesystem.allowed_directories {
@@ -205,6 +228,10 @@ impl NexusConfig {
         if path.exists() {
             let content = fs::read_to_string(&path)
                 .with_context(|| format!("Failed to read config from {}", path.display()))?;
+
+            // Migrate old format: "workspaces" with path-bearing entries → "projects"
+            let content = Self::migrate_workspaces_to_projects(content)?;
+
             let config: NexusConfig = serde_json::from_str(&content)
                 .with_context(|| format!("Failed to parse config at {}", path.display()))?;
             Ok(config)
@@ -213,6 +240,39 @@ impl NexusConfig {
             config.save()?;
             tracing::info!("Created default config at {}", path.display());
             Ok(config)
+        }
+    }
+
+    /// Detect old config format where "workspaces" array contains items with
+    /// a "path" field (these are really projects). Migrate by moving them to
+    /// "projects" and resetting "workspaces" to an empty array.
+    fn migrate_workspaces_to_projects(content: String) -> Result<String> {
+        let mut value: serde_json::Value = serde_json::from_str(&content)?;
+
+        let needs_migration = value
+            .get("workspaces")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().any(|item| item.get("path").is_some()))
+            .unwrap_or(false);
+
+        // Also check: if "projects" key already exists, no migration needed
+        let has_projects = value.get("projects").is_some();
+
+        if needs_migration && !has_projects {
+            tracing::info!("Migrating old workspaces (with paths) → projects");
+            let old_workspaces = value["workspaces"].take();
+            value["projects"] = old_workspaces;
+            value["workspaces"] = serde_json::json!([]);
+
+            // Write migrated config back to disk
+            let migrated = serde_json::to_string_pretty(&value)?;
+            let path = Self::config_path();
+            fs::write(&path, &migrated)
+                .with_context(|| "Failed to write migrated config")?;
+
+            Ok(migrated)
+        } else {
+            Ok(content)
         }
     }
 
@@ -347,17 +407,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn effective_fs_merges_workspaces_and_base_dirs() {
+    fn effective_fs_merges_projects_and_base_dirs() {
         let config = NexusConfig {
-            workspaces: vec![
-                Workspace {
+            projects: vec![
+                Project {
                     id: "1".into(),
                     name: "Project A".into(),
                     path: "/home/user/project-a".into(),
                     created_at: String::new(),
                     updated_at: String::new(),
                 },
-                Workspace {
+                Project {
                     id: "2".into(),
                     name: "Project B".into(),
                     path: "/home/user/project-b".into(),
@@ -368,7 +428,7 @@ mod tests {
             filesystem: FilesystemConfig {
                 enabled: true,
                 allowed_directories: vec![
-                    "/home/user/project-a".into(), // duplicate of workspace
+                    "/home/user/project-a".into(), // duplicate of project
                     "/tmp/scratch".into(),
                 ],
             },
@@ -377,7 +437,7 @@ mod tests {
 
         let effective = config.effective_filesystem_config();
         assert!(effective.enabled);
-        // Deduplicates: workspace paths first, then base dirs that aren't dupes
+        // Deduplicates: project paths first, then base dirs that aren't dupes
         assert_eq!(effective.allowed_directories.len(), 3);
         assert_eq!(effective.allowed_directories[0], "/home/user/project-a");
         assert_eq!(effective.allowed_directories[1], "/home/user/project-b");
@@ -385,7 +445,7 @@ mod tests {
     }
 
     #[test]
-    fn effective_fs_empty_workspaces_uses_base_only() {
+    fn effective_fs_empty_projects_uses_base_only() {
         let config = NexusConfig {
             filesystem: FilesystemConfig {
                 enabled: true,
@@ -400,10 +460,10 @@ mod tests {
     #[test]
     fn effective_fs_propagates_disabled() {
         let config = NexusConfig {
-            workspaces: vec![Workspace {
+            projects: vec![Project {
                 id: "1".into(),
-                name: "W".into(),
-                path: "/w".into(),
+                name: "P".into(),
+                path: "/p".into(),
                 created_at: String::new(),
                 updated_at: String::new(),
             }],

@@ -39,6 +39,12 @@ pub struct SystemPromptContext {
     pub working_directory: Option<String>,
     /// Cumulative cost of the conversation so far (USD).
     pub total_cost: f64,
+    /// Active workspace name (if any).
+    pub workspace_name: Option<String>,
+    /// Active workspace description (if any).
+    pub workspace_description: Option<String>,
+    /// Project names + paths in the active workspace.
+    pub workspace_projects: Vec<(String, String)>,
 }
 
 /// A composable section of the system prompt.

@@ -16,8 +16,12 @@ pub fn agent_body(name: &str, provider_id: &str) -> Value {
     })
 }
 
-pub fn workspace_body(name: &str, path: &str) -> Value {
+pub fn project_body(name: &str, path: &str) -> Value {
     json!({ "name": name, "path": path })
+}
+
+pub fn workspace_body(name: &str) -> Value {
+    json!({ "name": name })
 }
 
 pub fn mcp_server_body(name: &str) -> Value {

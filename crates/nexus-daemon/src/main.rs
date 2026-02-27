@@ -20,6 +20,7 @@ mod system_prompt;
 mod tasks;
 mod thread;
 mod tool_filter;
+mod project;
 mod workspace;
 
 use anyhow::Result;
@@ -36,6 +37,7 @@ use crate::provider::{ProviderService, ProviderStore, ProviderType};
 use crate::server::sse::AgentEventBridge;
 use crate::server::{AppState, McpService, TurnManager};
 use crate::thread::ThreadService;
+use crate::project::ProjectStore;
 use crate::workspace::WorkspaceStore;
 
 #[tokio::main]
@@ -120,25 +122,31 @@ async fn main() -> Result<()> {
     let conversations = ConversationStore::load(conversations_dir)?;
     let threads = Arc::new(ThreadService::new(conversations, event_bus.clone()));
 
-    // Workspaces + effective filesystem config
-    let workspace_store = WorkspaceStore::new(config.workspaces.clone());
+    // Projects + workspaces + effective filesystem config
+    let project_store = ProjectStore::new(config.projects.clone());
+    let workspace_store = WorkspaceStore::new(
+        config.workspaces.clone(),
+        config.active_workspace_id.clone(),
+    );
     let effective_fs = config.effective_filesystem_config();
 
     tracing::info!(
         providers = provider_store.list().len(),
         agents = agent_store.list().len(),
         mcp_servers = mcp_servers.len(),
+        projects = config.projects.len(),
         workspaces = config.workspaces.len(),
         allowed_dirs = effective_fs.allowed_directories.len(),
         "Nexus daemon starting"
     );
 
     // Build shared handler state for MCP client connections.
-    // Uses Arc to the same RwLock<WorkspaceStore> that AppState will hold,
+    // Uses Arc to the same RwLock<ProjectStore> that AppState will hold,
     // avoiding a reference cycle (handler doesn't hold Arc<McpService>).
+    let projects_lock = std::sync::Arc::new(tokio::sync::RwLock::new(project_store));
     let workspaces_lock = std::sync::Arc::new(tokio::sync::RwLock::new(workspace_store));
     let handler_state = ClientHandlerState {
-        workspaces: std::sync::Arc::clone(&workspaces_lock),
+        projects: std::sync::Arc::clone(&projects_lock),
     };
 
     let mcp = McpManager::from_configs(&mcp_servers, &handler_state).await;
@@ -172,6 +180,7 @@ async fn main() -> Result<()> {
     let state = AppState {
         base_filesystem_config: config.filesystem.clone(),
         effective_fs_config: tokio::sync::RwLock::new(effective_fs),
+        projects: projects_lock,
         workspaces: workspaces_lock,
         config: config.clone(),
         turns,

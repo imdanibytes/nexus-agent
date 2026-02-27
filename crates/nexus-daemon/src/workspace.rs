@@ -4,14 +4,18 @@ use uuid::Uuid;
 
 use crate::config::{NexusConfig, Workspace};
 
-/// Manages CRUD for workspace configurations (persisted to nexus.json).
+/// Manages CRUD for logical workspace groupings (persisted to nexus.json).
 pub struct WorkspaceStore {
     workspaces: Vec<Workspace>,
+    active_id: Option<String>,
 }
 
 impl WorkspaceStore {
-    pub fn new(workspaces: Vec<Workspace>) -> Self {
-        Self { workspaces }
+    pub fn new(workspaces: Vec<Workspace>, active_id: Option<String>) -> Self {
+        Self {
+            workspaces,
+            active_id,
+        }
     }
 
     pub fn list(&self) -> &[Workspace] {
@@ -22,12 +26,37 @@ impl WorkspaceStore {
         self.workspaces.iter().find(|w| w.id == id)
     }
 
-    pub fn create(&mut self, name: String, path: String) -> Result<Workspace> {
+    pub fn active_id(&self) -> Option<&str> {
+        self.active_id.as_deref()
+    }
+
+    pub fn active(&self) -> Option<&Workspace> {
+        let id = self.active_id.as_deref()?;
+        self.get(id)
+    }
+
+    pub fn set_active(&mut self, id: Option<String>) -> Result<()> {
+        if let Some(ref id) = id {
+            if self.get(id).is_none() {
+                anyhow::bail!("Workspace not found: {}", id);
+            }
+        }
+        self.active_id = id;
+        self.save()
+    }
+
+    pub fn create(
+        &mut self,
+        name: String,
+        description: Option<String>,
+        project_ids: Vec<String>,
+    ) -> Result<Workspace> {
         let now = Utc::now().to_rfc3339();
         let workspace = Workspace {
             id: Uuid::new_v4().to_string(),
             name,
-            path,
+            description,
+            project_ids,
             created_at: now.clone(),
             updated_at: now,
         };
@@ -48,8 +77,11 @@ impl WorkspaceStore {
         if let Some(name) = updates.name {
             ws.name = name;
         }
-        if let Some(path) = updates.path {
-            ws.path = path;
+        if updates.description.is_some() {
+            ws.description = updates.description;
+        }
+        if let Some(project_ids) = updates.project_ids {
+            ws.project_ids = project_ids;
         }
         ws.updated_at = Utc::now().to_rfc3339();
 
@@ -62,6 +94,10 @@ impl WorkspaceStore {
         let len = self.workspaces.len();
         self.workspaces.retain(|w| w.id != id);
         if self.workspaces.len() < len {
+            // Clear active if we just deleted it
+            if self.active_id.as_deref() == Some(id) {
+                self.active_id = None;
+            }
             self.save()?;
             Ok(true)
         } else {
@@ -69,15 +105,17 @@ impl WorkspaceStore {
         }
     }
 
-    /// Persist workspaces back to nexus.json via read-modify-write.
+    /// Persist workspaces + active_workspace_id back to nexus.json.
     fn save(&self) -> Result<()> {
         let mut config = NexusConfig::load()?;
         config.workspaces = self.workspaces.clone();
+        config.active_workspace_id = self.active_id.clone();
         config.save()
     }
 }
 
 pub struct WorkspaceUpdate {
     pub name: Option<String>,
-    pub path: Option<String>,
+    pub description: Option<String>,
+    pub project_ids: Option<Vec<String>>,
 }

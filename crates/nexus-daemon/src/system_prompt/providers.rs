@@ -333,6 +333,22 @@ impl SystemPromptProvider for ConversationContextProvider {
     fn provide(&self, ctx: &SystemPromptContext) -> Option<String> {
         let mut lines = Vec::new();
 
+        // Workspace context (if active)
+        if let Some(ref name) = ctx.workspace_name {
+            lines.push(format!("Workspace: \"{}\"", name));
+            if let Some(ref desc) = ctx.workspace_description {
+                lines.push(format!("Description: {}", desc));
+            }
+            if !ctx.workspace_projects.is_empty() {
+                lines.push(String::new());
+                lines.push("Projects:".to_string());
+                for (proj_name, proj_path) in &ctx.workspace_projects {
+                    lines.push(format!("- {} ({})", proj_name, proj_path));
+                }
+                lines.push(String::new());
+            }
+        }
+
         if let Some(ref dir) = ctx.working_directory {
             lines.push(format!("Working directory: {}", dir));
         }

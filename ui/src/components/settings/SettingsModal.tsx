@@ -16,7 +16,7 @@ import { cn } from "../../lib/utils";
 import { ProvidersTab } from "./ProvidersTab";
 import { AgentsTab } from "./AgentsTab";
 import { McpTab } from "./McpTab";
-import { WorkspacesTab } from "./WorkspacesTab";
+import { ProjectsTab } from "./ProjectsTab";
 
 interface SettingsTab {
   id: string;
@@ -26,7 +26,7 @@ interface SettingsTab {
 
 const TABS: SettingsTab[] = [
   { id: "general", label: "General", icon: BotIcon },
-  { id: "workspaces", label: "Workspaces", icon: FolderIcon },
+  { id: "projects", label: "Projects", icon: FolderIcon },
   { id: "providers", label: "Providers", icon: CloudIcon },
   { id: "agents", label: "Agents", icon: CpuIcon },
   { id: "mcp", label: "MCP Servers", icon: ServerIcon },
@@ -79,7 +79,7 @@ const GeneralTab: FC = () => {
 
 const TAB_COMPONENTS: Record<string, FC> = {
   general: GeneralTab,
-  workspaces: WorkspacesTab,
+  projects: ProjectsTab,
   providers: ProvidersTab,
   agents: AgentsTab,
   mcp: McpTab,

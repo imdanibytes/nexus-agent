@@ -9,7 +9,7 @@ use rmcp::model::{
 use rmcp::service::{NotificationContext, RequestContext, RoleClient};
 use tokio::sync::RwLock;
 
-use crate::workspace::WorkspaceStore;
+use crate::project::ProjectStore;
 
 /// State shared with each MCP client handler.
 ///
@@ -17,7 +17,7 @@ use crate::workspace::WorkspaceStore;
 /// `AppState → McpService → McpManager → McpServer → handler → AppState`.
 #[derive(Clone)]
 pub struct ClientHandlerState {
-    pub workspaces: Arc<RwLock<WorkspaceStore>>,
+    pub projects: Arc<RwLock<ProjectStore>>,
 }
 
 /// MCP client handler for nexus-daemon.
@@ -60,13 +60,13 @@ impl ClientHandler for NexusClientHandler {
         _context: RequestContext<RoleClient>,
     ) -> impl std::future::Future<Output = Result<ListRootsResult, McpError>> + Send + '_ {
         async move {
-            let store = self.state.workspaces.read().await;
+            let store = self.state.projects.read().await;
             let roots: Vec<Root> = store
                 .list()
                 .iter()
-                .map(|w| Root {
-                    uri: format!("file://{}", w.path),
-                    name: Some(w.name.clone()),
+                .map(|p| Root {
+                    uri: format!("file://{}", p.path),
+                    name: Some(p.name.clone()),
                 })
                 .collect();
             Ok(ListRootsResult { roots })

@@ -32,7 +32,7 @@ impl ConversationStore {
         &self.index
     }
 
-    pub fn create(&mut self, client_id: Option<String>) -> Result<ConversationMeta> {
+    pub fn create(&mut self, client_id: Option<String>, workspace_id: Option<String>) -> Result<ConversationMeta> {
         let id = client_id.unwrap_or_else(|| Uuid::new_v4().to_string());
         let now = Utc::now();
         let meta = ConversationMeta {
@@ -52,6 +52,7 @@ impl ConversationStore {
             active_path: Vec::new(),
             usage: None,
             agent_id: None,
+            workspace_id,
             spans: Vec::new(),
         };
 

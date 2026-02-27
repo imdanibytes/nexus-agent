@@ -11,6 +11,7 @@ pub mod providers;
 pub mod services;
 pub mod sse;
 pub mod turn;
+pub mod project_api;
 pub mod workspace_api;
 
 use axum::extract::{Path, State};
@@ -28,6 +29,7 @@ use crate::event_bus::EventBus;
 use crate::provider::ProviderService;
 use crate::tasks::TaskService;
 use crate::thread::ThreadService;
+use crate::project::ProjectStore;
 use crate::workspace::WorkspaceStore;
 use tokio::sync::RwLock;
 
@@ -42,10 +44,11 @@ pub struct AppState {
     pub tasks: Arc<TaskService>,
     pub threads: Arc<ThreadService>,
     pub event_bus: EventBus,
+    pub projects: Arc<RwLock<ProjectStore>>,
     pub workspaces: Arc<RwLock<WorkspaceStore>>,
-    /// Base filesystem config from nexus.json (without workspace paths merged).
+    /// Base filesystem config from nexus.json (without project paths merged).
     pub base_filesystem_config: FilesystemConfig,
-    /// Effective filesystem config (workspaces + base). Updated on workspace CRUD.
+    /// Effective filesystem config (projects + base). Updated on project CRUD.
     pub effective_fs_config: RwLock<FilesystemConfig>,
     /// Anthropic client used only for title generation (from ANTHROPIC_API_KEY env)
     pub title_client: Option<AnthropicClient>,
@@ -138,7 +141,20 @@ pub fn build_router(state: AppState, queue_rx: tokio::sync::mpsc::UnboundedRecei
             "/api/mcp-servers/{id}/resources/read",
             post(mcp_api::read_resource),
         )
-        // Workspaces
+        // Projects (codebase roots — renamed from workspaces)
+        .route(
+            "/api/projects",
+            get(project_api::list).post(project_api::create),
+        )
+        .route(
+            "/api/projects/{id}",
+            put(project_api::update).delete(project_api::delete),
+        )
+        // Workspaces (logical groupings of projects)
+        .route(
+            "/api/workspaces/active",
+            get(workspace_api::get_active).put(workspace_api::set_active),
+        )
         .route(
             "/api/workspaces",
             get(workspace_api::list).post(workspace_api::create),

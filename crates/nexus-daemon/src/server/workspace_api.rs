@@ -22,12 +22,15 @@ pub async fn create(
     let workspace = {
         let mut store = state.workspaces.write().await;
         store
-            .create(body.name, body.path)
+            .create(body.name, body.description, body.project_ids.unwrap_or_default())
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     };
 
-    // Refresh effective filesystem config
-    reload_effective_config(&state).await;
+    state.event_bus.emit_data(
+        &workspace.id,
+        "workspace_created",
+        serde_json::json!({ "id": &workspace.id, "name": &workspace.name }),
+    );
 
     Ok((
         StatusCode::CREATED,
@@ -44,7 +47,8 @@ pub async fn update(
         let mut store = state.workspaces.write().await;
         let updates = WorkspaceUpdate {
             name: body.name,
-            path: body.path,
+            description: body.description,
+            project_ids: body.project_ids,
         };
         store
             .update(&id, updates)
@@ -53,7 +57,11 @@ pub async fn update(
 
     match result {
         Some(ws) => {
-            reload_effective_config(&state).await;
+            state.event_bus.emit_data(
+                &ws.id,
+                "workspace_updated",
+                serde_json::json!({ "id": &ws.id, "name": &ws.name }),
+            );
             Ok(Json(serde_json::to_value(&ws).unwrap()))
         }
         None => Err(StatusCode::NOT_FOUND),
@@ -71,7 +79,11 @@ pub async fn delete(
 
     match deleted {
         Ok(true) => {
-            reload_effective_config(&state).await;
+            state.event_bus.emit_data(
+                &id,
+                "workspace_deleted",
+                serde_json::json!({ "id": &id }),
+            );
             StatusCode::NO_CONTENT
         }
         Ok(false) => StatusCode::NOT_FOUND,
@@ -79,46 +91,42 @@ pub async fn delete(
     }
 }
 
-/// Recompute effective filesystem config from current workspaces + config.
-async fn reload_effective_config(state: &Arc<AppState>) {
+pub async fn get_active(
+    State(state): State<Arc<AppState>>,
+) -> Json<serde_json::Value> {
     let store = state.workspaces.read().await;
-    let workspace_paths: Vec<String> = store.list().iter().map(|w| w.path.clone()).collect();
-    drop(store);
-
-    let mut dirs = Vec::new();
-    for path in &workspace_paths {
-        if !dirs.contains(path) {
-            dirs.push(path.clone());
-        }
+    match store.active() {
+        Some(ws) => Json(serde_json::to_value(ws).unwrap()),
+        None => Json(serde_json::json!(null)),
     }
-    for dir in &state.base_filesystem_config.allowed_directories {
-        if !dirs.contains(dir) {
-            dirs.push(dir.clone());
-        }
+}
+
+pub async fn set_active(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<SetActiveRequest>,
+) -> StatusCode {
+    let mut store = state.workspaces.write().await;
+    match store.set_active(body.id) {
+        Ok(()) => StatusCode::OK,
+        Err(_) => StatusCode::NOT_FOUND,
     }
-
-    let effective = crate::config::FilesystemConfig {
-        enabled: state.base_filesystem_config.enabled,
-        allowed_directories: dirs,
-    };
-
-    let mut fs_config = state.effective_fs_config.write().await;
-    *fs_config = effective;
-
-    tracing::debug!(
-        workspace_count = workspace_paths.len(),
-        "Effective filesystem config updated"
-    );
 }
 
 #[derive(Debug, Deserialize)]
 pub struct CreateWorkspaceRequest {
     pub name: String,
-    pub path: String,
+    pub description: Option<String>,
+    pub project_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateWorkspaceRequest {
     pub name: Option<String>,
-    pub path: Option<String>,
+    pub description: Option<String>,
+    pub project_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SetActiveRequest {
+    pub id: Option<String>,
 }
