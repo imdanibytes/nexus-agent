@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 
-use crate::agent::events::AgUiEvent;
+use crate::agent::events::{AgUiEvent, EventEnvelope};
 use crate::anthropic::types::{
     ContentBlock, Delta, Message, Role, StreamEvent,
 };
@@ -266,9 +266,12 @@ async fn persist_and_broadcast(state: &Arc<AppState>, conversation_id: &str, tit
         .chat
         .event_bridge
         .agent_tx()
-        .send(AgUiEvent::Custom {
-            thread_id: conversation_id.to_string(),
-            name: "title_update".to_string(),
-            value: serde_json::json!({ "title": title }),
+        .send(EventEnvelope {
+            thread_id: Some(conversation_id.to_string()),
+            run_id: None,
+            event: AgUiEvent::Custom {
+                name: "title_update".to_string(),
+                value: serde_json::json!({ "title": title }),
+            },
         });
 }

@@ -4,6 +4,7 @@ pub mod chat;
 pub mod conversations;
 #[cfg(debug_assertions)]
 pub mod debug;
+pub mod introspect;
 pub mod mcp_api;
 pub mod message_queue;
 pub mod providers;
@@ -164,7 +165,19 @@ pub fn build_router(state: AppState, queue_rx: tokio::sync::mpsc::UnboundedRecei
             .route("/api/debug/emit", post(debug::emit_event));
     }
 
+    // Introspection MCP server — exposes daemon state to MCP clients
+    let introspect_state = Arc::clone(&state);
+    let mcp_service = introspect::IntrospectService::new(
+        move || Ok(introspect::IntrospectMcpServer::new(Arc::clone(&introspect_state))),
+        Arc::new(introspect::IntrospectSessionManager::default()),
+        introspect::IntrospectServerConfig {
+            stateful_mode: true,
+            ..Default::default()
+        },
+    );
+
     router
+        .nest_service("/mcp", mcp_service)
         // Static files (UI) — SPA fallback: serve index.html for non-file routes
         .fallback_service(
             ServeDir::new(ui_dist_path)

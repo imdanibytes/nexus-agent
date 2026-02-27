@@ -7,7 +7,7 @@ use tokio::sync::{broadcast, Mutex};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 
-use crate::agent::events::AgUiEvent;
+use crate::agent::events::{AgUiEvent, EventEnvelope};
 
 /// Bridge between the agent loop and the global SSE stream.
 ///
@@ -16,7 +16,7 @@ use crate::agent::events::AgUiEvent;
 /// can replay the full turn from the beginning.
 #[derive(Clone)]
 pub struct AgentEventBridge {
-    tx: broadcast::Sender<AgUiEvent>,
+    tx: broadcast::Sender<EventEnvelope>,
     /// Per-conversation event buffer for replay on reconnect.
     /// Key = conversation_id, Value = serialized JSON events.
     /// Created on RUN_STARTED, cleared on RUN_FINISHED/RUN_ERROR.
@@ -31,23 +31,23 @@ impl AgentEventBridge {
 
         // Spawn buffer-capture task: subscribes to broadcast and maintains
         // per-turn event buffers for replay on reconnect.
-        let mut rx: broadcast::Receiver<AgUiEvent> = tx.subscribe();
+        let mut rx: broadcast::Receiver<EventEnvelope> = tx.subscribe();
         let buffers = Arc::clone(&turn_buffers);
         tokio::spawn(async move {
             loop {
                 match rx.recv().await {
-                    Ok(event) => {
-                        let json = match serde_json::to_string(&event) {
+                    Ok(envelope) => {
+                        let json = match serde_json::to_string(&envelope) {
                             Ok(j) => j,
                             Err(_) => continue,
                         };
 
                         let mut bufs = buffers.lock().await;
 
-                        if let Some(tid) = event.thread_id() {
+                        if let Some(tid) = envelope.thread_id() {
                             let tid_owned = tid.to_string();
 
-                            if event.is_run_started() {
+                            if envelope.event.is_run_started() {
                                 bufs.entry(tid_owned.clone())
                                     .or_insert_with(Vec::new);
                             }
@@ -56,7 +56,7 @@ impl AgentEventBridge {
                                 buf.push(json);
                             }
 
-                            if event.is_run_terminal() {
+                            if envelope.event.is_run_terminal() {
                                 bufs.remove(&tid_owned);
                             }
                         }
@@ -78,7 +78,7 @@ impl AgentEventBridge {
     }
 
     /// Get the sender that the agent loop uses to emit events.
-    pub fn agent_tx(&self) -> broadcast::Sender<AgUiEvent> {
+    pub fn agent_tx(&self) -> broadcast::Sender<EventEnvelope> {
         self.tx.clone()
     }
 
@@ -105,11 +105,13 @@ impl AgentEventBridge {
         let rx = self.tx.subscribe();
         drop(bufs);
 
-        // Build the SYNC event
-        let sync_event = AgUiEvent::Sync {
-            active_runs,
+        // Build the SYNC event (no thread/run routing)
+        let sync_envelope = EventEnvelope {
+            thread_id: None,
+            run_id: None,
+            event: AgUiEvent::Sync { active_runs },
         };
-        let sync_json = serde_json::to_string(&sync_event).unwrap_or_default();
+        let sync_json = serde_json::to_string(&sync_envelope).unwrap_or_default();
 
         // Chain: SYNC → replay → live
         let sync_stream = futures::stream::once(async move {
@@ -122,8 +124,8 @@ impl AgentEventBridge {
 
         let live_stream = BroadcastStream::new(rx)
             .filter_map(|msg| msg.ok())
-            .map(|event| {
-                let json = serde_json::to_string(&event).unwrap_or_default();
+            .map(|envelope| {
+                let json = serde_json::to_string(&envelope).unwrap_or_default();
                 Ok(Event::default().data(json))
             });
 
@@ -138,10 +140,14 @@ mod tests {
 
     #[test]
     fn sync_event_serializes_correctly() {
-        let event = AgUiEvent::Sync {
-            active_runs: vec!["conv1".into(), "conv2".into()],
+        let envelope = EventEnvelope {
+            thread_id: None,
+            run_id: None,
+            event: AgUiEvent::Sync {
+                active_runs: vec!["conv1".into(), "conv2".into()],
+            },
         };
-        let json = serde_json::to_value(&event).unwrap();
+        let json = serde_json::to_value(&envelope).unwrap();
         assert_eq!(json["type"], "SYNC");
         assert_eq!(json["activeRuns"], serde_json::json!(["conv1", "conv2"]));
     }
@@ -152,17 +158,20 @@ mod tests {
         let tx = bridge.agent_tx();
 
         // Emit RUN_STARTED
-        let _ = tx.send(AgUiEvent::RunStarted {
-            thread_id: "conv1".into(),
-            run_id: "run1".into(),
+        let _ = tx.send(EventEnvelope {
+            thread_id: Some("conv1".into()),
+            run_id: Some("run1".into()),
+            event: AgUiEvent::RunStarted,
         });
 
         // Emit some content
-        let _ = tx.send(AgUiEvent::TextMessageContent {
-            thread_id: "conv1".into(),
-            run_id: "run1".into(),
-            message_id: "m1".into(),
-            delta: "hello".into(),
+        let _ = tx.send(EventEnvelope {
+            thread_id: Some("conv1".into()),
+            run_id: Some("run1".into()),
+            event: AgUiEvent::TextMessageContent {
+                message_id: "m1".into(),
+                delta: "hello".into(),
+            },
         });
 
         // Allow buffer-capture task to process
@@ -175,10 +184,12 @@ mod tests {
         }
 
         // Emit RUN_FINISHED — buffer should be cleared
-        let _ = tx.send(AgUiEvent::RunFinished {
-            thread_id: "conv1".into(),
-            run_id: "run1".into(),
-            has_running_processes: false,
+        let _ = tx.send(EventEnvelope {
+            thread_id: Some("conv1".into()),
+            run_id: Some("run1".into()),
+            event: AgUiEvent::RunFinished {
+                has_running_processes: false,
+            },
         });
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;

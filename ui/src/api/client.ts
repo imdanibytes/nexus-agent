@@ -42,6 +42,7 @@ export interface ServerMessage {
   parts: ServerPart[];
   timestamp: string;
   parent_id: string | null;
+  source?: Record<string, unknown> | null;
   metadata?: Record<string, unknown> | null;
 }
 

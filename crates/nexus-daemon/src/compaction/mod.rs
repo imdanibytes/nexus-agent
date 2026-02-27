@@ -528,6 +528,7 @@ mod tests {
             parts,
             timestamp: chrono::Utc::now(),
             parent_id: None,
+            source: None,
             metadata: None,
         }
     }

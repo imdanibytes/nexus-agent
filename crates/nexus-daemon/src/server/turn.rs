@@ -4,113 +4,80 @@ use chrono::Utc;
 use uuid::Uuid;
 
 use crate::agent;
-use crate::agent::events::AgUiEvent;
+use crate::agent::emitter::TurnEmitter;
 use crate::agent::AgentTurnResult;
 use crate::anthropic::types::{ContentBlock, Message, Role};
 use crate::conversation::types::{
-    ChatMessage, ConversationUsage, MessagePart, MessageRole, Span,
+    ChatMessage, ConversationUsage, MessagePart, MessageRole, MessageSource, Span,
 };
+use crate::provider::InferenceProvider;
 use crate::server::AppState;
 use crate::system_prompt::{SystemPromptBuilder, SystemPromptContext};
+use crate::tasks::types::AgentMode;
 
-/// Read-only setup data extracted from the conversation before spawning
-/// the turn task. Avoids holding a stale `Conversation` across the
-/// (potentially long-running) agent loop.
-pub struct TurnSetup {
+/// Everything needed to launch an agent turn. Assembled by the caller,
+/// consumed by `spawn_agent_turn`.
+pub struct TurnRequest {
+    pub conversation_id: String,
+    pub api_messages: Vec<Message>,
+    pub tools: Vec<crate::anthropic::types::Tool>,
+    pub cancel: tokio_util::sync::CancellationToken,
+    pub run_id: String,
+    pub assistant_message_id: Option<String>,
     pub last_active_id: Option<String>,
     pub prior_cost: f64,
     pub title: String,
     pub message_count: usize,
 }
 
+/// Resolved agent configuration from AppState.
+struct ResolvedAgent {
+    provider: Arc<dyn InferenceProvider>,
+    model: String,
+    max_tokens: u32,
+    system_prompt: Option<String>,
+    temperature: Option<f32>,
+    thinking_budget: Option<u32>,
+    meta: serde_json::Value,
+}
+
 /// Spawn an agent turn as a background tokio task.
 ///
 /// Resolves the active agent/provider, builds the system prompt, runs the
 /// agent loop, persists results, and optionally generates a title.
-pub fn spawn_agent_turn(
-    state: Arc<AppState>,
-    setup: TurnSetup,
-    api_messages: Vec<Message>,
-    tools: Vec<crate::anthropic::types::Tool>,
-    conversation_id: String,
-    cancel: tokio_util::sync::CancellationToken,
-    assistant_message_id: Option<String>,
-    run_id: String,
-) {
+pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
     let agent_tx = state.chat.event_bridge.agent_tx();
     let state_clone = Arc::clone(&state);
 
-    let last_active_id = setup.last_active_id.clone();
+    let TurnRequest {
+        conversation_id,
+        api_messages,
+        tools,
+        cancel,
+        run_id,
+        assistant_message_id,
+        last_active_id,
+        prior_cost,
+        title,
+        message_count,
+    } = req;
 
     tokio::spawn(async move {
         let setup_start = std::time::Instant::now();
 
-        // Resolve active agent → provider
-        let (provider_record, model, max_tokens, system_prompt, temperature, thinking_budget, agent_meta) = {
-            let agents = state_clone.agents.agents.read().await;
-            let providers = state_clone.agents.providers.read().await;
+        let emitter = TurnEmitter::new(
+            agent_tx.clone(),
+            conversation_id.clone(),
+            run_id.clone(),
+        );
 
-            let active_id = agents.active_agent_id().map(|s| s.to_string());
-            let agent = active_id.as_deref().and_then(|id| agents.get(id));
-
-            match agent {
-                Some(a) => {
-                    let provider = providers.get(&a.provider_id).cloned();
-                    match provider {
-                        Some(p) => (
-                            p,
-                            a.model.clone(),
-                            a.max_tokens.unwrap_or(8192),
-                            a.system_prompt.clone(),
-                            a.temperature,
-                            a.thinking_budget,
-                            serde_json::json!({
-                                "agent_id": a.id,
-                                "agent_name": a.name,
-                                "model": a.model,
-                            }),
-                        ),
-                        None => {
-                            let _ = agent_tx.send(AgUiEvent::RunError {
-                                thread_id: conversation_id.clone(),
-                                run_id: String::new(),
-                                message: format!(
-                                    "Provider '{}' not found for agent '{}'",
-                                    a.provider_id, a.name
-                                ),
-                                details: None,
-                            });
-                            return;
-                        }
-                    }
-                }
-                None => {
-                    let _ = agent_tx.send(AgUiEvent::RunError {
-                        thread_id: conversation_id.clone(),
-                        run_id: String::new(),
-                        message: "No active agent configured. Create one in Settings → Agents."
-                            .to_string(),
-                        details: None,
-                    });
-                    return;
-                }
-            }
+        // 1. Resolve active agent → provider
+        let resolved = match resolve_agent(&state_clone, &emitter).await {
+            Some(r) => r,
+            None => return,
         };
 
-        let provider = match state_clone.agents.factory.get(&provider_record).await {
-            Ok(p) => p,
-            Err(e) => {
-                let _ = agent_tx.send(AgUiEvent::RunError {
-                    thread_id: conversation_id.clone(),
-                    run_id: String::new(),
-                    message: format!("Failed to create provider client: {}", e),
-                    details: None,
-                });
-                return;
-            }
-        };
-
-        // Assemble all tools (MCP + built-in task tools + ask_user + sub_agent)
+        // 2. Assemble tools (MCP + built-in + ask_user + sub_agent + fetch + bash + bg + fs)
         let mut tools = tools;
         tools.extend(crate::tasks::tools::definitions());
         tools.push(crate::ask_user::tool_definition());
@@ -118,81 +85,35 @@ pub fn spawn_agent_turn(
         if state_clone.config.fetch.enabled {
             tools.push(crate::fetch::tool_definition());
         }
-        // Bash tool
         tools.push(crate::bash::tool_definition());
-        // Background process tools
         tools.extend(crate::bg_process::tools::tool_definitions());
-        // Use effective filesystem config (workspaces + base allowed_directories)
         let effective_fs = state_clone.effective_fs_config.read().await.clone();
         tools.extend(crate::filesystem::tool_definitions(&effective_fs));
-
-        // Inject required "description" field into all tool schemas
         crate::anthropic::types::inject_tool_description_field(&mut tools);
 
-        // Derive agent mode + full plan context from task state
-        let (mode, mode_enum, plan_context) = {
-            use crate::system_prompt::{PlanContext, PlanTaskSnapshot};
-            use crate::tasks::types::AgentMode;
+        // 3. Derive agent mode + plan context from task state
+        let (mode, mode_enum, plan_context) = resolve_task_mode(&state_clone, &conversation_id).await;
 
-            let mut ts = state_clone.chat.task_store.write().await;
-            match ts.get(&conversation_id) {
-                Some(state) => {
-                    let mode_enum = state.mode;
-                    let mode = state.mode.to_string();
-                    let plan_ctx = state.plan.as_ref().map(|plan| {
-                        let tasks: Vec<PlanTaskSnapshot> = plan.task_ids.iter()
-                            .filter_map(|id| state.tasks.get(id))
-                            .map(|t| PlanTaskSnapshot {
-                                id: t.id.clone(),
-                                title: t.title.clone(),
-                                description: t.description.clone(),
-                                status: t.status.to_string(),
-                                depends_on: t.depends_on.clone(),
-                            })
-                            .collect();
-                        let current_id = tasks.iter()
-                            .find(|t| t.status == "in_progress")
-                            .or_else(|| tasks.iter().find(|t| t.status == "pending"))
-                            .map(|t| t.id.clone());
-                        PlanContext {
-                            plan_title: plan.title.clone(),
-                            plan_summary: plan.summary.clone(),
-                            tasks,
-                            current_task_id: current_id,
-                            mode: mode.clone(),
-                        }
-                    });
-                    (mode, mode_enum, plan_ctx)
-                }
-                None => ("general".to_string(), AgentMode::General, None),
-            }
-        };
-
-        // Apply composable tool filter chain
+        // 4. Apply composable tool filter chain
         let filter_ctx = crate::tool_filter::ToolFilterContext {
             mode: mode_enum,
-            plan: None, // PlanSnapshot available for future filters
+            plan: None,
         };
         let tools = crate::tool_filter::ToolFilterChain::default_chain().apply(&filter_ctx, tools);
-        tracing::debug!(
-            mode = %mode,
-            tool_count = tools.len(),
-            "Tool filter applied"
-        );
+        tracing::debug!(mode = %mode, tool_count = tools.len(), "Tool filter applied");
 
-        // Build composable system prompt (split: static cached, dynamic injected)
-        let context_window = crate::agent::context_window_for_model(&model);
-        let prior_cost = setup.prior_cost;
+        // 5. Build system prompt
+        let context_window = crate::agent::context_window_for_model(&resolved.model);
         let builder = SystemPromptBuilder::default_builder();
         let prompt_parts = builder.build_parts(&SystemPromptContext {
-            conversation_title: setup.title.clone(),
-            message_count: setup.message_count,
+            conversation_title: title.clone(),
+            message_count,
             tool_names: tools.iter().map(|t| t.name.clone()).collect(),
-            agent_name: agent_meta["agent_name"]
+            agent_name: resolved.meta["agent_name"]
                 .as_str()
                 .unwrap_or("Assistant")
                 .to_string(),
-            custom_system_prompt: system_prompt,
+            custom_system_prompt: resolved.system_prompt.clone(),
             input_tokens: 0,
             context_window,
             mode,
@@ -203,101 +124,23 @@ pub fn spawn_agent_turn(
 
         let mcp_guard = state_clone.mcp.mcp.read().await;
 
-        // ── Context compaction ──
+        // 6. Context compaction
         let mut api_messages = api_messages;
-        let estimated_tokens = crate::compaction::estimate_tokens(
-            &api_messages,
-            Some(prompt_parts.system.as_str()),
+        compact_context(
+            &mut api_messages,
+            &prompt_parts.system,
             &tools,
-        );
+            context_window,
+            mode_enum,
+            &state_clone,
+            &conversation_id,
+            &emitter,
+        )
+        .await;
 
-        // Layer 1: Tool result pruning (mechanical, no LLM call)
-        let prune_threshold = (context_window as f64 * crate::compaction::PRUNE_THRESHOLD_PCT) as u32;
-        if estimated_tokens > prune_threshold {
-            crate::compaction::prune_tool_results(&mut api_messages, 3);
-        }
-
-        // Layer 2: LLM summarization (last resort, or aggressive in execution mode)
-        let effective_window = context_window.saturating_sub(20_000);
-        let summarize_pct = if mode_enum == crate::tasks::types::AgentMode::Execution {
-            0.4 // Aggressively compact in execution mode to reclaim planning context
-        } else {
-            crate::compaction::SUMMARIZE_THRESHOLD_PCT
-        };
-        let summarize_threshold = (effective_window as f64 * summarize_pct) as u32;
-        if estimated_tokens > summarize_threshold {
-            if let Some(ref title_client) = state_clone.title_client {
-                // Load fresh conversation for compaction (atomic: load → modify → save)
-                let compact_conv = {
-                    let store = state_clone.chat.conversations.read().await;
-                    store.get(&conversation_id).ok().flatten()
-                };
-
-                if let Some(mut compact_conv) = compact_conv {
-                    match crate::compaction::summarize_messages(
-                        title_client,
-                        &compact_conv.active_messages(),
-                        10,
-                    )
-                    .await
-                    {
-                        Ok((summary_text, consumed_ids)) => {
-                            // Create spans: seal current, open new
-                            if compact_conv.spans.is_empty() {
-                                // First compaction — bootstrap span chain
-                                compact_conv.spans.push(Span {
-                                    index: 0,
-                                    message_ids: consumed_ids.clone(),
-                                    summary: Some(summary_text),
-                                    sealed_at: Some(Utc::now()),
-                                });
-                                compact_conv.spans.push(Span {
-                                    index: 1,
-                                    message_ids: Vec::new(),
-                                    summary: None,
-                                    sealed_at: None,
-                                });
-                            } else {
-                                compact_conv.seal_current_span(&consumed_ids, summary_text);
-                                compact_conv.open_new_span();
-                            }
-
-                            // Remove consumed IDs from active_path
-                            compact_conv.active_path.retain(|id| !consumed_ids.contains(id));
-
-                            // Rebuild API messages from compacted state
-                            api_messages = compact_conv.build_api_messages();
-
-                            let sealed_span_count = compact_conv.spans.len();
-
-                            // Save compacted conversation
-                            {
-                                let mut store = state_clone.chat.conversations.write().await;
-                                if let Err(e) = store.save(&compact_conv) {
-                                    tracing::error!("Failed to save compacted conversation: {}", e);
-                                }
-                            }
-
-                            let _ = agent_tx.send(AgUiEvent::Custom {
-                                thread_id: conversation_id.clone(),
-                                name: "compaction".to_string(),
-                                value: serde_json::json!({
-                                    "sealed_span_index": sealed_span_count - 2,
-                                    "consumed_count": consumed_ids.len(),
-                                }),
-                            });
-                        }
-                        Err(e) => {
-                            tracing::warn!("Compaction failed, continuing with full context: {}", e);
-                        }
-                    }
-                }
-            }
-        }
-
-        // Construct owned deps bundle for background sub-agent dispatch
+        // 7. Build InferenceConfig, TurnContext, TurnServices
         let bg_sub_agent_deps = Arc::new(agent::sub_agent::BgSubAgentDeps {
-            provider: provider.clone(),
+            provider: resolved.provider.clone(),
             chat: state_clone.chat.clone(),
             mcp: state_clone.mcp.clone(),
             fetch_config: state_clone.config.fetch.clone(),
@@ -307,11 +150,11 @@ pub fn spawn_agent_turn(
         let setup_duration_ms = setup_start.elapsed().as_millis() as u64;
 
         let inference_cfg = agent::InferenceConfig {
-            provider: provider.as_ref(),
-            model: &model,
-            max_tokens,
-            temperature,
-            thinking_budget,
+            provider: resolved.provider.as_ref(),
+            model: &resolved.model,
+            max_tokens: resolved.max_tokens,
+            temperature: resolved.temperature,
+            thinking_budget: resolved.thinking_budget,
             system_prompt: Some(prompt_parts.system),
             state_update: prompt_parts.state,
         };
@@ -334,20 +177,22 @@ pub fn spawn_agent_turn(
             bg_sub_agent_deps: Some(bg_sub_agent_deps),
         };
 
+        // 8. Run agent loop
         let result = agent::run_agent_turn(
             &inference_cfg,
             turn_ctx,
             &turn_svc,
-            &agent_tx,
+            &emitter,
             cancel,
         )
         .await;
         drop(mcp_guard);
 
+        // 9–12. Handle results
         match result {
             Ok(AgentTurnResult {
                 messages: new_messages,
-                timing_spans: mut timing_spans,
+                mut timing_spans,
                 input_tokens,
                 output_tokens,
                 cache_read_input_tokens,
@@ -357,135 +202,37 @@ pub fn spawn_agent_turn(
                 error: turn_error,
                 ..
             }) => {
-                // Inject the pre-turn setup span (agent resolution, tool assembly,
-                // system prompt building, compaction) as a child of the turn span.
-                if setup_duration_ms > 0 {
-                    // Insert after the turn span (index 0) so it appears first
-                    let insert_idx = if !timing_spans.is_empty() { 1 } else { 0 };
-                    timing_spans.insert(insert_idx, serde_json::json!({
-                        "id": "t-setup",
-                        "name": "setup",
-                        "parentId": "t-turn",
-                        "startMs": 0,
-                        "endMs": setup_duration_ms,
-                        "durationMs": setup_duration_ms,
-                    }));
-
-                    // Shift all other spans forward by setup_duration_ms so the turn
-                    // span's endMs reflects total wall time including setup.
-                    // The agent's spans start at 0 (its own Instant::now()), so we
-                    // need to offset them by the setup duration.
-                    for span in timing_spans.iter_mut() {
-                        if let Some(obj) = span.as_object_mut() {
-                            let id = obj.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                            if id == "t-turn" || id == "t-setup" {
-                                continue;
-                            }
-                            if let Some(start) = obj.get("startMs").and_then(|v| v.as_u64()) {
-                                obj.insert("startMs".to_string(), (start + setup_duration_ms).into());
-                            }
-                            if let Some(end) = obj.get("endMs").and_then(|v| v.as_u64()) {
-                                obj.insert("endMs".to_string(), (end + setup_duration_ms).into());
-                            }
-                        }
-                    }
-
-                    // Update the turn span's endMs to include setup
-                    if let Some(turn_span) = timing_spans.first_mut() {
-                        if let Some(obj) = turn_span.as_object_mut() {
-                            if let Some(end) = obj.get("endMs").and_then(|v| v.as_u64()) {
-                                obj.insert("endMs".to_string(), (end + setup_duration_ms).into());
-                                obj.insert("durationMs".to_string(), (end + setup_duration_ms).into());
-                            }
-                        }
-                    }
-                }
+                // 9. Adjust timing spans to include setup phase
+                adjust_timing_spans(&mut timing_spans, setup_duration_ms);
 
                 if let Some(ref err_msg) = turn_error {
                     tracing::error!("Agent turn failed: {}", err_msg);
                 }
 
-                // Persist partial messages even on error — completed rounds
-                // are valuable and prevent dangling tool_use on next turn.
+                // 10. Persist turn results
                 if !new_messages.is_empty() {
-                    let mut chat_messages = api_messages_to_chat(
+                    let usage = ConversationUsage {
+                        input_tokens,
+                        output_tokens,
+                        cache_read_input_tokens,
+                        cache_creation_input_tokens,
+                        context_window,
+                        total_cost: prior_cost + turn_cost,
+                    };
+                    persist_turn_results(
+                        &state_clone,
+                        &conversation_id,
                         &new_messages,
                         last_active_id.as_deref(),
                         assistant_message_id.as_deref(),
-                    );
-
-                    for msg in chat_messages
-                        .iter_mut()
-                        .filter(|m| m.role == MessageRole::Assistant)
-                    {
-                        let meta =
-                            msg.metadata.get_or_insert_with(|| serde_json::json!({}));
-                        if let Some(obj) = meta.as_object_mut() {
-                            obj.insert("agent".to_string(), agent_meta.clone());
-                        }
-                    }
-
-                    if !timing_spans.is_empty() {
-                        if let Some(last_assistant) = chat_messages
-                            .iter_mut()
-                            .rev()
-                            .find(|m| m.role == MessageRole::Assistant)
-                        {
-                            let meta = last_assistant
-                                .metadata
-                                .get_or_insert_with(|| serde_json::json!({}));
-                            if let Some(obj) = meta.as_object_mut() {
-                                obj.insert(
-                                    "timingSpans".to_string(),
-                                    serde_json::to_value(&timing_spans)
-                                        .unwrap_or_default(),
-                                );
-                            }
-                        }
-                    }
-
-                    let new_ids: Vec<String> =
-                        chat_messages.iter().map(|m| m.id.clone()).collect();
-
-                    // Reload fresh conversation — no stale in-memory copy.
-                    // Compaction (if it ran) already saved spans to the store,
-                    // so fresh_conv has the correct spans without copying.
-                    let mut store = state_clone.chat.conversations.write().await;
-                    let save_result = match store.get(&conversation_id) {
-                        Ok(Some(mut fresh_conv)) => {
-                            fresh_conv.messages.extend(chat_messages);
-                            fresh_conv.active_path.extend(new_ids);
-                            fresh_conv.updated_at = Utc::now();
-                            fresh_conv.agent_id =
-                                agent_meta["agent_id"].as_str().map(|s| s.to_string());
-                            fresh_conv.usage = Some(ConversationUsage {
-                                input_tokens,
-                                output_tokens,
-                                cache_read_input_tokens,
-                                cache_creation_input_tokens,
-                                context_window,
-                                total_cost: prior_cost + turn_cost,
-                            });
-                            store.save(&fresh_conv)
-                        }
-                        Ok(None) => {
-                            tracing::warn!(
-                                "Conversation {} deleted during turn, discarding results",
-                                conversation_id
-                            );
-                            Ok(())
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to reload conversation: {}", e);
-                            Err(e)
-                        }
-                    };
-                    if let Err(e) = save_result {
-                        tracing::error!("Failed to save conversation: {}", e);
-                    }
-                    drop(store);
+                        &resolved.meta,
+                        &timing_spans,
+                        usage,
+                    )
+                    .await;
                 }
 
+                // 11. Auto-title
                 if turn_error.is_none() {
                     let title_conv = {
                         let store = state_clone.chat.conversations.read().await;
@@ -503,9 +250,7 @@ pub fn spawn_agent_turn(
                     }
                 }
 
-                // Hold active_turns lock across removal + drain to prevent
-                // TOCTOU race with the queue watcher. Only remove our own
-                // entry (run_id check) to avoid clobbering a newer turn.
+                // 12. Cleanup + follow-up
                 let queued = {
                     let mut active = state_clone.chat.active_turns.lock().await;
                     let is_mine = active
@@ -516,7 +261,6 @@ pub fn spawn_agent_turn(
                         active.remove(&conversation_id);
                         state_clone.chat.message_queue.drain(&conversation_id).await
                     } else {
-                        // Superseded by a newer turn — don't touch the map or drain
                         vec![]
                     }
                 };
@@ -532,25 +276,385 @@ pub fn spawn_agent_turn(
             }
             Err(e) => {
                 tracing::error!("Agent turn panicked: {}", e);
-                // Only clear our own entry
                 {
                     let mut active = state_clone.chat.active_turns.lock().await;
                     if active.get(&conversation_id).map(|t| t.run_id == run_id).unwrap_or(false) {
                         active.remove(&conversation_id);
                     }
                 }
-                let _ = agent_tx.send(AgUiEvent::RunError {
-                    thread_id: conversation_id.clone(),
-                    run_id: String::new(),
-                    message: e.to_string(),
-                    details: None,
-                });
+                emitter.run_error(e.to_string(), None);
             }
         }
     });
 }
 
-// ── Private helpers ──
+// ── Extracted helpers ──
+
+/// Resolve the active agent from AppState, returning provider + config.
+async fn resolve_agent(state: &AppState, emitter: &TurnEmitter) -> Option<ResolvedAgent> {
+    let (provider_record, model, max_tokens, system_prompt, temperature, thinking_budget, meta) = {
+        let agents = state.agents.agents.read().await;
+        let providers = state.agents.providers.read().await;
+
+        let active_id = agents.active_agent_id().map(|s| s.to_string());
+        let agent = active_id.as_deref().and_then(|id| agents.get(id));
+
+        match agent {
+            Some(a) => {
+                let provider = providers.get(&a.provider_id).cloned();
+                match provider {
+                    Some(p) => (
+                        p,
+                        a.model.clone(),
+                        a.max_tokens.unwrap_or(8192),
+                        a.system_prompt.clone(),
+                        a.temperature,
+                        a.thinking_budget,
+                        serde_json::json!({
+                            "agent_id": a.id,
+                            "agent_name": a.name,
+                            "model": a.model,
+                        }),
+                    ),
+                    None => {
+                        emitter.run_error(
+                            format!("Provider '{}' not found for agent '{}'", a.provider_id, a.name),
+                            None,
+                        );
+                        return None;
+                    }
+                }
+            }
+            None => {
+                emitter.run_error(
+                    "No active agent configured. Create one in Settings → Agents.",
+                    None,
+                );
+                return None;
+            }
+        }
+    };
+
+    let provider = match state.agents.factory.get(&provider_record).await {
+        Ok(p) => p,
+        Err(e) => {
+            emitter.run_error(format!("Failed to create provider client: {}", e), None);
+            return None;
+        }
+    };
+
+    Some(ResolvedAgent {
+        provider,
+        model,
+        max_tokens,
+        system_prompt,
+        temperature,
+        thinking_budget,
+        meta,
+    })
+}
+
+/// Derive agent mode and plan context from the task store.
+async fn resolve_task_mode(
+    state: &AppState,
+    conversation_id: &str,
+) -> (String, AgentMode, Option<crate::system_prompt::PlanContext>) {
+    use crate::system_prompt::{PlanContext, PlanTaskSnapshot};
+
+    let mut ts = state.chat.task_store.write().await;
+    match ts.get(conversation_id) {
+        Some(task_state) => {
+            let mode_enum = task_state.mode;
+            let mode = task_state.mode.to_string();
+            let plan_ctx = task_state.plan.as_ref().map(|plan| {
+                let tasks: Vec<PlanTaskSnapshot> = plan
+                    .task_ids
+                    .iter()
+                    .filter_map(|id| task_state.tasks.get(id))
+                    .map(|t| PlanTaskSnapshot {
+                        id: t.id.clone(),
+                        title: t.title.clone(),
+                        description: t.description.clone(),
+                        status: t.status.to_string(),
+                        depends_on: t.depends_on.clone(),
+                    })
+                    .collect();
+                let current_id = tasks
+                    .iter()
+                    .find(|t| t.status == "in_progress")
+                    .or_else(|| tasks.iter().find(|t| t.status == "pending"))
+                    .map(|t| t.id.clone());
+                PlanContext {
+                    plan_title: plan.title.clone(),
+                    plan_summary: plan.summary.clone(),
+                    tasks,
+                    current_task_id: current_id,
+                    mode: mode.clone(),
+                }
+            });
+            (mode, mode_enum, plan_ctx)
+        }
+        None => ("general".to_string(), AgentMode::General, None),
+    }
+}
+
+/// Compact context if approaching the context window limit.
+///
+/// Layer 1: Mechanical tool result pruning (no LLM call).
+/// Layer 2: LLM summarization with span tracking.
+async fn compact_context(
+    api_messages: &mut Vec<Message>,
+    system_prompt: &str,
+    tools: &[crate::anthropic::types::Tool],
+    context_window: u32,
+    mode_enum: AgentMode,
+    state: &AppState,
+    conversation_id: &str,
+    emitter: &TurnEmitter,
+) {
+    let estimated_tokens =
+        crate::compaction::estimate_tokens(api_messages, Some(system_prompt), tools);
+
+    // Layer 1: Tool result pruning
+    let prune_threshold =
+        (context_window as f64 * crate::compaction::PRUNE_THRESHOLD_PCT) as u32;
+    if estimated_tokens > prune_threshold {
+        crate::compaction::prune_tool_results(api_messages, 3);
+    }
+
+    // Layer 2: LLM summarization
+    let effective_window = context_window.saturating_sub(20_000);
+    let summarize_pct = if mode_enum == AgentMode::Execution {
+        0.4
+    } else {
+        crate::compaction::SUMMARIZE_THRESHOLD_PCT
+    };
+    let summarize_threshold = (effective_window as f64 * summarize_pct) as u32;
+
+    if estimated_tokens <= summarize_threshold {
+        return;
+    }
+
+    let title_client = match state.title_client {
+        Some(ref c) => c,
+        None => return,
+    };
+
+    let compact_conv = {
+        let store = state.chat.conversations.read().await;
+        store.get(conversation_id).ok().flatten()
+    };
+
+    let mut compact_conv = match compact_conv {
+        Some(c) => c,
+        None => return,
+    };
+
+    match crate::compaction::summarize_messages(
+        title_client,
+        &compact_conv.active_messages(),
+        10,
+    )
+    .await
+    {
+        Ok((summary_text, consumed_ids)) => {
+            if compact_conv.spans.is_empty() {
+                compact_conv.spans.push(Span {
+                    index: 0,
+                    message_ids: consumed_ids.clone(),
+                    summary: Some(summary_text),
+                    sealed_at: Some(Utc::now()),
+                });
+                compact_conv.spans.push(Span {
+                    index: 1,
+                    message_ids: Vec::new(),
+                    summary: None,
+                    sealed_at: None,
+                });
+            } else {
+                compact_conv.seal_current_span(&consumed_ids, summary_text);
+                compact_conv.open_new_span();
+            }
+
+            compact_conv
+                .active_path
+                .retain(|id| !consumed_ids.contains(id));
+            *api_messages = compact_conv.build_api_messages();
+
+            let sealed_span_count = compact_conv.spans.len();
+
+            {
+                let mut store = state.chat.conversations.write().await;
+                if let Err(e) = store.save(&compact_conv) {
+                    tracing::error!("Failed to save compacted conversation: {}", e);
+                }
+            }
+
+            emitter.compaction(sealed_span_count - 2, consumed_ids.len());
+        }
+        Err(e) => {
+            tracing::warn!(
+                "Compaction failed, continuing with full context: {}",
+                e
+            );
+        }
+    }
+}
+
+/// Inject setup span and offset agent timing spans by setup duration.
+fn adjust_timing_spans(timing_spans: &mut Vec<serde_json::Value>, setup_duration_ms: u64) {
+    if setup_duration_ms == 0 {
+        return;
+    }
+
+    let insert_idx = if !timing_spans.is_empty() { 1 } else { 0 };
+    timing_spans.insert(
+        insert_idx,
+        serde_json::json!({
+            "id": "t-setup",
+            "name": "setup",
+            "parentId": "t-turn",
+            "startMs": 0,
+            "endMs": setup_duration_ms,
+            "durationMs": setup_duration_ms,
+        }),
+    );
+
+    // Offset all non-turn/non-setup spans by setup duration
+    for span in timing_spans.iter_mut() {
+        if let Some(obj) = span.as_object_mut() {
+            let id = obj
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if id == "t-turn" || id == "t-setup" {
+                continue;
+            }
+            if let Some(start) = obj.get("startMs").and_then(|v| v.as_u64()) {
+                obj.insert(
+                    "startMs".to_string(),
+                    (start + setup_duration_ms).into(),
+                );
+            }
+            if let Some(end) = obj.get("endMs").and_then(|v| v.as_u64()) {
+                obj.insert(
+                    "endMs".to_string(),
+                    (end + setup_duration_ms).into(),
+                );
+            }
+        }
+    }
+
+    // Update turn span endMs to include setup
+    if let Some(turn_span) = timing_spans.first_mut() {
+        if let Some(obj) = turn_span.as_object_mut() {
+            if let Some(end) = obj.get("endMs").and_then(|v| v.as_u64()) {
+                obj.insert(
+                    "endMs".to_string(),
+                    (end + setup_duration_ms).into(),
+                );
+                obj.insert(
+                    "durationMs".to_string(),
+                    (end + setup_duration_ms).into(),
+                );
+            }
+        }
+    }
+}
+
+/// Convert API messages to ChatMessages, inject metadata, and save to store.
+async fn persist_turn_results(
+    state: &AppState,
+    conversation_id: &str,
+    new_messages: &[Message],
+    last_active_id: Option<&str>,
+    assistant_message_id: Option<&str>,
+    agent_meta: &serde_json::Value,
+    timing_spans: &[serde_json::Value],
+    usage: ConversationUsage,
+) {
+    let mut chat_messages =
+        api_messages_to_chat(new_messages, last_active_id, assistant_message_id);
+
+    // Tag every message with its source
+    let agent_source = MessageSource::Agent {
+        agent_id: agent_meta["agent_id"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
+        agent_name: agent_meta["agent_name"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
+        model: agent_meta["model"].as_str().unwrap_or("").to_string(),
+    };
+    for msg in chat_messages.iter_mut() {
+        if msg.source.is_none() {
+            msg.source = Some(agent_source.clone());
+        }
+        // Keep metadata.agent for backward compat
+        if msg.role == MessageRole::Assistant {
+            let meta = msg
+                .metadata
+                .get_or_insert_with(|| serde_json::json!({}));
+            if let Some(obj) = meta.as_object_mut() {
+                obj.insert("agent".to_string(), agent_meta.clone());
+            }
+        }
+    }
+
+    // Inject timing spans into the last assistant message
+    if !timing_spans.is_empty() {
+        if let Some(last_assistant) = chat_messages
+            .iter_mut()
+            .rev()
+            .find(|m| m.role == MessageRole::Assistant)
+        {
+            let meta = last_assistant
+                .metadata
+                .get_or_insert_with(|| serde_json::json!({}));
+            if let Some(obj) = meta.as_object_mut() {
+                obj.insert(
+                    "timingSpans".to_string(),
+                    serde_json::to_value(timing_spans).unwrap_or_default(),
+                );
+            }
+        }
+    }
+
+    let new_ids: Vec<String> = chat_messages.iter().map(|m| m.id.clone()).collect();
+
+    // Reload fresh conversation — no stale in-memory copy.
+    let mut store = state.chat.conversations.write().await;
+    let save_result = match store.get(conversation_id) {
+        Ok(Some(mut fresh_conv)) => {
+            fresh_conv.messages.extend(chat_messages);
+            fresh_conv.active_path.extend(new_ids);
+            fresh_conv.updated_at = Utc::now();
+            fresh_conv.agent_id = agent_meta["agent_id"]
+                .as_str()
+                .map(|s| s.to_string());
+            fresh_conv.usage = Some(usage);
+            store.save(&fresh_conv)
+        }
+        Ok(None) => {
+            tracing::warn!(
+                "Conversation {} deleted during turn, discarding results",
+                conversation_id
+            );
+            Ok(())
+        }
+        Err(e) => {
+            tracing::error!("Failed to reload conversation: {}", e);
+            Err(e)
+        }
+    };
+    if let Err(e) = save_result {
+        tracing::error!("Failed to save conversation: {}", e);
+    }
+}
+
+// ── Queue + follow-up ──
 
 /// Drain queued messages into a conversation and spawn a follow-up agent turn.
 ///
@@ -580,13 +684,19 @@ pub async fn drain_queue_and_follow_up(
     };
 
     for msg in messages {
+        let meta = match msg.metadata {
+            serde_json::Value::Null => None,
+            other => Some(other),
+        };
+
         let chat_msg = ChatMessage {
             id: Uuid::new_v4().to_string(),
             role: MessageRole::User,
             parts: vec![MessagePart::Text { text: msg.text }],
             timestamp: Utc::now(),
             parent_id: conv.active_path.last().cloned(),
-            metadata: Some(msg.metadata),
+            source: Some(MessageSource::Mcp),
+            metadata: meta,
         };
         conv.active_path.push(chat_msg.id.clone());
         conv.messages.push(chat_msg);
@@ -598,13 +708,11 @@ pub async fn drain_queue_and_follow_up(
     }
     drop(store);
 
-    let setup = TurnSetup {
-        last_active_id: conv.active_path.last().cloned(),
-        prior_cost: conv.usage.as_ref().map(|u| u.total_cost).unwrap_or(0.0),
-        title: conv.title.clone(),
-        message_count: conv.active_path.len(),
-    };
     let api_messages = conv.build_api_messages();
+    let last_active_id = conv.active_path.last().cloned();
+    let prior_cost = conv.usage.as_ref().map(|u| u.total_cost).unwrap_or(0.0);
+    let title = conv.title.clone();
+    let message_count = conv.active_path.len();
     drop(conv);
 
     let mcp_guard = state.mcp.mcp.read().await;
@@ -627,15 +735,22 @@ pub async fn drain_queue_and_follow_up(
 
     spawn_agent_turn(
         state,
-        setup,
-        api_messages,
-        tools,
-        conversation_id,
-        follow_up_cancel,
-        None,
-        follow_up_run_id,
+        TurnRequest {
+            conversation_id,
+            api_messages,
+            tools,
+            cancel: follow_up_cancel,
+            run_id: follow_up_run_id,
+            assistant_message_id: None,
+            last_active_id,
+            prior_cost,
+            title,
+            message_count,
+        },
     );
 }
+
+// ── Message conversion ──
 
 /// Strip `<tool_response>` fencing from tool results.
 fn unfence_tool_result(content: &str) -> String {
@@ -713,6 +828,7 @@ fn api_messages_to_chat(
                 parts,
                 timestamp: Utc::now(),
                 parent_id: parent_id.clone(),
+                source: None, // Set by caller after conversion
                 metadata: None,
             };
             parent_id = Some(chat_msg.id.clone());
@@ -720,4 +836,3 @@ fn api_messages_to_chat(
         })
         .collect()
 }
-

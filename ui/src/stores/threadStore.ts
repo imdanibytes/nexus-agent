@@ -59,11 +59,18 @@ export interface ProviderErrorDetails {
   provider: string;
 }
 
+export type MessageSource =
+  | { type: "human" }
+  | { type: "mcp" }
+  | { type: "system"; reason?: string }
+  | { type: "agent"; agent_id: string; agent_name: string; model: string };
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   parts: MessagePart[];
   createdAt: Date;
+  source?: MessageSource;
   status?: {
     type: "complete" | "incomplete" | "streaming";
     reason?: string;
@@ -72,13 +79,13 @@ export interface ChatMessage {
   };
   metadata?: {
     timingSpans?: TimingSpan[];
+    /** @deprecated Use message.source instead. Kept for backward compat. */
     agent?: {
       agent_id: string;
       agent_name: string;
       model: string;
     };
     synthetic?: boolean;
-    source?: string;
   };
 }
 
@@ -280,6 +287,7 @@ function toClientMessage(m: {
   parts: Array<Record<string, unknown>>;
   timestamp: string;
   parent_id?: string | null;
+  source?: Record<string, unknown> | null;
   metadata?: Record<string, unknown> | null;
 }): ChatMessage {
   const msg: ChatMessage = {
@@ -308,6 +316,13 @@ function toClientMessage(m: {
     }),
     createdAt: new Date(m.timestamp),
   };
+  // Map source — typed field from server, fall back to metadata.agent for old conversations
+  if (m.source && typeof m.source.type === "string") {
+    msg.source = m.source as unknown as MessageSource;
+  } else if (m.metadata?.agent && m.role === "assistant") {
+    const a = m.metadata.agent as { agent_id: string; agent_name: string; model: string };
+    msg.source = { type: "agent", agent_id: a.agent_id, agent_name: a.agent_name, model: a.model };
+  }
   if (m.metadata) {
     msg.metadata = m.metadata as ChatMessage["metadata"];
   }
@@ -322,6 +337,7 @@ function serverToRepository(
     parts: Array<Record<string, unknown>>;
     timestamp: string;
     parent_id?: string | null;
+    source?: Record<string, unknown> | null;
     metadata?: Record<string, unknown> | null;
   }>,
 ): MessageNode[] {

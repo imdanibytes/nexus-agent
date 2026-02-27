@@ -11,7 +11,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::agent::events::AgUiEvent;
+use crate::agent::events::{AgUiEvent, EventEnvelope};
 use crate::conversation::types::Span;
 use crate::server::AppState;
 use crate::tasks::types::{AgentMode, Plan, Task, TaskState, TaskStatus};
@@ -83,13 +83,16 @@ pub async fn force_compact(
     let sealed_index = conv.spans.len() - 2;
 
     // Emit the compaction event
-    let _ = state.chat.event_bridge.agent_tx().send(AgUiEvent::Custom {
-        thread_id: id.clone(),
-        name: "compaction".to_string(),
-        value: serde_json::json!({
-            "sealed_span_index": sealed_index,
-            "consumed_count": consumed_ids.len(),
-        }),
+    let _ = state.chat.event_bridge.agent_tx().send(EventEnvelope {
+        thread_id: Some(id.clone()),
+        run_id: None,
+        event: AgUiEvent::Custom {
+            name: "compaction".to_string(),
+            value: serde_json::json!({
+                "sealed_span_index": sealed_index,
+                "consumed_count": consumed_ids.len(),
+            }),
+        },
     });
 
     Ok(Json(serde_json::json!({
@@ -327,15 +330,18 @@ pub async fn set_task_state(
     drop(ts);
 
     // Emit task_state_changed event
-    let _ = state.chat.event_bridge.agent_tx().send(AgUiEvent::Custom {
-        thread_id: id.clone(),
-        name: "task_state_changed".to_string(),
-        value: serde_json::json!({
-            "conversationId": id,
-            "plan": task_state.plan,
-            "tasks": task_state.tasks,
-            "mode": mode,
-        }),
+    let _ = state.chat.event_bridge.agent_tx().send(EventEnvelope {
+        thread_id: Some(id.clone()),
+        run_id: None,
+        event: AgUiEvent::Custom {
+            name: "task_state_changed".to_string(),
+            value: serde_json::json!({
+                "conversationId": id,
+                "plan": task_state.plan,
+                "tasks": task_state.tasks,
+                "mode": mode,
+            }),
+        },
     });
 
     Ok(Json(serde_json::json!({
@@ -352,10 +358,13 @@ pub async fn emit_event(
     State(state): State<Arc<AppState>>,
     Json(body): Json<EmitEventRequest>,
 ) -> Json<serde_json::Value> {
-    let _ = state.chat.event_bridge.agent_tx().send(AgUiEvent::Custom {
-        thread_id: body.thread_id,
-        name: body.name,
-        value: body.value,
+    let _ = state.chat.event_bridge.agent_tx().send(EventEnvelope {
+        thread_id: Some(body.thread_id),
+        run_id: None,
+        event: AgUiEvent::Custom {
+            name: body.name,
+            value: body.value,
+        },
     });
     Json(serde_json::json!({ "ok": true }))
 }

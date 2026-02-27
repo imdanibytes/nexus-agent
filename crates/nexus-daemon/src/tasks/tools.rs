@@ -1,8 +1,8 @@
 use chrono::Utc;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use crate::agent::events::AgUiEvent;
+use crate::agent::emitter::TurnEmitter;
 use crate::anthropic::types::Tool;
 use super::store::{TaskStateStore, derive_mode};
 use super::types::{Plan, Task, TaskStatus};
@@ -158,7 +158,7 @@ pub async fn handle_builtin(
     args: &serde_json::Value,
     conversation_id: &str,
     task_store: &RwLock<TaskStateStore>,
-    tx: &broadcast::Sender<AgUiEvent>,
+    emitter: &TurnEmitter,
 ) -> (String, bool) {
     let result = match tool_name {
         "task_create_plan" => handle_create_plan(args, conversation_id, task_store).await,
@@ -179,19 +179,20 @@ pub async fn handle_builtin(
                 }
             }
 
-            // Emit task_state_changed event
-            let mut store = task_store.write().await;
-            if let Some(state) = store.get(conversation_id) {
-                let _ = tx.send(AgUiEvent::Custom {
-                    thread_id: conversation_id.to_string(),
-                    name: "task_state_changed".to_string(),
-                    value: serde_json::json!({
+            // Snapshot state while holding the lock, then emit after dropping it
+            let event_payload = {
+                let mut store = task_store.write().await;
+                store.get(conversation_id).map(|state| {
+                    serde_json::json!({
                         "conversationId": conversation_id,
                         "plan": state.plan,
                         "tasks": state.tasks,
                         "mode": state.mode,
-                    }),
-                });
+                    })
+                })
+            };
+            if let Some(payload) = event_payload {
+                emitter.custom("task_state_changed", payload);
             }
             (value.to_string(), false)
         }

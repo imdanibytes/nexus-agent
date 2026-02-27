@@ -7,7 +7,7 @@ use tokio::sync::{broadcast, Mutex};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::agent::events::AgUiEvent;
+use crate::agent::events::{AgUiEvent, EventEnvelope};
 use crate::server::message_queue::{MessageQueue, QueuedMessage};
 use super::types::*;
 
@@ -18,7 +18,7 @@ pub struct ProcessManager {
     processes: Mutex<HashMap<String, BgProcess>>,
     cancels: Mutex<HashMap<String, CancellationToken>>,
     base_dir: PathBuf,
-    agent_tx: broadcast::Sender<AgUiEvent>,
+    agent_tx: broadcast::Sender<EventEnvelope>,
     message_queue: Arc<MessageQueue>,
 }
 
@@ -32,7 +32,7 @@ pub struct SpawnResult {
 impl ProcessManager {
     pub fn new(
         base_dir: PathBuf,
-        agent_tx: broadcast::Sender<AgUiEvent>,
+        agent_tx: broadcast::Sender<EventEnvelope>,
         message_queue: Arc<MessageQueue>,
     ) -> Self {
         std::fs::create_dir_all(&base_dir).ok();
@@ -94,10 +94,13 @@ impl ProcessManager {
         self.cancels.lock().await.insert(id.clone(), cancel.clone());
 
         // Emit SSE event for frontend
-        let _ = self.agent_tx.send(AgUiEvent::Custom {
-            thread_id: conversation_id.to_string(),
-            name: "bg_process_started".to_string(),
-            value: serde_json::to_value(&process).unwrap_or_default(),
+        let _ = self.agent_tx.send(EventEnvelope {
+            thread_id: Some(conversation_id.to_string()),
+            run_id: None,
+            event: AgUiEvent::Custom {
+                name: "bg_process_started".to_string(),
+                value: serde_json::to_value(&process).unwrap_or_default(),
+            },
         });
 
         Ok(SpawnResult {
@@ -150,10 +153,13 @@ impl ProcessManager {
         self.cancels.lock().await.remove(process_id);
 
         // Emit SSE event for frontend
-        let _ = self.agent_tx.send(AgUiEvent::Custom {
-            thread_id: conv_id.clone(),
-            name: "bg_process_completed".to_string(),
-            value: serde_json::to_value(&snapshot).unwrap_or_default(),
+        let _ = self.agent_tx.send(EventEnvelope {
+            thread_id: Some(conv_id.clone()),
+            run_id: None,
+            event: AgUiEvent::Custom {
+                name: "bg_process_completed".to_string(),
+                value: serde_json::to_value(&snapshot).unwrap_or_default(),
+            },
         });
 
         // Enqueue notification as a user-role message
@@ -189,10 +195,13 @@ impl ProcessManager {
 
             self.cancels.lock().await.remove(process_id);
 
-            let _ = self.agent_tx.send(AgUiEvent::Custom {
-                thread_id: conv_id,
-                name: "bg_process_cancelled".to_string(),
-                value: serde_json::to_value(&snapshot).unwrap_or_default(),
+            let _ = self.agent_tx.send(EventEnvelope {
+                thread_id: Some(conv_id),
+                run_id: None,
+                event: AgUiEvent::Custom {
+                    name: "bg_process_cancelled".to_string(),
+                    value: serde_json::to_value(&snapshot).unwrap_or_default(),
+                },
             });
 
             Ok(())

@@ -371,9 +371,14 @@ const AssistantMessageImpl: FC<{
 
       {/* Footer */}
       <div className="mt-1 ml-2 flex h-7 items-center gap-2">
-        {message.metadata?.agent && (
+        {message.source?.type === "agent" && (
           <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-default-100 dark:bg-default-100/40 text-default-400 border border-default-200/50 truncate max-w-48">
-            {message.metadata.agent.agent_name}
+            {message.source.agent_name}
+          </span>
+        )}
+        {message.source?.type === "system" && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-warning-100 dark:bg-warning-100/30 text-warning-600 border border-warning-200/50 truncate max-w-48">
+            system
           </span>
         )}
         {!isActiveStream && (

@@ -125,6 +125,16 @@ export const UserMessage: FC<{
         )}
 
         <div className="mt-1 flex h-7 items-center justify-end gap-2">
+          {message.source?.type === "mcp" && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-secondary-100 dark:bg-secondary-100/30 text-secondary-600 border border-secondary-200/50">
+              mcp
+            </span>
+          )}
+          {message.source?.type === "system" && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-warning-100 dark:bg-warning-100/30 text-warning-600 border border-warning-200/50">
+              system
+            </span>
+          )}
           <BranchPicker messageId={message.id} />
           {!editing && (
             <div className="flex gap-0.5 opacity-0 transition-opacity group-hover/user:opacity-100">

@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -14,7 +13,7 @@ use crate::filesystem;
 use crate::mcp::McpManager;
 use crate::tasks;
 use crate::tasks::store::TaskStateStore;
-use super::events::AgUiEvent;
+use super::emitter::TurnEmitter;
 
 /// Result of dispatching a single tool call.
 pub struct ToolResult {
@@ -28,7 +27,7 @@ pub struct ToolContext<'a> {
     pub tool_name: &'a str,
     pub args_json: &'a str,
     pub conversation_id: &'a str,
-    pub tx: &'a broadcast::Sender<AgUiEvent>,
+    pub emitter: &'a TurnEmitter,
     pub cancel: &'a CancellationToken,
 }
 
@@ -96,39 +95,27 @@ impl ToolHandler for AskUserHandler<'_> {
             });
         }
 
-        let _ = ctx.tx.send(AgUiEvent::Custom {
-            thread_id: ctx.conversation_id.to_string(),
-            name: "ask_user_pending".to_string(),
-            value: serde_json::json!({
-                "questionId": question_id,
-                "toolCallId": ctx.tool_call_id,
-                "question": ask_args.question,
-                "type": ask_args.question_type,
-                "options": ask_args.options,
-                "context": ask_args.context,
-                "placeholder": ask_args.placeholder,
-            }),
-        });
+        ctx.emitter.custom("ask_user_pending", serde_json::json!({
+            "questionId": question_id,
+            "toolCallId": ctx.tool_call_id,
+            "question": ask_args.question,
+            "type": ask_args.question_type,
+            "options": ask_args.options,
+            "context": ask_args.context,
+            "placeholder": ask_args.placeholder,
+        }));
 
-        let _ = ctx.tx.send(AgUiEvent::Custom {
-            thread_id: ctx.conversation_id.to_string(),
-            name: "activity_update".to_string(),
-            value: serde_json::json!({ "activity": "Waiting for your input..." }),
-        });
+        ctx.emitter.activity("Waiting for your input...");
 
         let (content, is_error) = tokio::select! {
             answer = resp_rx => {
                 match answer {
                     Ok(a) => {
-                        let _ = ctx.tx.send(AgUiEvent::Custom {
-                            thread_id: ctx.conversation_id.to_string(),
-                            name: "ask_user_answered".to_string(),
-                            value: serde_json::json!({
-                                "questionId": question_id,
-                                "toolCallId": ctx.tool_call_id,
-                                "value": a.value,
-                            }),
-                        });
+                        ctx.emitter.custom("ask_user_answered", serde_json::json!({
+                            "questionId": question_id,
+                            "toolCallId": ctx.tool_call_id,
+                            "value": a.value,
+                        }));
                         if a.dismissed {
                             ("User dismissed the question.".to_string(), true)
                         } else {
@@ -167,7 +154,7 @@ impl ToolHandler for TaskToolHandler<'_> {
         let args: serde_json::Value = serde_json::from_str(ctx.args_json)
             .unwrap_or_else(|_| serde_json::json!({}));
         let (content, is_error) = tasks::tools::handle_builtin(
-            ctx.tool_name, &args, ctx.conversation_id, self.task_store, ctx.tx,
+            ctx.tool_name, &args, ctx.conversation_id, self.task_store, ctx.emitter,
         ).await;
         ToolResult { content, is_error }
     }
@@ -197,11 +184,7 @@ impl ToolHandler for FetchHandler<'_> {
         };
 
         // Emit activity update
-        let _ = ctx.tx.send(AgUiEvent::Custom {
-            thread_id: ctx.conversation_id.to_string(),
-            name: "activity_update".to_string(),
-            value: serde_json::json!({ "activity": format!("Fetching {}...", args.url) }),
-        });
+        ctx.emitter.activity(format!("Fetching {}...", args.url));
 
         match fetch::execute_fetch(&args, self.fetch_config).await {
             Ok(content) => ToolResult {
@@ -238,11 +221,7 @@ impl ToolHandler for FilesystemHandler {
 
     async fn handle(&self, ctx: &ToolContext<'_>) -> ToolResult {
         // Activity update
-        let _ = ctx.tx.send(AgUiEvent::Custom {
-            thread_id: ctx.conversation_id.to_string(),
-            name: "activity_update".to_string(),
-            value: serde_json::json!({ "activity": format!("{}...", ctx.tool_name) }),
-        });
+        ctx.emitter.activity(format!("{}...", ctx.tool_name));
 
         match filesystem::execute(ctx.tool_name, ctx.args_json, &self.validator) {
             Ok(content) => ToolResult {
@@ -295,13 +274,9 @@ impl ToolHandler for BashHandler {
 
         let timeout_ms = args.get("timeout_ms").and_then(|v| v.as_u64());
 
-        let _ = ctx.tx.send(AgUiEvent::Custom {
-            thread_id: ctx.conversation_id.to_string(),
-            name: "activity_update".to_string(),
-            value: serde_json::json!({ "activity": format!("Running: {}",
-                if command.len() > 60 { &command[..60] } else { command }
-            )}),
-        });
+        ctx.emitter.activity(format!("Running: {}",
+            if command.len() > 60 { &command[..60] } else { command }
+        ));
 
         let (content, is_error) = bash::execute(
             command,

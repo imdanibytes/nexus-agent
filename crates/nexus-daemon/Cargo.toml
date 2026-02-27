@@ -24,7 +24,7 @@ anyhow = "1"
 dirs = "6"
 bytes = "1"
 tokio-util = { version = "0.7", features = ["codec"] }
-rmcp = { version = "0.16", features = ["client", "transport-child-process"] }
+rmcp = { version = "0.16", features = ["client", "transport-child-process", "server", "transport-streamable-http-server"] }
 dotenvy = "0.15"
 async-trait = "0.1"
 url = "2"

@@ -6,9 +6,9 @@ use serde::Deserialize;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::conversation::types::{ChatMessage, MessagePart, MessageRole};
+use crate::conversation::types::{ChatMessage, MessagePart, MessageRole, MessageSource};
 use crate::server::AppState;
-use super::turn::spawn_agent_turn;
+use super::turn::{spawn_agent_turn, TurnRequest};
 
 #[derive(Debug, Deserialize)]
 pub struct ChatRequest {
@@ -47,7 +47,7 @@ pub async fn start_turn(
 
     let (cancel, run_id) = cancel_existing_turn(&state, &conversation_id).await;
 
-    let (setup, api_messages, tools, user_msg_id) = {
+    let (req, user_msg_id) = {
         let mut store = state.chat.conversations.write().await;
 
         let mut conv = store
@@ -66,6 +66,7 @@ pub async fn start_turn(
             }],
             timestamp: Utc::now(),
             parent_id,
+            source: Some(MessageSource::Human),
             metadata: None,
         };
 
@@ -78,20 +79,23 @@ pub async fn start_turn(
             .save(&conv)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        let api_messages = conv.build_api_messages();
-        let tools = resolve_mcp_tools(&state).await;
-
-        let setup = super::turn::TurnSetup {
+        let req = TurnRequest {
+            conversation_id,
+            api_messages: conv.build_api_messages(),
+            tools: resolve_mcp_tools(&state).await,
+            cancel,
+            run_id,
+            assistant_message_id: body.assistant_message_id,
             last_active_id: conv.active_path.last().cloned(),
             prior_cost: conv.usage.as_ref().map(|u| u.total_cost).unwrap_or(0.0),
             title: conv.title.clone(),
             message_count: conv.active_path.len(),
         };
 
-        (setup, api_messages, tools, user_msg_id)
+        (req, user_msg_id)
     };
 
-    spawn_agent_turn(state, setup, api_messages, tools, conversation_id, cancel, body.assistant_message_id, run_id);
+    spawn_agent_turn(state, req);
 
     Ok(Json(
         serde_json::json!({
@@ -110,7 +114,7 @@ pub async fn branch_turn(
 
     let (cancel, run_id) = cancel_existing_turn(&state, &conversation_id).await;
 
-    let (setup, api_messages, tools, new_msg_id) = {
+    let (req, new_msg_id) = {
         let mut store = state.chat.conversations.write().await;
 
         let mut conv = store
@@ -145,6 +149,7 @@ pub async fn branch_turn(
             }],
             timestamp: Utc::now(),
             parent_id: parent_id.clone(),
+            source: Some(MessageSource::Human),
             metadata: None,
         };
 
@@ -165,32 +170,26 @@ pub async fn branch_turn(
             .save(&conv)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        let api_messages = conv.build_api_messages();
-        let tools = resolve_mcp_tools(&state).await;
-
-        let setup = super::turn::TurnSetup {
+        let req = TurnRequest {
+            conversation_id,
+            api_messages: conv.build_api_messages(),
+            tools: resolve_mcp_tools(&state).await,
+            cancel,
+            run_id,
+            assistant_message_id: body.assistant_message_id,
             last_active_id: conv.active_path.last().cloned(),
             prior_cost: conv.usage.as_ref().map(|u| u.total_cost).unwrap_or(0.0),
             title: conv.title.clone(),
             message_count: conv.active_path.len(),
         };
 
-        (setup, api_messages, tools, new_msg_id)
+        (req, new_msg_id)
     };
 
-    spawn_agent_turn(
-        state,
-        setup,
-        api_messages,
-        tools,
-        conversation_id.clone(),
-        cancel,
-        body.assistant_message_id,
-        run_id,
-    );
+    spawn_agent_turn(state, req);
 
     Ok(Json(
-        serde_json::json!({ "ok": true, "conversationId": conversation_id, "messageId": new_msg_id }),
+        serde_json::json!({ "ok": true, "conversationId": body.conversation_id, "messageId": new_msg_id }),
     ))
 }
 
@@ -214,7 +213,7 @@ pub async fn regenerate_turn(
 
     let (cancel, run_id) = cancel_existing_turn(&state, &conversation_id).await;
 
-    let (setup, api_messages, tools) = {
+    let req = {
         let mut store = state.chat.conversations.write().await;
 
         let mut conv = store
@@ -246,32 +245,24 @@ pub async fn regenerate_turn(
             .save(&conv)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        let api_messages = conv.build_api_messages();
-        let tools = resolve_mcp_tools(&state).await;
-
-        let setup = super::turn::TurnSetup {
+        TurnRequest {
+            conversation_id,
+            api_messages: conv.build_api_messages(),
+            tools: resolve_mcp_tools(&state).await,
+            cancel,
+            run_id,
+            assistant_message_id: body.assistant_message_id,
             last_active_id: conv.active_path.last().cloned(),
             prior_cost: conv.usage.as_ref().map(|u| u.total_cost).unwrap_or(0.0),
             title: conv.title.clone(),
             message_count: conv.active_path.len(),
-        };
-
-        (setup, api_messages, tools)
+        }
     };
 
-    spawn_agent_turn(
-        state,
-        setup,
-        api_messages,
-        tools,
-        conversation_id.clone(),
-        cancel,
-        body.assistant_message_id,
-        run_id,
-    );
+    spawn_agent_turn(state, req);
 
     Ok(Json(
-        serde_json::json!({ "ok": true, "conversationId": conversation_id }),
+        serde_json::json!({ "ok": true, "conversationId": body.conversation_id }),
     ))
 }
 
@@ -307,7 +298,7 @@ pub async fn tool_invoke(
 
     let (cancel, run_id) = cancel_existing_turn(&state, &conversation_id).await;
 
-    let (setup, api_messages, tools) = {
+    let req = {
         let mut store = state.chat.conversations.write().await;
 
         let mut conv = store
@@ -315,14 +306,19 @@ pub async fn tool_invoke(
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
             .ok_or(StatusCode::NOT_FOUND)?;
 
-        // Execute the tool
+        // Execute the tool (synthetic emitter — client-initiated, no real run)
         let tx = state.chat.event_bridge.agent_tx();
+        let tool_emitter = crate::agent::emitter::TurnEmitter::new(
+            tx,
+            conversation_id.clone(),
+            String::new(),
+        );
         let (content, is_error) = crate::tasks::tools::handle_builtin(
             &body.tool_name,
             &body.args,
             &conversation_id,
             &state.chat.task_store,
-            &tx,
+            &tool_emitter,
         )
         .await;
 
@@ -342,6 +338,7 @@ pub async fn tool_invoke(
             }],
             timestamp: chrono::Utc::now(),
             parent_id,
+            source: Some(MessageSource::System { reason: Some("tool_invoke".into()) }),
             metadata: None,
         };
 
@@ -353,34 +350,26 @@ pub async fn tool_invoke(
             .save(&conv)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        let api_messages = conv.build_api_messages();
-        let tools = resolve_mcp_tools(&state).await;
-
-        let setup = super::turn::TurnSetup {
+        TurnRequest {
+            conversation_id,
+            api_messages: conv.build_api_messages(),
+            tools: resolve_mcp_tools(&state).await,
+            cancel,
+            run_id,
+            assistant_message_id: body.assistant_message_id,
             last_active_id: conv.active_path.last().cloned(),
             prior_cost: conv.usage.as_ref().map(|u| u.total_cost).unwrap_or(0.0),
             title: conv.title.clone(),
             message_count: conv.active_path.len(),
-        };
-
-        (setup, api_messages, tools)
+        }
     };
 
     // Start agent turn — model will see the tool result and continue naturally
-    spawn_agent_turn(
-        state,
-        setup,
-        api_messages,
-        tools,
-        conversation_id.clone(),
-        cancel,
-        body.assistant_message_id,
-        run_id,
-    );
+    spawn_agent_turn(state, req);
 
     Ok(Json(serde_json::json!({
         "ok": true,
-        "conversationId": conversation_id,
+        "conversationId": body.conversation_id,
     })))
 }
 

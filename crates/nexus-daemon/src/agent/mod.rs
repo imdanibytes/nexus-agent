@@ -1,3 +1,4 @@
+pub mod emitter;
 pub mod events;
 pub mod sub_agent;
 pub mod tool_dispatch;
@@ -7,9 +8,7 @@ use std::time::Instant;
 
 use anyhow::Result;
 use futures::StreamExt;
-use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
-use uuid::Uuid;
 
 use crate::anthropic::types::*;
 use crate::ask_user::PendingQuestionStore;
@@ -19,7 +18,7 @@ use crate::config::{FetchConfig, FilesystemConfig};
 use crate::provider::InferenceProvider;
 use crate::system_prompt::fence_tool_result;
 use crate::tasks::store::TaskStateStore;
-use events::AgUiEvent;
+use emitter::TurnEmitter;
 use sub_agent::SubAgentHandler;
 use tool_dispatch::{
     AskUserHandler, BashHandler, FetchHandler, FilesystemHandler, McpToolHandler, TaskToolHandler,
@@ -92,7 +91,7 @@ pub async fn run_agent_turn(
     inference: &InferenceConfig<'_>,
     context: TurnContext,
     services: &TurnServices<'_>,
-    tx: &broadcast::Sender<AgUiEvent>,
+    emitter: &TurnEmitter,
     cancel: CancellationToken,
 ) -> Result<AgentTurnResult> {
     // Bind struct fields to local names for ergonomics
@@ -102,12 +101,7 @@ pub async fn run_agent_turn(
     let depth = context.depth;
     let prior_cost = context.prior_cost;
 
-    let run_id = Uuid::new_v4().to_string();
-
-    let _ = tx.send(AgUiEvent::RunStarted {
-        thread_id: conversation_id.to_string(),
-        run_id: run_id.clone(),
-    });
+    emitter.run_started();
 
     let mut new_messages = Vec::new();
     let turn_start = Instant::now();
@@ -222,16 +216,7 @@ pub async fn run_agent_turn(
                             error_kind = ?pe.kind,
                             "Retrying after transient error"
                         );
-                        let _ = tx.send(AgUiEvent::Custom {
-                            thread_id: conversation_id.to_string(),
-                            name: "retry".to_string(),
-                            value: serde_json::json!({
-                                "attempt": retry_count,
-                                "maxAttempts": crate::retry::MAX_RETRIES,
-                                "reason": format!("{:?}", pe.kind),
-                                "delayMs": delay,
-                            }),
-                        });
+                        emitter.retry(retry_count, crate::retry::MAX_RETRIES, format!("{:?}", pe.kind), delay);
                         tokio::select! {
                             _ = tokio::time::sleep(std::time::Duration::from_millis(delay)) => {}
                             _ = cancel.cancelled() => {
@@ -246,12 +231,7 @@ pub async fn run_agent_turn(
                 let details = e
                     .downcast_ref::<crate::provider::error::ProviderError>()
                     .and_then(|pe| serde_json::to_value(pe).ok());
-                let _ = tx.send(AgUiEvent::RunError {
-                    thread_id: conversation_id.to_string(),
-                    run_id: run_id.clone(),
-                    message: e.to_string(),
-                    details: details.clone(),
-                });
+                emitter.run_error(e.to_string(), details.clone());
                 turn_error = Some(e.to_string());
                 turn_error_details = details;
                 break;
@@ -260,7 +240,7 @@ pub async fn run_agent_turn(
 
         // Consume the stream, emitting AG-UI events
         let stream_result =
-            match consume_stream(stream, conversation_id, &run_id, tx, &cancel).await {
+            match consume_stream(stream, emitter, &cancel).await {
                 Ok(r) => {
                     // Successful stream consumption — reset retry counter
                     retry_count = 0;
@@ -278,16 +258,7 @@ pub async fn run_agent_turn(
                                 error_kind = ?pe.kind,
                                 "Retrying after stream error"
                             );
-                            let _ = tx.send(AgUiEvent::Custom {
-                                thread_id: conversation_id.to_string(),
-                                name: "retry".to_string(),
-                                value: serde_json::json!({
-                                    "attempt": retry_count,
-                                    "maxAttempts": crate::retry::MAX_RETRIES,
-                                    "reason": format!("{:?}", pe.kind),
-                                    "delayMs": delay,
-                                }),
-                            });
+                            emitter.retry(retry_count, crate::retry::MAX_RETRIES, format!("{:?}", pe.kind), delay);
                             tokio::select! {
                                 _ = tokio::time::sleep(std::time::Duration::from_millis(delay)) => {}
                                 _ = cancel.cancelled() => {
@@ -302,12 +273,7 @@ pub async fn run_agent_turn(
                     let details = e
                         .downcast_ref::<crate::provider::error::ProviderError>()
                         .and_then(|pe| serde_json::to_value(pe).ok());
-                    let _ = tx.send(AgUiEvent::RunError {
-                        thread_id: conversation_id.to_string(),
-                        run_id: run_id.clone(),
-                        message: e.to_string(),
-                        details: details.clone(),
-                    });
+                    emitter.run_error(e.to_string(), details.clone());
                     turn_error = Some(e.to_string());
                     turn_error_details = details;
                     break;
@@ -371,18 +337,14 @@ pub async fn run_agent_turn(
         );
         turn_cost += round_cost;
 
-        let _ = tx.send(AgUiEvent::Custom {
-            thread_id: conversation_id.to_string(),
-            name: "usage_update".to_string(),
-            value: serde_json::json!({
-                "inputTokens": cumulative_input,
-                "outputTokens": cumulative_output,
-                "cacheReadInputTokens": cumulative_cache_read,
-                "cacheCreationInputTokens": cumulative_cache_creation,
-                "contextWindow": context_window,
-                "totalCost": prior_cost + turn_cost,
-            }),
-        });
+        emitter.usage(
+            cumulative_input,
+            cumulative_output,
+            cumulative_cache_read,
+            cumulative_cache_creation,
+            context_window,
+            prior_cost + turn_cost,
+        );
 
         // Build assistant message from accumulated blocks
         let assistant_msg = Message {
@@ -415,25 +377,17 @@ pub async fn run_agent_turn(
                             let (queue, _rx) = crate::server::message_queue::MessageQueue::new();
                             Arc::new(ProcessManager::new(
                                 std::path::PathBuf::from("/tmp/nexus-bg"),
-                                tx.clone(),
+                                emitter.sender().clone(),
                                 Arc::new(queue),
                             ))
                         }),
                 };
                 let sub_agent_handler = SubAgentHandler {
-                    provider: inference.provider,
-                    model: inference.model,
-                    max_tokens: inference.max_tokens,
-                    temperature: inference.temperature,
-                    mcp: services.mcp,
-                    fetch_config: services.fetch_config,
-                    filesystem_config: services.filesystem_config,
-                    task_store: services.task_store,
-                    pending_questions: services.pending_questions,
+                    inference,
+                    services,
                     parent_messages: &messages,
                     parent_tools: &tools,
                     cumulative_cost: prior_cost + turn_cost,
-                    bg_deps: services.bg_sub_agent_deps.clone(),
                 };
                 let bg_handler = services.process_manager.as_ref().map(|pm| BgProcessToolHandler {
                     process_manager: pm.as_ref(),
@@ -459,11 +413,7 @@ pub async fn run_agent_turn(
                         .and_then(|v| v.get("description").and_then(|d| d.as_str()).map(|s| s.to_string()));
 
                     if let Some(ref desc) = tool_description {
-                        let _ = tx.send(AgUiEvent::Custom {
-                            thread_id: conversation_id.to_string(),
-                            name: "activity_update".to_string(),
-                            value: serde_json::json!({ "activity": desc }),
-                        });
+                        emitter.activity(desc);
                     }
 
                     let ctx = ToolContext {
@@ -471,7 +421,7 @@ pub async fn run_agent_turn(
                         tool_name: &tc.name,
                         args_json: &tc.args_json,
                         conversation_id,
-                        tx,
+                        emitter,
                         cancel: &cancel,
                     };
                     let result = tool_dispatch::dispatch_tool_call(&handlers, ctx).await;
@@ -491,13 +441,7 @@ pub async fn run_agent_turn(
 
                     let tool_duration = tool_start.elapsed().as_millis() as u64;
 
-                    let _ = tx.send(AgUiEvent::ToolCallResult {
-                        thread_id: conversation_id.to_string(),
-                        run_id: run_id.clone(),
-                        tool_call_id: tc.id.clone(),
-                        content: content.clone(),
-                        is_error,
-                    });
+                    emitter.tool_result(&tc.id, &content, is_error);
 
                     timing_spans.push(serde_json::json!({
                         "id": format!("t-tool-{}", tc.id),
@@ -568,11 +512,7 @@ pub async fn run_agent_turn(
         "durationMs": turn_duration,
     }));
 
-    let _ = tx.send(AgUiEvent::Custom {
-        thread_id: conversation_id.to_string(),
-        name: "timing".to_string(),
-        value: serde_json::json!({ "spans": timing_spans }),
-    });
+    emitter.timing(&timing_spans);
 
     // Turn-level cache summary
     let cache_savings_pct = if cumulative_input > 0 {
@@ -595,11 +535,7 @@ pub async fn run_agent_turn(
         Some(pm) => pm.has_running(conversation_id).await,
         None => false,
     };
-    let _ = tx.send(AgUiEvent::RunFinished {
-        thread_id: conversation_id.to_string(),
-        run_id,
-        has_running_processes,
-    });
+    emitter.run_finished(has_running_processes);
 
     Ok(AgentTurnResult {
         messages: new_messages,
@@ -629,9 +565,7 @@ struct StreamResult {
 /// Consume the provider stream, emit AG-UI events, return accumulated content.
 async fn consume_stream(
     mut stream: futures::stream::BoxStream<'static, Result<StreamEvent>>,
-    conversation_id: &str,
-    run_id: &str,
-    tx: &broadcast::Sender<AgUiEvent>,
+    emitter: &TurnEmitter,
     cancel: &CancellationToken,
 ) -> Result<StreamResult>
 {
@@ -674,20 +608,11 @@ async fn consume_stream(
                 content_block,
             } => match content_block {
                 ContentBlockInfo::Text => {
-                    let _ = tx.send(AgUiEvent::TextMessageStart {
-                        thread_id: conversation_id.to_string(),
-                        run_id: run_id.to_string(),
-                        message_id: message_id.clone(),
-                    });
+                    emitter.text_start(&message_id);
                     current_text = Some((index, String::new()));
                 }
                 ContentBlockInfo::ToolUse { id, name } => {
-                    let _ = tx.send(AgUiEvent::ToolCallStart {
-                        thread_id: conversation_id.to_string(),
-                        run_id: run_id.to_string(),
-                        tool_call_id: id.clone(),
-                        tool_call_name: name.clone(),
-                    });
+                    emitter.tool_start(&id, &name);
                     current_tool = Some((
                         index,
                         PendingToolCall {
@@ -698,11 +623,7 @@ async fn consume_stream(
                     ));
                 }
                 ContentBlockInfo::Thinking => {
-                    let _ = tx.send(AgUiEvent::Custom {
-                        thread_id: conversation_id.to_string(),
-                        name: "thinking_start".to_string(),
-                        value: serde_json::json!({}),
-                    });
+                    emitter.thinking_start();
                     current_thinking = Some((index, String::new()));
                 }
             },
@@ -711,12 +632,7 @@ async fn consume_stream(
                     if let Some((idx, ref mut buf)) = current_text {
                         if idx == index {
                             buf.push_str(&text);
-                            let _ = tx.send(AgUiEvent::TextMessageContent {
-                                thread_id: conversation_id.to_string(),
-                                run_id: run_id.to_string(),
-                                message_id: message_id.clone(),
-                                delta: text,
-                            });
+                            emitter.text_delta(&message_id, text);
                         }
                     }
                 }
@@ -724,12 +640,7 @@ async fn consume_stream(
                     if let Some((idx, ref mut tc)) = current_tool {
                         if idx == index {
                             tc.args_json.push_str(&partial_json);
-                            let _ = tx.send(AgUiEvent::ToolCallArgs {
-                                thread_id: conversation_id.to_string(),
-                                run_id: run_id.to_string(),
-                                tool_call_id: tc.id.clone(),
-                                delta: partial_json,
-                            });
+                            emitter.tool_args(&tc.id, partial_json);
                         }
                     }
                 }
@@ -737,11 +648,7 @@ async fn consume_stream(
                     if let Some((idx, ref mut buf)) = current_thinking {
                         if idx == index {
                             buf.push_str(&thinking);
-                            let _ = tx.send(AgUiEvent::Custom {
-                                thread_id: conversation_id.to_string(),
-                                name: "thinking_delta".to_string(),
-                                value: serde_json::json!({ "delta": thinking }),
-                            });
+                            emitter.thinking_delta(thinking);
                         }
                     }
                 }
@@ -749,6 +656,7 @@ async fn consume_stream(
             StreamEvent::ContentBlockStop { index } => {
                 if let Some((idx, text)) = current_text.take() {
                     if idx == index {
+                        emitter.text_end(&message_id);
                         content_blocks.push(ContentBlock::Text { text });
                     } else {
                         current_text = Some((idx, text));
@@ -756,6 +664,7 @@ async fn consume_stream(
                 }
                 if let Some((idx, tc)) = current_tool.take() {
                     if idx == index {
+                        emitter.tool_end(&tc.id);
                         let input: serde_json::Value =
                             serde_json::from_str(&tc.args_json)
                                 .unwrap_or_else(|_| serde_json::json!({}));
@@ -771,12 +680,8 @@ async fn consume_stream(
                 }
                 if let Some((idx, thinking)) = current_thinking.take() {
                     if idx == index {
+                        emitter.thinking_end();
                         content_blocks.push(ContentBlock::Thinking { thinking });
-                        let _ = tx.send(AgUiEvent::Custom {
-                            thread_id: conversation_id.to_string(),
-                            name: "thinking_end".to_string(),
-                            value: serde_json::json!({}),
-                        });
                     } else {
                         current_thinking = Some((idx, thinking));
                     }

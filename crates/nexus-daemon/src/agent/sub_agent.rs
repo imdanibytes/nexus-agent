@@ -4,15 +4,12 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::anthropic::types::{ContentBlock, Message, Role, Tool};
-use crate::ask_user::PendingQuestionStore;
 use crate::bg_process::ProcessKind;
 use crate::config::{FetchConfig, FilesystemConfig};
-use crate::mcp::McpManager;
 use crate::provider::InferenceProvider;
 use crate::server::services::{ChatService, McpService};
-use crate::tasks::store::TaskStateStore;
 
-use super::events::AgUiEvent;
+use super::emitter::TurnEmitter;
 use super::tool_dispatch::{ToolContext, ToolHandler, ToolResult};
 
 const SUB_AGENT_TOOL_NAME: &str = "sub_agent";
@@ -247,22 +244,13 @@ pub struct BgSubAgentDeps {
 // ── Handler ──
 
 pub struct SubAgentHandler<'a> {
-    pub provider: &'a dyn InferenceProvider,
-    pub model: &'a str,
-    pub max_tokens: u32,
-    pub temperature: Option<f32>,
-    pub mcp: &'a McpManager,
-    pub fetch_config: &'a FetchConfig,
-    pub filesystem_config: &'a FilesystemConfig,
-    pub task_store: &'a tokio::sync::RwLock<TaskStateStore>,
-    pub pending_questions: &'a tokio::sync::RwLock<PendingQuestionStore>,
+    pub inference: &'a super::InferenceConfig<'a>,
+    pub services: &'a super::TurnServices<'a>,
     pub parent_messages: &'a [Message],
     pub parent_tools: &'a [Tool],
     /// Cumulative cost so far (prior_cost + parent turn_cost) so sub-agent
     /// usage_update events show the correct running total.
     pub cumulative_cost: f64,
-    /// Owned deps for background sub-agent dispatch. None at depth > 0.
-    pub bg_deps: Option<Arc<BgSubAgentDeps>>,
 }
 
 #[async_trait]
@@ -295,15 +283,11 @@ impl ToolHandler for SubAgentHandler<'_> {
         }
 
         // Emit sub_agent_start event
-        let _ = ctx.tx.send(AgUiEvent::Custom {
-            thread_id: ctx.conversation_id.to_string(),
-            name: "sub_agent_start".to_string(),
-            value: serde_json::json!({
-                "agent_type": config.agent_type.to_string(),
-                "task": config.task,
-                "context": if config.context_mode == ContextMode::Branched { "branched" } else { "fresh" },
-            }),
-        });
+        ctx.emitter.sub_agent_start(
+            &config.agent_type.to_string(),
+            &config.task,
+            if config.context_mode == ContextMode::Branched { "branched" } else { "fresh" },
+        );
 
         // Build messages based on context mode
         let messages = match config.context_mode {
@@ -337,10 +321,10 @@ impl ToolHandler for SubAgentHandler<'_> {
 
         // Run the sub-agent turn (depth=1 prevents recursive sub-agent spawning)
         let sub_inference = super::InferenceConfig {
-            provider: self.provider,
-            model: self.model,
-            max_tokens: self.max_tokens,
-            temperature: self.temperature,
+            provider: self.inference.provider,
+            model: self.inference.model,
+            max_tokens: self.inference.max_tokens,
+            temperature: self.inference.temperature,
             thinking_budget: None,
             system_prompt: Some(config.system_prompt),
             state_update: None,
@@ -353,19 +337,25 @@ impl ToolHandler for SubAgentHandler<'_> {
             depth: 1,
         };
         let sub_services = super::TurnServices {
-            mcp: self.mcp,
-            fetch_config: self.fetch_config,
-            filesystem_config: self.filesystem_config,
-            task_store: self.task_store,
-            pending_questions: self.pending_questions,
+            mcp: self.services.mcp,
+            fetch_config: self.services.fetch_config,
+            filesystem_config: self.services.filesystem_config,
+            task_store: self.services.task_store,
+            pending_questions: self.services.pending_questions,
             process_manager: None,
             bg_sub_agent_deps: None,
         };
+        // Sub-agent gets its own emitter with a fresh run_id
+        let sub_emitter = TurnEmitter::new(
+            ctx.emitter.sender().clone(),
+            ctx.emitter.thread_id().to_string(),
+            uuid::Uuid::new_v4().to_string(),
+        );
         let result = super::run_agent_turn(
             &sub_inference,
             sub_context,
             &sub_services,
-            ctx.tx,
+            &sub_emitter,
             ctx.cancel.clone(),
         )
         .await;
@@ -379,17 +369,11 @@ impl ToolHandler for SubAgentHandler<'_> {
                     text.clone()
                 };
 
-                // Emit sub_agent_end event
-                let _ = ctx.tx.send(AgUiEvent::Custom {
-                    thread_id: ctx.conversation_id.to_string(),
-                    name: "sub_agent_end".to_string(),
-                    value: serde_json::json!({
-                        "agent_type": config.agent_type.to_string(),
-                        "summary": summary,
-                        "input_tokens": turn_result.input_tokens,
-                        "output_tokens": turn_result.output_tokens,
-                    }),
-                });
+                ctx.emitter.sub_agent_end(&config.agent_type.to_string(), serde_json::json!({
+                    "summary": summary,
+                    "input_tokens": turn_result.input_tokens,
+                    "output_tokens": turn_result.output_tokens,
+                }));
 
                 if let Some(err) = turn_result.error {
                     (
@@ -401,14 +385,9 @@ impl ToolHandler for SubAgentHandler<'_> {
                 }
             }
             Err(e) => {
-                let _ = ctx.tx.send(AgUiEvent::Custom {
-                    thread_id: ctx.conversation_id.to_string(),
-                    name: "sub_agent_end".to_string(),
-                    value: serde_json::json!({
-                        "agent_type": config.agent_type.to_string(),
-                        "error": e.to_string(),
-                    }),
-                });
+                ctx.emitter.sub_agent_end(&config.agent_type.to_string(), serde_json::json!({
+                    "error": e.to_string(),
+                }));
                 (
                     format!("Sub-agent failed: {}", e),
                     true,
@@ -426,7 +405,7 @@ impl SubAgentHandler<'_> {
         ctx: &ToolContext<'_>,
         config: &SubAgentConfig,
     ) -> ToolResult {
-        let bg_deps = match &self.bg_deps {
+        let bg_deps = match &self.services.bg_sub_agent_deps {
             Some(deps) => Arc::clone(deps),
             None => {
                 return ToolResult {
@@ -471,9 +450,9 @@ impl SubAgentHandler<'_> {
 
         let tools = filter_tools_for_sub_agent(self.parent_tools, config);
         let system_prompt = config.system_prompt.clone();
-        let model = self.model.to_string();
-        let max_tokens = self.max_tokens;
-        let temperature = self.temperature;
+        let model = self.inference.model.to_string();
+        let max_tokens = self.inference.max_tokens;
+        let temperature = self.inference.temperature;
         let cumulative_cost = self.cumulative_cost;
         let process_id = spawn_result.process_id.clone();
         let cancel_token = spawn_result.cancel_token;
@@ -481,7 +460,12 @@ impl SubAgentHandler<'_> {
         let conversation_id = ctx.conversation_id.to_string();
 
         tokio::spawn(async move {
-            let tx = bg_deps.chat.event_bridge.agent_tx();
+            let bg_tx = bg_deps.chat.event_bridge.agent_tx();
+            let bg_emitter = TurnEmitter::new(
+                bg_tx,
+                conversation_id.clone(),
+                uuid::Uuid::new_v4().to_string(),
+            );
             let mcp_guard = bg_deps.mcp.mcp.read().await;
 
             let bg_inference = super::InferenceConfig {
@@ -512,7 +496,7 @@ impl SubAgentHandler<'_> {
 
             let result = tokio::select! {
                 result = super::run_agent_turn(
-                    &bg_inference, bg_context, &bg_services, &tx, cancel_token.clone(),
+                    &bg_inference, bg_context, &bg_services, &bg_emitter, cancel_token.clone(),
                 ) => result,
                 _ = cancel_token.cancelled() => {
                     Err(anyhow::anyhow!("Cancelled"))
