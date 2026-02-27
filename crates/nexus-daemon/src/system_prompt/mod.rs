@@ -1,5 +1,7 @@
+mod fence;
 mod providers;
 
+pub use fence::*;
 pub use providers::*;
 
 /// Snapshot of a single task for plan context injection.
