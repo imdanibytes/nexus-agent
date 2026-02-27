@@ -28,6 +28,20 @@ use crate::bg_process::tools::BgProcessToolHandler;
 
 const MAX_ROUNDS: usize = 50;
 
+/// A typed timing span for turn profiling.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimingSpan {
+    pub id: String,
+    pub name: String,
+    pub parent_id: Option<String>,
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub duration_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
+}
+
 /// Accumulated tool call from streaming
 #[derive(Debug)]
 struct PendingToolCall {
@@ -41,7 +55,7 @@ struct PendingToolCall {
 /// messages from completed rounds are included so they can be persisted.
 pub struct AgentTurnResult {
     pub messages: Vec<Message>,
-    pub timing_spans: Vec<serde_json::Value>,
+    pub timing_spans: Vec<TimingSpan>,
     pub input_tokens: u32,
     pub output_tokens: u32,
     pub cache_read_input_tokens: u32,
@@ -106,7 +120,7 @@ pub async fn run_agent_turn(
     let mut new_messages = Vec::new();
     let turn_start = Instant::now();
     let mut round_count: usize = 0;
-    let mut timing_spans: Vec<serde_json::Value> = Vec::new();
+    let mut timing_spans: Vec<TimingSpan> = Vec::new();
     let turn_span_id = "t-turn".to_string();
     let mut cumulative_input: u32 = 0;
     let mut cumulative_output: u32 = 0;
@@ -118,6 +132,31 @@ pub async fn run_agent_turn(
     let mut turn_cost: f64 = 0.0;
     let mut retried_after_prune = false;
     let mut retry_count: u32 = 0;
+
+    // Construct stable handlers once — these don't change between rounds.
+    let ask_handler = AskUserHandler { pending_questions: services.pending_questions };
+    let task_handler = TaskToolHandler { task_store: services.task_store };
+    let fetch_handler = FetchHandler { fetch_config: services.fetch_config };
+    let fs_handler = FilesystemHandler::new(services.filesystem_config);
+    let bash_handler = BashHandler {
+        working_dir: services.filesystem_config
+            .allowed_directories
+            .first()
+            .cloned(),
+        process_manager: services.process_manager.clone()
+            .unwrap_or_else(|| {
+                let (queue, _rx) = crate::server::message_queue::MessageQueue::new();
+                Arc::new(ProcessManager::new(
+                    std::path::PathBuf::from("/tmp/nexus-bg"),
+                    emitter.sender().clone(),
+                    Arc::new(queue),
+                ))
+            }),
+    };
+    let bg_handler = services.process_manager.as_ref().map(|pm| BgProcessToolHandler {
+        process_manager: pm.as_ref(),
+    });
+    let mcp_handler = McpToolHandler { mcp: services.mcp };
 
     for round in 0..MAX_ROUNDS {
         if cancel.is_cancelled() {
@@ -289,20 +328,20 @@ pub async fn run_agent_turn(
 
         let inference_duration = inference_start.elapsed().as_millis() as u64;
         let llm_span_id = format!("t-llm-{}", round);
-        timing_spans.push(serde_json::json!({
-            "id": llm_span_id,
-            "name": "llm_call",
-            "parentId": round_span_id,
-            "startMs": inference_start_ms,
-            "endMs": inference_start_ms + inference_duration,
-            "durationMs": inference_duration,
-            "metadata": {
+        timing_spans.push(TimingSpan {
+            id: llm_span_id,
+            name: "llm_call".into(),
+            parent_id: Some(round_span_id.clone()),
+            start_ms: inference_start_ms,
+            end_ms: inference_start_ms + inference_duration,
+            duration_ms: inference_duration,
+            metadata: Some(serde_json::json!({
                 "input_tokens": round_input_tokens,
                 "output_tokens": round_output_tokens,
                 "cache_read": round_cache_read,
                 "cache_creation": round_cache_creation,
-            },
-        }));
+            })),
+        });
 
         // Accumulate and emit usage.
         // With prompt caching, the API's input_tokens only counts uncached tokens.
@@ -363,25 +402,7 @@ pub async fn run_agent_turn(
                 let tool_exec_span_id = format!("t-toolexec-{}", round);
                 let tool_exec_start = Instant::now();
 
-                let ask_handler = AskUserHandler { pending_questions: services.pending_questions };
-                let task_handler = TaskToolHandler { task_store: services.task_store };
-                let fetch_handler = FetchHandler { fetch_config: services.fetch_config };
-                let fs_handler = FilesystemHandler::new(services.filesystem_config);
-                let bash_handler = BashHandler {
-                    working_dir: services.filesystem_config
-                        .allowed_directories
-                        .first()
-                        .cloned(),
-                    process_manager: services.process_manager.clone()
-                        .unwrap_or_else(|| {
-                            let (queue, _rx) = crate::server::message_queue::MessageQueue::new();
-                            Arc::new(ProcessManager::new(
-                                std::path::PathBuf::from("/tmp/nexus-bg"),
-                                emitter.sender().clone(),
-                                Arc::new(queue),
-                            ))
-                        }),
-                };
+                // Only SubAgentHandler needs per-round data (messages + cost)
                 let sub_agent_handler = SubAgentHandler {
                     inference,
                     services,
@@ -389,10 +410,6 @@ pub async fn run_agent_turn(
                     parent_tools: &tools,
                     cumulative_cost: prior_cost + turn_cost,
                 };
-                let bg_handler = services.process_manager.as_ref().map(|pm| BgProcessToolHandler {
-                    process_manager: pm.as_ref(),
-                });
-                let mcp_handler = McpToolHandler { mcp: services.mcp };
                 let mut handlers: Vec<&dyn tool_dispatch::ToolHandler> =
                     vec![&ask_handler, &task_handler, &fetch_handler, &fs_handler, &bash_handler];
                 if depth == 0 {
@@ -443,14 +460,15 @@ pub async fn run_agent_turn(
 
                     emitter.tool_result(&tc.id, &content, is_error);
 
-                    timing_spans.push(serde_json::json!({
-                        "id": format!("t-tool-{}", tc.id),
-                        "name": format!("tool:{}", tc.name),
-                        "parentId": tool_exec_span_id,
-                        "startMs": tool_start_ms,
-                        "endMs": tool_start_ms + tool_duration,
-                        "durationMs": tool_duration,
-                    }));
+                    timing_spans.push(TimingSpan {
+                        id: format!("t-tool-{}", tc.id),
+                        name: format!("tool:{}", tc.name),
+                        parent_id: Some(tool_exec_span_id.clone()),
+                        start_ms: tool_start_ms,
+                        end_ms: tool_start_ms + tool_duration,
+                        duration_ms: tool_duration,
+                        metadata: None,
+                    });
 
                     result_blocks.push(ContentBlock::ToolResult {
                         tool_use_id: tc.id.clone(),
@@ -460,14 +478,15 @@ pub async fn run_agent_turn(
                 }
 
                 let tool_exec_duration = tool_exec_start.elapsed().as_millis() as u64;
-                timing_spans.push(serde_json::json!({
-                    "id": tool_exec_span_id,
-                    "name": "tool_execution",
-                    "parentId": round_span_id,
-                    "startMs": tool_exec_start_ms,
-                    "endMs": tool_exec_start_ms + tool_exec_duration,
-                    "durationMs": tool_exec_duration,
-                }));
+                timing_spans.push(TimingSpan {
+                    id: tool_exec_span_id,
+                    name: "tool_execution".into(),
+                    parent_id: Some(round_span_id.clone()),
+                    start_ms: tool_exec_start_ms,
+                    end_ms: tool_exec_start_ms + tool_exec_duration,
+                    duration_ms: tool_exec_duration,
+                    metadata: None,
+                });
 
                 let tool_results_msg = Message {
                     role: Role::User,
@@ -479,38 +498,41 @@ pub async fn run_agent_turn(
             _ => {
                 // end_turn, max_tokens, or no tool calls — we're done
                 let round_duration = round_start.elapsed().as_millis() as u64;
-                timing_spans.push(serde_json::json!({
-                    "id": round_span_id,
-                    "name": format!("round:{}", round + 1),
-                    "parentId": turn_span_id,
-                    "startMs": round_start_ms,
-                    "endMs": round_start_ms + round_duration,
-                    "durationMs": round_duration,
-                }));
+                timing_spans.push(TimingSpan {
+                    id: round_span_id,
+                    name: format!("round:{}", round + 1),
+                    parent_id: Some(turn_span_id.clone()),
+                    start_ms: round_start_ms,
+                    end_ms: round_start_ms + round_duration,
+                    duration_ms: round_duration,
+                    metadata: None,
+                });
                 break;
             }
         }
 
         let round_duration = round_start.elapsed().as_millis() as u64;
-        timing_spans.push(serde_json::json!({
-            "id": round_span_id,
-            "name": format!("round:{}", round + 1),
-            "parentId": turn_span_id,
-            "startMs": round_start_ms,
-            "endMs": round_start_ms + round_duration,
-            "durationMs": round_duration,
-        }));
+        timing_spans.push(TimingSpan {
+            id: round_span_id,
+            name: format!("round:{}", round + 1),
+            parent_id: Some(turn_span_id.clone()),
+            start_ms: round_start_ms,
+            end_ms: round_start_ms + round_duration,
+            duration_ms: round_duration,
+            metadata: None,
+        });
     }
 
     let turn_duration = turn_start.elapsed().as_millis() as u64;
-    timing_spans.insert(0, serde_json::json!({
-        "id": turn_span_id,
-        "name": "turn",
-        "parentId": serde_json::Value::Null,
-        "startMs": 0,
-        "endMs": turn_duration,
-        "durationMs": turn_duration,
-    }));
+    timing_spans.insert(0, TimingSpan {
+        id: turn_span_id,
+        name: "turn".into(),
+        parent_id: None,
+        start_ms: 0,
+        end_ms: turn_duration,
+        duration_ms: turn_duration,
+        metadata: None,
+    });
 
     emitter.timing(&timing_spans);
 

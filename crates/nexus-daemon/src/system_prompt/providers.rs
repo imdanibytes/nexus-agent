@@ -337,15 +337,6 @@ impl SystemPromptProvider for ConversationContextProvider {
             lines.push(format!("Working directory: {}", dir));
         }
 
-        if ctx.context_window > 0 && ctx.input_tokens > 0 {
-            let remaining = ctx.context_window.saturating_sub(ctx.input_tokens);
-            let pct = (ctx.input_tokens as f64 / ctx.context_window as f64 * 100.0) as u32;
-            lines.push(format!(
-                "Context: {}% used, ~{}K tokens remaining",
-                pct, remaining / 1000,
-            ));
-        }
-
         if ctx.total_cost > 0.0 {
             lines.push(format!("Conversation cost: ${:.3}", ctx.total_cost));
         }

@@ -166,7 +166,7 @@ impl TurnEmitter {
         });
     }
 
-    pub fn timing(&self, spans: &[serde_json::Value]) {
+    pub fn timing(&self, spans: &[super::TimingSpan]) {
         self.emit(AgUiEvent::Custom {
             name: "timing".to_string(),
             value: serde_json::json!({ "spans": spans }),

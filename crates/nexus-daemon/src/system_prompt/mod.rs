@@ -30,7 +30,6 @@ pub struct SystemPromptContext {
     pub tool_names: Vec<String>,
     pub agent_name: String,
     pub custom_system_prompt: Option<String>,
-    pub input_tokens: u32,
     pub context_window: u32,
     pub mode: String,
     pub plan_context: Option<PlanContext>,

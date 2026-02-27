@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::agent;
 use crate::agent::emitter::TurnEmitter;
-use crate::agent::AgentTurnResult;
+use crate::agent::{AgentTurnResult, TimingSpan};
 use crate::anthropic::types::{ContentBlock, Message, Role};
 use crate::conversation::types::{
     ChatMessage, ConversationUsage, MessagePart, MessageRole, MessageSource, Span,
@@ -114,7 +114,6 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
                 .unwrap_or("Assistant")
                 .to_string(),
             custom_system_prompt: resolved.system_prompt.clone(),
-            input_tokens: 0,
             context_window,
             mode,
             plan_context,
@@ -502,7 +501,7 @@ async fn compact_context(
 }
 
 /// Inject setup span and offset agent timing spans by setup duration.
-fn adjust_timing_spans(timing_spans: &mut Vec<serde_json::Value>, setup_duration_ms: u64) {
+fn adjust_timing_spans(timing_spans: &mut Vec<TimingSpan>, setup_duration_ms: u64) {
     if setup_duration_ms == 0 {
         return;
     }
@@ -510,55 +509,30 @@ fn adjust_timing_spans(timing_spans: &mut Vec<serde_json::Value>, setup_duration
     let insert_idx = if !timing_spans.is_empty() { 1 } else { 0 };
     timing_spans.insert(
         insert_idx,
-        serde_json::json!({
-            "id": "t-setup",
-            "name": "setup",
-            "parentId": "t-turn",
-            "startMs": 0,
-            "endMs": setup_duration_ms,
-            "durationMs": setup_duration_ms,
-        }),
+        TimingSpan {
+            id: "t-setup".into(),
+            name: "setup".into(),
+            parent_id: Some("t-turn".into()),
+            start_ms: 0,
+            end_ms: setup_duration_ms,
+            duration_ms: setup_duration_ms,
+            metadata: None,
+        },
     );
 
     // Offset all non-turn/non-setup spans by setup duration
     for span in timing_spans.iter_mut() {
-        if let Some(obj) = span.as_object_mut() {
-            let id = obj
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            if id == "t-turn" || id == "t-setup" {
-                continue;
-            }
-            if let Some(start) = obj.get("startMs").and_then(|v| v.as_u64()) {
-                obj.insert(
-                    "startMs".to_string(),
-                    (start + setup_duration_ms).into(),
-                );
-            }
-            if let Some(end) = obj.get("endMs").and_then(|v| v.as_u64()) {
-                obj.insert(
-                    "endMs".to_string(),
-                    (end + setup_duration_ms).into(),
-                );
-            }
+        if span.id == "t-turn" || span.id == "t-setup" {
+            continue;
         }
+        span.start_ms += setup_duration_ms;
+        span.end_ms += setup_duration_ms;
     }
 
     // Update turn span endMs to include setup
     if let Some(turn_span) = timing_spans.first_mut() {
-        if let Some(obj) = turn_span.as_object_mut() {
-            if let Some(end) = obj.get("endMs").and_then(|v| v.as_u64()) {
-                obj.insert(
-                    "endMs".to_string(),
-                    (end + setup_duration_ms).into(),
-                );
-                obj.insert(
-                    "durationMs".to_string(),
-                    (end + setup_duration_ms).into(),
-                );
-            }
-        }
+        turn_span.end_ms += setup_duration_ms;
+        turn_span.duration_ms += setup_duration_ms;
     }
 }
 
@@ -570,7 +544,7 @@ async fn persist_turn_results(
     last_active_id: Option<&str>,
     assistant_message_id: Option<&str>,
     agent_meta: &serde_json::Value,
-    timing_spans: &[serde_json::Value],
+    timing_spans: &[TimingSpan],
     usage: ConversationUsage,
 ) {
     let mut chat_messages =
