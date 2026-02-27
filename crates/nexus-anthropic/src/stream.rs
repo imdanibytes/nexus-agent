@@ -4,7 +4,7 @@ use futures::Stream;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use super::types::*;
+use nexus_provider::types::*;
 
 /// Parses a raw SSE byte stream from the Anthropic API into typed StreamEvents.
 pub struct SseStream<S> {

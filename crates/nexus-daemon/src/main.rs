@@ -198,7 +198,8 @@ async fn main() -> Result<()> {
     // LSP integration: detect installed servers, merge with persisted config
     let lsp_settings = NexusConfig::load_lsp_settings().unwrap_or_default();
     let detected_lsps = lsp::detect::detect_installed_servers();
-    let mut lsp_config_store = lsp::config::LspConfigStore::new(lsp_settings);
+    let mut lsp_config_store = lsp::config::LspConfigStore::new(lsp_settings)
+        .with_save(Box::new(NexusConfig::save_lsp_settings));
     lsp_config_store.upsert_detected(detected_lsps).ok();
 
     let enabled_lsp_configs: Vec<_> = lsp_config_store
@@ -219,20 +220,16 @@ async fn main() -> Result<()> {
     let lsp_timeout = lsp_config_store.settings().diagnostics_timeout_ms;
     let lsp_manager = lsp::manager::LspManager::new(enabled_lsp_configs, lsp_timeout);
     let lsp_svc = lsp::LspService::new(lsp_manager, lsp_config_store);
-    let lsp_for_shutdown = Arc::clone(&lsp_svc);
 
-    // Pre-warm LSP servers for all configured projects so they can index
-    // in the background before the first file operation.
-    let warm_lsp = Arc::clone(&lsp_svc);
-    let project_paths: Vec<String> = {
-        let ps = projects_lock.read().await;
-        ps.list().iter().map(|p| p.path.clone()).collect()
-    };
-    if !project_paths.is_empty() {
-        tokio::spawn(async move {
-            warm_lsp.manager.write().await.warm_up(&project_paths).await;
-        });
-    }
+    // Register LSP as a DaemonModule — handles warm-up (on_startup),
+    // shutdown (on_shutdown), and diagnostic decoration (post_tool_use).
+    let lsp_module = Arc::new(lsp::module::LspModule {
+        lsp: Arc::clone(&lsp_svc),
+        projects: Arc::clone(&projects_lock),
+        workspaces: Arc::clone(&workspaces_lock),
+        threads: Arc::clone(&threads),
+    });
+    module_registry.register(lsp_module as Arc<dyn crate::module::DaemonModule>);
 
     let state = AppState {
         base_filesystem_config: config.filesystem.clone(),
@@ -271,25 +268,15 @@ async fn main() -> Result<()> {
     let port_file = nexus_dir.join("port");
     let _ = std::fs::write(&port_file, actual_addr.port().to_string());
 
-    // Spawn a shutdown handler that cleans up modules + LSP then force-exits.
+    // Spawn a shutdown handler that cleans up modules then force-exits.
     // axum's graceful shutdown waits for ALL connections to drain, but SSE
     // streams are long-lived and never close on their own, so we'd hang forever.
     tokio::spawn(async move {
         shutdown_signal().await;
 
-        // HOOK: Shutdown — let modules clean up
+        // HOOK: Shutdown — let modules clean up (includes LSP via LspModule)
         tracing::info!("Shutting down modules...");
         modules_for_shutdown.shutdown().await;
-
-        tracing::info!("Shutting down LSP servers...");
-        if tokio::time::timeout(std::time::Duration::from_secs(3), async {
-            lsp_for_shutdown.manager.read().await.shutdown_all().await;
-        })
-        .await
-        .is_err()
-        {
-            tracing::warn!("LSP shutdown timed out");
-        }
 
         tracing::info!("Cleanup complete, exiting");
         std::process::exit(0);

@@ -262,15 +262,15 @@ pub fn inject_cache_control(body: &mut serde_json::Value) {
     }
 }
 
-// ── Raw SSE JSON shapes (for deserialization only) ──
+// ── Raw SSE JSON shapes (for deserialization) ──
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct RawMessageStart {
+pub struct RawMessageStart {
     pub message: RawMessageInfo,
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct RawMessageInfo {
+pub struct RawMessageInfo {
     pub id: String,
     pub model: String,
     pub role: Role,
@@ -278,7 +278,7 @@ pub(crate) struct RawMessageInfo {
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct RawContentBlockStart {
+pub struct RawContentBlockStart {
     pub index: usize,
     pub content_block: RawContentBlock,
 }
@@ -286,14 +286,14 @@ pub(crate) struct RawContentBlockStart {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[allow(dead_code)] // variant fields populated by serde deserialization
-pub(crate) enum RawContentBlock {
+pub enum RawContentBlock {
     Text { text: String },
     ToolUse { id: String, name: String },
     Thinking { thinking: String },
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct RawContentBlockDelta {
+pub struct RawContentBlockDelta {
     pub index: usize,
     pub delta: RawDelta,
 }
@@ -301,25 +301,25 @@ pub(crate) struct RawContentBlockDelta {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[allow(clippy::enum_variant_names)]
-pub(crate) enum RawDelta {
+pub enum RawDelta {
     TextDelta { text: String },
     InputJsonDelta { partial_json: String },
     ThinkingDelta { thinking: String },
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct RawContentBlockStop {
+pub struct RawContentBlockStop {
     pub index: usize,
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct RawMessageDelta {
+pub struct RawMessageDelta {
     pub delta: RawMessageDeltaInner,
     pub usage: Option<Usage>,
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct RawMessageDeltaInner {
+pub struct RawMessageDeltaInner {
     pub stop_reason: Option<StopReason>,
 }
 
@@ -338,12 +338,12 @@ pub struct MessagesResponse {
 // ── Raw SSE JSON shapes (continued) ──
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct RawError {
+pub struct RawError {
     pub error: RawErrorInner,
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct RawErrorInner {
+pub struct RawErrorInner {
     #[serde(rename = "type")]
     pub error_type: Option<String>,
     pub message: String,
@@ -383,9 +383,7 @@ mod tests {
         inject_cache_control(&mut body);
 
         let tools = body["tools"].as_array().unwrap();
-        // First tool should NOT have cache_control
         assert!(tools[0].get("cache_control").is_none());
-        // Last tool should have cache_control
         assert_eq!(tools[1]["cache_control"]["type"], "ephemeral");
     }
 
@@ -419,16 +417,12 @@ mod tests {
         inject_cache_control(&mut body);
 
         let messages = body["messages"].as_array().unwrap();
-        // First message: no cache_control
         assert!(messages[0]["content"][0].get("cache_control").is_none());
-        // Assistant message (before state_update): should have cache_control on last block
         assert_eq!(
             messages[1]["content"][1]["cache_control"]["type"],
             "ephemeral"
         );
-        // State message: no cache_control (changes every turn)
         assert!(messages[2]["content"][0].get("cache_control").is_none());
-        // Last message: no cache_control (changes every turn)
         assert!(messages[3]["content"][0].get("cache_control").is_none());
     }
 
@@ -458,12 +452,10 @@ mod tests {
         inject_cache_control(&mut body);
 
         let messages = body["messages"].as_array().unwrap();
-        // Second-to-last (assistant): should have cache_control
         assert_eq!(
             messages[1]["content"][1]["cache_control"]["type"],
             "ephemeral"
         );
-        // Last message: no cache_control
         assert!(messages[2]["content"][0].get("cache_control").is_none());
     }
 
@@ -497,9 +489,7 @@ mod tests {
         inject_cache_control(&mut body);
 
         let content = body["messages"][1]["content"].as_array().unwrap();
-        // Thinking block should NOT have cache_control
         assert!(content[1].get("cache_control").is_none());
-        // Text block (last non-thinking) should have cache_control
         assert_eq!(content[0]["cache_control"]["type"], "ephemeral");
     }
 
@@ -511,7 +501,6 @@ mod tests {
             "tools": [],
         });
         inject_cache_control(&mut body);
-        // No panic, no crash — just a no-op for empty arrays
         assert!(body["messages"].as_array().unwrap().is_empty());
     }
 
@@ -556,9 +545,7 @@ mod tests {
         inject_tool_description_field(&mut tools);
 
         let schema = &tools[0].input_schema;
-        // description property was added
         assert!(schema["properties"]["description"]["type"].as_str() == Some("string"));
-        // description is in required array
         let required = schema["required"].as_array().unwrap();
         assert!(required.contains(&serde_json::json!("path")));
         assert!(required.contains(&serde_json::json!("description")));
@@ -581,7 +568,6 @@ mod tests {
         ];
         inject_tool_description_field(&mut tools);
 
-        // Should not duplicate in required
         let required = tools[0].input_schema["required"].as_array().unwrap();
         let count = required.iter().filter(|v| v.as_str() == Some("description")).count();
         assert_eq!(count, 1);

@@ -4,10 +4,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use super::anthropic_provider::AnthropicProvider;
-use super::bedrock_provider::BedrockProvider;
-use super::types::{Provider, ProviderType};
-use super::InferenceProvider;
+use nexus_anthropic::AnthropicProvider;
+use nexus_aws_bedrock::BedrockProvider;
+use super::{InferenceProvider, Provider, ProviderType};
 
 type ProviderCache = HashMap<String, (DateTime<Utc>, Arc<dyn InferenceProvider>)>;
 

@@ -1,8 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::config::NexusConfig;
-
 fn default_true() -> bool {
     true
 }
@@ -47,14 +45,27 @@ impl Default for LspSettings {
     }
 }
 
+/// Function that persists LSP settings to disk.
+pub type SaveFn = Box<dyn Fn(&LspSettings) -> Result<()> + Send + Sync>;
+
 /// Manages CRUD for LSP server configurations (persisted to lsp.json).
 pub struct LspConfigStore {
     settings: LspSettings,
+    save_fn: Option<SaveFn>,
 }
 
 impl LspConfigStore {
     pub fn new(settings: LspSettings) -> Self {
-        Self { settings }
+        Self {
+            settings,
+            save_fn: None,
+        }
+    }
+
+    /// Set a persistence callback. Without this, mutations are in-memory only.
+    pub fn with_save(mut self, f: SaveFn) -> Self {
+        self.save_fn = Some(f);
+        self
     }
 
     pub fn settings(&self) -> &LspSettings {
@@ -111,7 +122,10 @@ impl LspConfigStore {
     }
 
     fn save(&self) -> Result<()> {
-        NexusConfig::save_lsp_settings(&self.settings)
+        match &self.save_fn {
+            Some(f) => f(&self.settings),
+            None => Ok(()),
+        }
     }
 }
 
@@ -151,8 +165,7 @@ mod tests {
     fn upsert_detected_adds_new() {
         let mut store = LspConfigStore::new(LspSettings::default());
         let detected = vec![make_config("ra", "rust-analyzer", "rust-analyzer", &["rust"])];
-        // save() will fail in tests (no ~/.nexus dir), but we test the in-memory logic
-        let _ = store.upsert_detected(detected);
+        store.upsert_detected(detected).unwrap();
         assert_eq!(store.servers().len(), 1);
         assert_eq!(store.servers()[0].name, "rust-analyzer");
     }
@@ -172,7 +185,7 @@ mod tests {
 
         let mut store = LspConfigStore::new(settings);
         let detected = vec![make_config("ra-new", "rust-analyzer", "rust-analyzer", &["rust"])];
-        let _ = store.upsert_detected(detected);
+        store.upsert_detected(detected).unwrap();
 
         // Should still have one server (matched by command), and enabled should be preserved
         assert_eq!(store.servers().len(), 1);

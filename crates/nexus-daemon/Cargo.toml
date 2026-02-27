@@ -35,3 +35,8 @@ aws-sdk-bedrock = "1"
 aws-sdk-bedrockruntime = "1"
 lsp-types = "0.97"
 which = "7"
+nexus-core = { path = "../nexus-core" }
+nexus-provider = { path = "../nexus-provider" }
+nexus-anthropic = { path = "../nexus-anthropic" }
+nexus-aws-bedrock = { path = "../nexus-aws-bedrock" }
+nexus-lsp = { path = "../nexus-lsp" }

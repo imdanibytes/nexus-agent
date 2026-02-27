@@ -3,7 +3,6 @@ use std::fmt;
 /// Normalized error kind across all providers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
-#[allow(dead_code)] // variants constructed as needed when classifying errors
 pub enum ProviderErrorKind {
     RateLimit,
     Authentication,
@@ -39,7 +38,6 @@ impl std::error::Error for ProviderError {}
 
 impl ProviderError {
     /// User-facing title for this error kind.
-    #[allow(dead_code)] // will be used by frontend error rendering
     pub fn title(&self) -> &'static str {
         match self.kind {
             ProviderErrorKind::RateLimit => "Rate limit exceeded",
@@ -54,11 +52,13 @@ impl ProviderError {
     }
 
     /// Parse an Anthropic HTTP error response into a structured ProviderError.
-    pub fn from_anthropic_http(status: reqwest::StatusCode, body: &str) -> Self {
-        let (kind, retryable) = match status.as_u16() {
+    ///
+    /// Takes the raw HTTP status code as `u16` to avoid coupling to any
+    /// specific HTTP client library.
+    pub fn from_anthropic_http(status_code: u16, body: &str) -> Self {
+        let (kind, retryable) = match status_code {
             401 | 403 => (ProviderErrorKind::Authentication, false),
             400 => {
-                // Check if it's a context length issue
                 if body.contains("prompt is too long")
                     || body.contains("too many tokens")
                     || body.contains("context length")
@@ -78,12 +78,12 @@ impl ProviderError {
         let message = serde_json::from_str::<serde_json::Value>(body)
             .ok()
             .and_then(|v| v["error"]["message"].as_str().map(|s| s.to_string()))
-            .unwrap_or_else(|| format!("HTTP {}: {}", status, body));
+            .unwrap_or_else(|| format!("HTTP {}: {}", status_code, body));
 
         Self {
             kind,
             message,
-            status_code: Some(status.as_u16()),
+            status_code: Some(status_code),
             retryable,
             provider: "anthropic".to_string(),
         }

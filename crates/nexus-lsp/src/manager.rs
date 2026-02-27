@@ -132,9 +132,7 @@ impl LspManager {
             None => return None,
         };
 
-        if self.ensure_server(file_path, project_path).await.is_none() {
-            return None;
-        }
+        self.ensure_server(file_path, project_path).await?;
 
         let config_id = match self.language_routing.get(lang_id) {
             Some(id) => id.clone(),
@@ -168,9 +166,7 @@ impl LspManager {
             None => return None,
         };
 
-        if self.ensure_server(file_path, project_path).await.is_none() {
-            return None;
-        }
+        self.ensure_server(file_path, project_path).await?;
 
         let config_id = match self.language_routing.get(lang_id) {
             Some(id) => id.clone(),

@@ -1,3 +1,11 @@
 [workspace]
-members = ["crates/nexus-daemon", "crates/nexus-daemon-tests"]
+members = [
+    "crates/nexus-core",
+    "crates/nexus-provider",
+    "crates/nexus-anthropic",
+    "crates/nexus-aws-bedrock",
+    "crates/nexus-lsp",
+    "crates/nexus-daemon",
+    "crates/nexus-daemon-tests",
+]
 resolver = "2"

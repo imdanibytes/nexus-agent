@@ -1,0 +1,14 @@
+[package]
+name = "nexus-aws-bedrock"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+nexus-provider = { path = "../nexus-provider" }
+aws-config = { version = "1", features = ["behavior-version-latest", "credentials-login"] }
+aws-sdk-bedrockruntime = "1"
+futures = "0.3"
+async-trait = "0.1"
+anyhow = "1"
+tracing = "0.1"
+serde_json = "1"

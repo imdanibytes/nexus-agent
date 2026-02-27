@@ -1783,6 +1783,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "nexus-anthropic"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "futures",
+ "nexus-provider",
+ "reqwest",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "nexus-aws-bedrock"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "aws-config",
+ "aws-sdk-bedrockruntime",
+ "futures",
+ "nexus-provider",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "nexus-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "nexus-daemon"
 version = "0.1.0"
 dependencies = [
@@ -1799,6 +1838,11 @@ dependencies = [
  "futures",
  "http 1.4.0",
  "lsp-types",
+ "nexus-anthropic",
+ "nexus-aws-bedrock",
+ "nexus-core",
+ "nexus-lsp",
+ "nexus-provider",
  "reqwest",
  "rmcp",
  "serde",
@@ -1829,6 +1873,32 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "uuid",
+]
+
+[[package]]
+name = "nexus-lsp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "lsp-types",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "which",
+]
+
+[[package]]
+name = "nexus-provider"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "futures",
+ "serde",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]

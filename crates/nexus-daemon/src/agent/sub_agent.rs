@@ -338,8 +338,6 @@ impl ToolHandler for SubAgentHandler<'_> {
             process_manager: None,
             bg_sub_agent_deps: None,
             control_plane: self.services.control_plane.clone(),
-            lsp: self.services.lsp.clone(),
-            workspace_project_paths: self.services.workspace_project_paths.clone(),
             modules: Arc::clone(&self.services.modules),
         };
         // Sub-agent gets its own emitter with a fresh run_id
@@ -491,8 +489,6 @@ impl SubAgentHandler<'_> {
                 process_manager: Some(bg_deps.turns.process_manager.clone()),
                 bg_sub_agent_deps: None,
                 control_plane: None,
-                lsp: None,
-                workspace_project_paths: Vec::new(),
                 modules: Arc::clone(&bg_deps.modules),
             };
 

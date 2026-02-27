@@ -92,7 +92,11 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
         let effective_fs = state_clone.effective_fs_config.read().await.clone();
         tools.extend(crate::filesystem::tool_definitions(&effective_fs));
         // HOOK: ToolRegister — collect tools from modules.
-        tools.extend(state_clone.modules.collect_tools());
+        tools.extend(
+            state_clone.modules.collect_tools()
+                .into_iter()
+                .map(crate::module::tool_from_definition)
+        );
         crate::anthropic::types::inject_tool_description_field(&mut tools);
 
         // 3. Derive agent mode + plan context from task state
@@ -116,17 +120,8 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
         let tools = crate::tool_filter::ToolFilterChain::default_chain().apply(&filter_ctx, tools);
         tracing::debug!(mode = %mode, tool_count = tools.len(), "Tool filter applied");
 
-        // 5. Resolve workspace context for system prompt + LSP scoping
+        // 5. Resolve workspace context for system prompt
         let (ws_name, ws_desc, ws_projects) = resolve_workspace_context(&state_clone, &conversation_id).await;
-        // Extract project paths for LSP before ws_projects is moved into SystemPromptContext.
-        // If a workspace is selected, scope to its projects. Otherwise, fall back to ALL
-        // configured projects so LSP works without requiring workspace setup.
-        let workspace_project_paths: Vec<String> = if !ws_projects.is_empty() {
-            ws_projects.iter().map(|(_, path)| path.clone()).collect()
-        } else {
-            let proj_store = state_clone.projects.read().await;
-            proj_store.list().iter().map(|p| p.path.clone()).collect()
-        };
 
         // 6. Build system prompt
         let context_window = crate::agent::context_window_for_model(&resolved.model);
@@ -214,8 +209,6 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
                 mcp_svc: Arc::clone(&state_clone.mcp),
                 event_bus: state_clone.event_bus.clone(),
             })),
-            lsp: Some(Arc::clone(&state_clone.lsp)),
-            workspace_project_paths,
             modules: Arc::clone(&state_clone.modules),
         };
 

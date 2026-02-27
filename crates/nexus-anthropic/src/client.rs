@@ -1,8 +1,8 @@
 use anyhow::Result;
 
 use super::stream::SseStream;
-use super::types::*;
-use crate::provider::error::ProviderError;
+use nexus_provider::error::ProviderError;
+use nexus_provider::types::*;
 
 #[derive(Clone)]
 pub struct AnthropicClient {
@@ -46,7 +46,7 @@ impl AnthropicClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(ProviderError::from_anthropic_http(status, &body).into());
+            return Err(ProviderError::from_anthropic_http(status.as_u16(), &body).into());
         }
 
         let response: MessagesResponse = resp.json().await?;
@@ -73,7 +73,7 @@ impl AnthropicClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(ProviderError::from_anthropic_http(status, &body).into());
+            return Err(ProviderError::from_anthropic_http(status.as_u16(), &body).into());
         }
 
         Ok(SseStream::new(resp.bytes_stream()))
@@ -110,7 +110,7 @@ impl AnthropicClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(ProviderError::from_anthropic_http(status, &body).into());
+            return Err(ProviderError::from_anthropic_http(status.as_u16(), &body).into());
         }
 
         Ok(SseStream::new(resp.bytes_stream()))

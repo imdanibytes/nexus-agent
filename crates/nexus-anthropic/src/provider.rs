@@ -3,11 +3,10 @@ use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 
-use crate::anthropic::types::{
-    inject_cache_control, MessagesRequest, StreamEvent, ThinkingConfig,
-};
-use crate::anthropic::AnthropicClient;
-use crate::provider::{InferenceProvider, InferenceRequest};
+use nexus_provider::types::{inject_cache_control, MessagesRequest, StreamEvent, ThinkingConfig};
+use nexus_provider::{InferenceProvider, InferenceRequest};
+
+use super::client::AnthropicClient;
 
 /// Beta header required for extended thinking.
 const THINKING_BETA_HEADER: &str = "interleaved-thinking-2025-05-14";

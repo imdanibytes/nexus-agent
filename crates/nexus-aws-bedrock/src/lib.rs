@@ -5,9 +5,9 @@ use aws_sdk_bedrockruntime::Client as BedrockClient;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 
-use crate::anthropic::types::{inject_cache_control, StreamEvent};
-use crate::provider::error::ProviderError;
-use crate::provider::{InferenceProvider, InferenceRequest};
+use nexus_provider::error::ProviderError;
+use nexus_provider::types::*;
+use nexus_provider::{InferenceProvider, InferenceRequest};
 
 pub struct BedrockProvider {
     client: BedrockClient,
@@ -129,7 +129,7 @@ fn parse_bedrock_chunk(bytes: &[u8]) -> Result<Option<StreamEvent>> {
                 message_id: msg["id"].as_str().unwrap_or("").to_string(),
                 model: msg["model"].as_str().unwrap_or("").to_string(),
                 role: serde_json::from_value(msg["role"].clone())
-                    .unwrap_or(crate::anthropic::types::Role::Assistant),
+                    .unwrap_or(Role::Assistant),
                 usage: msg.get("usage").and_then(|u| serde_json::from_value(u.clone()).ok()),
             }))
         }
@@ -138,12 +138,12 @@ fn parse_bedrock_chunk(bytes: &[u8]) -> Result<Option<StreamEvent>> {
             let cb = &json["content_block"];
             let cb_type = cb["type"].as_str().unwrap_or("");
             let info = match cb_type {
-                "text" => crate::anthropic::types::ContentBlockInfo::Text,
-                "tool_use" => crate::anthropic::types::ContentBlockInfo::ToolUse {
+                "text" => ContentBlockInfo::Text,
+                "tool_use" => ContentBlockInfo::ToolUse {
                     id: cb["id"].as_str().unwrap_or("").to_string(),
                     name: cb["name"].as_str().unwrap_or("").to_string(),
                 },
-                "thinking" => crate::anthropic::types::ContentBlockInfo::Thinking,
+                "thinking" => ContentBlockInfo::Thinking,
                 _ => return Ok(None),
             };
             Ok(Some(StreamEvent::ContentBlockStart {
@@ -156,13 +156,13 @@ fn parse_bedrock_chunk(bytes: &[u8]) -> Result<Option<StreamEvent>> {
             let delta = &json["delta"];
             let delta_type = delta["type"].as_str().unwrap_or("");
             let d = match delta_type {
-                "text_delta" => crate::anthropic::types::Delta::TextDelta {
+                "text_delta" => Delta::TextDelta {
                     text: delta["text"].as_str().unwrap_or("").to_string(),
                 },
-                "input_json_delta" => crate::anthropic::types::Delta::InputJsonDelta {
+                "input_json_delta" => Delta::InputJsonDelta {
                     partial_json: delta["partial_json"].as_str().unwrap_or("").to_string(),
                 },
-                "thinking_delta" => crate::anthropic::types::Delta::ThinkingDelta {
+                "thinking_delta" => Delta::ThinkingDelta {
                     thinking: delta["thinking"].as_str().unwrap_or("").to_string(),
                 },
                 _ => return Ok(None),

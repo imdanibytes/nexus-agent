@@ -1,29 +1,10 @@
-pub mod config;
-pub mod detect;
-pub mod diagnostics;
-pub mod decorator;
-pub mod languages;
-pub mod manager;
-pub mod protocol;
-pub mod server;
+// Re-export LSP core from the nexus-lsp crate.
+pub use nexus_lsp::config;
+pub use nexus_lsp::detect;
+pub use nexus_lsp::diagnostics;
+pub use nexus_lsp::manager;
 
-use std::sync::Arc;
-use tokio::sync::RwLock;
+pub use nexus_lsp::LspService;
 
-use config::LspConfigStore;
-use manager::LspManager;
-
-/// Top-level LSP service, added to AppState.
-pub struct LspService {
-    pub manager: RwLock<LspManager>,
-    pub configs: RwLock<LspConfigStore>,
-}
-
-impl LspService {
-    pub fn new(manager: LspManager, configs: LspConfigStore) -> Arc<Self> {
-        Arc::new(Self {
-            manager: RwLock::new(manager),
-            configs: RwLock::new(configs),
-        })
-    }
-}
+// The DaemonModule adapter lives in the daemon (depends on daemon-specific types).
+pub mod module;

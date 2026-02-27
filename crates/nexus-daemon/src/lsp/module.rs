@@ -1,9 +1,14 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use tokio::sync::RwLock;
 
-use crate::agent::tool_dispatch::{ToolContext, ToolHandler, ToolResult};
-use crate::module::InjectedMessage;
+use crate::module::{
+    DaemonModule, DoctorCheck, DoctorReport, DoctorStatus, InjectedMessage, PostToolUseEvent,
+};
+use crate::project::ProjectStore;
+use crate::thread::ThreadService;
+use crate::workspace::WorkspaceStore;
 
 use super::diagnostics::DiagnosticStatus;
 use super::manager::DiagnosticReport;
@@ -15,89 +20,125 @@ const READ_TOOLS: &[&str] = &["read_text_file", "read_file"];
 /// Tools that trigger didChange + wait for fresh diagnostics.
 const WRITE_TOOLS: &[&str] = &["write_file", "edit_file"];
 
-/// Wraps FilesystemHandler, decorating results with LSP diagnostics
-/// for files within the conversation's workspace projects.
-pub struct LspDecoratedFsHandler {
-    pub inner: crate::agent::tool_dispatch::FilesystemHandler,
+/// LSP integration as a DaemonModule.
+///
+/// Replaces the old `LspDecoratedFsHandler` wrapper — instead of wrapping
+/// the filesystem tool handler, this module hooks into `post_tool_use` to
+/// decorate file tool results with LSP diagnostics.
+///
+/// Also handles LSP server warm-up (`on_startup`) and shutdown (`on_shutdown`).
+pub struct LspModule {
     pub lsp: Arc<LspService>,
-    /// Project paths from the conversation's active workspace.
-    pub project_paths: Vec<String>,
+    pub projects: Arc<RwLock<ProjectStore>>,
+    pub workspaces: Arc<RwLock<WorkspaceStore>>,
+    pub threads: Arc<ThreadService>,
 }
 
 #[async_trait]
-impl ToolHandler for LspDecoratedFsHandler {
-    fn can_handle(&self, tool_name: &str) -> bool {
-        self.inner.can_handle(tool_name)
+impl DaemonModule for LspModule {
+    fn name(&self) -> &str {
+        "lsp"
     }
 
-    async fn handle(&self, ctx: &ToolContext<'_>) -> ToolResult {
-        // Delegate to inner filesystem handler
-        let result = self.inner.handle(ctx).await;
-        if result.is_error {
-            return result;
+    async fn on_startup(&self) -> anyhow::Result<()> {
+        let project_paths: Vec<String> = {
+            let ps = self.projects.read().await;
+            ps.list().iter().map(|p| p.path.clone()).collect()
+        };
+        if project_paths.is_empty() {
+            return Ok(());
+        }
+        tracing::info!(
+            project_count = project_paths.len(),
+            "LspModule: warming up LSP servers"
+        );
+        self.lsp.manager.write().await.warm_up(&project_paths).await;
+        Ok(())
+    }
+
+    async fn on_shutdown(&self) -> anyhow::Result<()> {
+        tracing::info!("LspModule: shutting down LSP servers");
+        if tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            self.lsp.manager.read().await.shutdown_all().await;
+        })
+        .await
+        .is_err()
+        {
+            tracing::warn!("LspModule: LSP shutdown timed out");
+        }
+        Ok(())
+    }
+
+    async fn post_tool_use(&self, event: &mut PostToolUseEvent<'_>) {
+        let tool_name = event.tool_name;
+        let is_write = WRITE_TOOLS.contains(&tool_name);
+        let is_read = READ_TOOLS.contains(&tool_name);
+        if !is_write && !is_read {
+            return;
         }
 
         // Check if LSP is globally enabled
         {
             let configs = self.lsp.configs.read().await;
             if !configs.settings().enabled {
-                return result;
+                return;
             }
         }
 
-        // Extract file path from args
-        let file_path = match extract_file_path(ctx.args_json) {
-            Some(p) => p,
-            None => return result,
+        // Extract file path from tool input
+        let file_path = match event.tool_input.get("path").and_then(|v| v.as_str()) {
+            Some(p) => p.to_string(),
+            None => return,
         };
 
-        // Check if file is within a workspace project
-        let project_path = match self.find_project_for_file(&file_path) {
+        // Resolve project paths for this conversation
+        let project_paths = self.resolve_project_paths(event.conversation_id).await;
+        if project_paths.is_empty() {
+            return;
+        }
+
+        // Check if file is within a project
+        let project_path = match find_project_for_file(&project_paths, &file_path) {
             Some(p) => p,
             None => {
                 tracing::debug!(
                     file = %file_path,
-                    project_count = self.project_paths.len(),
+                    project_count = project_paths.len(),
                     "File not within any project path, skipping LSP"
                 );
-                return result;
+                return;
             }
         };
 
         // Get diagnostics based on operation type
-        let is_write = WRITE_TOOLS.contains(&ctx.tool_name);
-        let is_read = READ_TOOLS.contains(&ctx.tool_name);
-
         let report = if is_write {
             let content = read_file_content(&file_path).await;
             let mut manager = self.lsp.manager.write().await;
-            manager.diagnostics_after_write(
-                &file_path,
-                &content,
-                &project_path,
-            ).await
-        } else if is_read {
-            let mut manager = self.lsp.manager.write().await;
-            manager.diagnostics_after_read(&file_path, &project_path).await
+            manager
+                .diagnostics_after_write(&file_path, &content, &project_path)
+                .await
         } else {
-            return result;
+            let mut manager = self.lsp.manager.write().await;
+            manager
+                .diagnostics_after_read(&file_path, &project_path)
+                .await
         };
 
         let report = match report {
             Some(r) => r,
             None => {
                 tracing::info!(
-                    tool = %ctx.tool_name,
+                    tool = %tool_name,
                     file = %file_path,
                     "LSP: no server available for this file type"
                 );
-                return result;
+                return;
             }
         };
 
         let decoration = format_report(&report);
         tracing::info!(
-            tool = %ctx.tool_name,
+            tool = %tool_name,
             file = %file_path,
             server = %report.server_name,
             "LSP decoration: {}",
@@ -108,31 +149,78 @@ impl ToolHandler for LspDecoratedFsHandler {
             }
         );
 
-        ToolResult {
-            content: result.content,
-            is_error: false,
-            injected_messages: vec![InjectedMessage { text: decoration }],
+        event
+            .result
+            .injected_messages
+            .push(InjectedMessage { text: decoration });
+    }
+
+    async fn doctor(&self) -> DoctorReport {
+        let configs = self.lsp.configs.read().await;
+        let enabled = configs.settings().enabled;
+        let server_count = configs.servers().len();
+        let enabled_count = configs.servers().iter().filter(|c| c.enabled).count();
+
+        DoctorReport {
+            module: "lsp".to_string(),
+            status: if enabled {
+                DoctorStatus::Healthy
+            } else {
+                DoctorStatus::Disabled
+            },
+            checks: vec![
+                DoctorCheck {
+                    name: "LSP enabled".to_string(),
+                    passed: enabled,
+                    message: if enabled {
+                        format!("{}/{} servers enabled", enabled_count, server_count)
+                    } else {
+                        "LSP globally disabled".to_string()
+                    },
+                },
+            ],
         }
     }
 }
 
-impl LspDecoratedFsHandler {
-    /// Find which project path contains this file.
-    fn find_project_for_file(&self, file_path: &str) -> Option<String> {
-        self.project_paths
-            .iter()
-            .find(|p| file_path.starts_with(p.as_str()))
-            .cloned()
+impl LspModule {
+    /// Resolve project paths for a conversation.
+    /// Uses the conversation's workspace if set, otherwise falls back to all projects.
+    async fn resolve_project_paths(&self, conversation_id: &str) -> Vec<String> {
+        // Get the conversation's workspace_id
+        let workspace_id = match self.threads.get(conversation_id).await {
+            Ok(Some(conv)) => conv.workspace_id,
+            _ => None,
+        };
+
+        if let Some(ws_id) = workspace_id {
+            let ws_store = self.workspaces.read().await;
+            if let Some(ws) = ws_store.get(&ws_id) {
+                let project_ids = ws.project_ids.clone();
+                drop(ws_store);
+                let proj_store = self.projects.read().await;
+                let paths: Vec<String> = project_ids
+                    .iter()
+                    .filter_map(|pid| proj_store.get(pid).map(|p| p.path.clone()))
+                    .collect();
+                if !paths.is_empty() {
+                    return paths;
+                }
+            }
+        }
+
+        // Fallback: all configured projects
+        let proj_store = self.projects.read().await;
+        proj_store.list().iter().map(|p| p.path.clone()).collect()
     }
 }
 
-/// Extract the primary file path from tool arguments.
-fn extract_file_path(args_json: &str) -> Option<String> {
-    let args: serde_json::Value = serde_json::from_str(args_json).ok()?;
-    // Most file tools use "path" as the field name
-    args.get("path")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
+/// Find which project path contains this file.
+fn find_project_for_file(project_paths: &[String], file_path: &str) -> Option<String> {
+    project_paths
+        .iter()
+        .find(|p| file_path.starts_with(p.as_str()))
+        .cloned()
 }
 
 /// Read file content from disk (for write/edit operations where we need
@@ -147,8 +235,6 @@ fn format_report(report: &DiagnosticReport) -> String {
         DiagnosticStatus::Ready(diagnostics) => {
             let body = format_diagnostics(diagnostics);
             if body.is_empty() {
-                // Clean file — emit a minimal status tag so the model
-                // (and the user) knows LSP analyzed the file.
                 format!(
                     "<lsp_diagnostics server=\"{}\" status=\"clean\" />",
                     report.server_name,
@@ -228,19 +314,21 @@ mod tests {
     }
 
     #[test]
-    fn extract_file_path_from_args() {
-        let args = r#"{"path": "/home/user/src/main.rs", "description": "read file"}"#;
-        assert_eq!(extract_file_path(args), Some("/home/user/src/main.rs".into()));
+    fn find_project_for_file_matches() {
+        let paths = vec!["/home/user/project".to_string()];
+        assert_eq!(
+            find_project_for_file(&paths, "/home/user/project/src/main.rs"),
+            Some("/home/user/project".to_string())
+        );
     }
 
     #[test]
-    fn extract_file_path_missing_returns_none() {
-        assert_eq!(extract_file_path(r#"{"content": "hello"}"#), None);
-    }
-
-    #[test]
-    fn extract_file_path_invalid_json_returns_none() {
-        assert_eq!(extract_file_path("not json"), None);
+    fn find_project_for_file_no_match() {
+        let paths = vec!["/home/user/project".to_string()];
+        assert_eq!(
+            find_project_for_file(&paths, "/other/path/main.rs"),
+            None
+        );
     }
 
     #[test]
@@ -283,7 +371,6 @@ mod tests {
         let output = format_diagnostics(&diags);
         assert!(output.contains("1 error(s):"));
         assert!(output.contains("1 warning(s):"));
-        // Info-level diagnostics are excluded
         assert!(!output.contains("info msg"));
     }
 
