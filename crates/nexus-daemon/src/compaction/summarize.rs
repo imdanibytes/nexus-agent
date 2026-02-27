@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use crate::anthropic::AnthropicClient;
+use nexus_anthropic::AnthropicClient;
 use crate::conversation::types::{ChatMessage, MessagePart, MessageRole};
 
 /// Find a safe split point that doesn't separate tool calls from their results.

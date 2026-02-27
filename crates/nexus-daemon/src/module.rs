@@ -8,7 +8,7 @@ pub use nexus_core::*;
 // nexus-core and nexus-provider respectively), so we can't impl From due to
 // the orphan rule. Standalone conversion functions instead.
 
-use crate::anthropic::types as api;
+use nexus_provider::types as api;
 
 pub fn stop_reason_from_api(sr: &api::StopReason) -> StopReason {
     match sr {

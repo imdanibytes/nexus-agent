@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::Deserialize;
 
-use crate::anthropic::types::{ContentBlock, Message, Role, Tool};
+use nexus_provider::types::{ContentBlock, Message, Role, Tool};
 use crate::bg_process::ProcessKind;
 use crate::config::{FetchConfig, FilesystemConfig};
 use crate::provider::InferenceProvider;

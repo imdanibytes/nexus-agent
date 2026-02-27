@@ -5,7 +5,7 @@ use anyhow::Result;
 use futures::StreamExt;
 use tokio_util::sync::CancellationToken;
 
-use crate::anthropic::types::*;
+use nexus_provider::types::*;
 use crate::bg_process::ProcessManager;
 use crate::bg_process::tools::BgProcessToolHandler;
 use crate::system_prompt::fence_tool_result;
@@ -131,7 +131,7 @@ pub async fn run_agent_turn(
         // Mid-turn context compaction: prune tool results before they overflow.
         // On round 0 the caller (turn.rs) already compacted, so skip.
         if round > 0 {
-            let estimated = crate::compaction::estimate_tokens(
+            let estimated = nexus_compaction::estimate_tokens(
                 &messages,
                 inference.system_prompt.as_deref(),
                 &tools,
@@ -154,7 +154,7 @@ pub async fn run_agent_turn(
                     threshold = aggressive_threshold,
                     "Mid-turn aggressive pruning (>85% context)"
                 );
-                crate::compaction::prune_tool_results(&mut messages, 1);
+                nexus_compaction::prune_tool_results(&mut messages, 1);
             } else if estimated > prune_threshold {
                 // HOOK: PreCompact
                 services.modules.fire_pre_compact(&PreCompactEvent {
@@ -170,7 +170,7 @@ pub async fn run_agent_turn(
                     threshold = prune_threshold,
                     "Mid-turn pruning (>70% context)"
                 );
-                crate::compaction::prune_tool_results(&mut messages, 3);
+                nexus_compaction::prune_tool_results(&mut messages, 3);
             }
         }
 
@@ -208,7 +208,7 @@ pub async fn run_agent_turn(
                         if matches!(pe.kind, crate::provider::error::ProviderErrorKind::ContextLength) {
                             retried_after_prune = true;
                             tracing::warn!("Context length exceeded, aggressive pruning and retrying");
-                            crate::compaction::prune_tool_results(&mut messages, 1);
+                            nexus_compaction::prune_tool_results(&mut messages, 1);
                             continue;
                         }
                     }
@@ -337,7 +337,7 @@ pub async fn run_agent_turn(
         );
 
         // Calculate cost for this round (cache-aware)
-        let round_cost = crate::pricing::calculate_cost_with_cache(
+        let round_cost = nexus_pricing::calculate_cost_with_cache(
             inference.model,
             round_input_tokens,
             round_cache_creation,

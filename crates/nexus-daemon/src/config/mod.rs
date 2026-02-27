@@ -1,7 +1,4 @@
-mod fetch;
-
-pub use fetch::*;
-pub use nexus_tools::config::FilesystemConfig;
+pub use nexus_tools::config::{FetchConfig, FetchPolicy, FilesystemConfig};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};

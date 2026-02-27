@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
-use crate::anthropic::types::Tool;
+use nexus_provider::types::Tool;
 
 // ── Types ──
 

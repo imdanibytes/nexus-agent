@@ -3,7 +3,7 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::agent::emitter::TurnEmitter;
-use crate::anthropic::types::Tool;
+use nexus_provider::types::Tool;
 use super::store::{TaskStateStore, derive_mode};
 use super::types::{Plan, Task, TaskStatus};
 

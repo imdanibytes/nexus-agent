@@ -34,7 +34,7 @@ pub struct TimingSpan {
 /// Always contains partial results — even when the turn ended with an error,
 /// messages from completed rounds are included so they can be persisted.
 pub struct AgentTurnResult {
-    pub messages: Vec<crate::anthropic::types::Message>,
+    pub messages: Vec<nexus_provider::types::Message>,
     pub timing_spans: Vec<TimingSpan>,
     pub input_tokens: u32,
     pub output_tokens: u32,
@@ -64,8 +64,8 @@ pub struct InferenceConfig<'a> {
 /// Conversation context for a single turn.
 pub struct TurnContext {
     pub conversation_id: String,
-    pub messages: Vec<crate::anthropic::types::Message>,
-    pub tools: Vec<crate::anthropic::types::Tool>,
+    pub messages: Vec<nexus_provider::types::Message>,
+    pub tools: Vec<nexus_provider::types::Tool>,
     pub prior_cost: f64,
     pub depth: u32,
 }
@@ -85,5 +85,5 @@ pub struct TurnServices<'a> {
 }
 
 pub fn context_window_for_model(model: &str) -> u32 {
-    crate::pricing::context_window(model)
+    nexus_pricing::context_window(model)
 }

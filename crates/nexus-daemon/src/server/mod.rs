@@ -24,7 +24,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
 use crate::agent_config::AgentService;
-use crate::anthropic::AnthropicClient;
+use nexus_anthropic::AnthropicClient;
 use crate::config::{FilesystemConfig, NexusConfig};
 use crate::event_bus::EventBus;
 use crate::module::ModuleRegistry;

@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 
-use crate::anthropic::types::{
+use nexus_provider::types::{
     ContentBlock, Delta, Message, Role, StreamEvent,
 };
 use crate::conversation::types::{ChatMessage, MessagePart, MessageRole};
@@ -184,7 +184,7 @@ async fn call_title_model(
         }
     }
 
-    let cost = crate::pricing::calculate_cost(model, input_tokens, output_tokens);
+    let cost = nexus_pricing::calculate_cost(model, input_tokens, output_tokens);
 
     let text = text.trim().to_string();
 

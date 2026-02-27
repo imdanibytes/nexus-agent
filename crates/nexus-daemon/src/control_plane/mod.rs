@@ -9,7 +9,7 @@ use tokio::sync::RwLock;
 
 use crate::agent_config::AgentService;
 use crate::agent_config::store::{AgentUpdate, CreateAgentParams};
-use crate::anthropic::types::Tool;
+use nexus_provider::types::Tool;
 use crate::event_bus::EventBus;
 use crate::mcp::store::McpServerUpdate;
 use crate::mcp::{ClientHandlerState, McpManager};

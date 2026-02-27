@@ -434,7 +434,7 @@ pub async fn answer_question(
 }
 
 /// Resolve MCP tools filtered by the active agent's mcp_server_ids.
-async fn resolve_mcp_tools(state: &AppState) -> Vec<crate::anthropic::types::Tool> {
+async fn resolve_mcp_tools(state: &AppState) -> Vec<nexus_provider::types::Tool> {
     let mcp = state.mcp.mcp.read().await;
     let agent = state.agents.active_agent().await;
     match agent.and_then(|a| a.mcp_server_ids).as_ref() {

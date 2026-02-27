@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::anthropic::types::{ContentBlock, Message, Role};
+use nexus_provider::types::{ContentBlock, Message, Role};
 use crate::system_prompt::{fence_tool_result, fence_user_message};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

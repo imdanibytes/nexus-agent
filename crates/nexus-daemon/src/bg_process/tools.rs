@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 
 use crate::agent::tool_dispatch::{ToolContext, ToolHandler, ToolResult};
-use crate::anthropic::types::Tool;
+use nexus_provider::types::Tool;
 use super::manager::ProcessManager;
 
 const PROCESS_OUTPUT: &str = "process_output";

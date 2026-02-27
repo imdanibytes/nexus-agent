@@ -1,16 +1,12 @@
 mod agent;
 mod agent_config;
-mod anthropic;
 mod ask_user;
-mod bash;
 mod bg_process;
 mod compaction;
 mod config;
 mod control_plane;
 mod conversation;
 mod event_bus;
-mod fetch;
-mod filesystem;
 #[cfg(debug_assertions)]
 mod hook_probe;
 mod lsp;
@@ -18,7 +14,6 @@ mod mcp;
 mod mcp_resources;
 mod mechanics;
 pub mod module;
-mod pricing;
 mod provider;
 mod retry;
 mod server;
@@ -34,7 +29,7 @@ use std::sync::Arc;
 
 use crate::agent_config::{AgentService, AgentStore};
 use crate::agent_config::store::CreateAgentParams;
-use crate::anthropic::AnthropicClient;
+use nexus_anthropic::AnthropicClient;
 use crate::config::NexusConfig;
 use crate::conversation::ConversationStore;
 use crate::event_bus::EventBus;

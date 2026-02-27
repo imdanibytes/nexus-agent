@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::agent;
 use crate::agent::emitter::TurnEmitter;
 use crate::agent::{AgentTurnResult, TimingSpan};
-use crate::anthropic::types::{ContentBlock, Message, Role};
+use nexus_provider::types::{ContentBlock, Message, Role};
 use crate::conversation::types::{
     ChatMessage, ConversationUsage, MessagePart, MessageRole, MessageSource, Span,
 };
@@ -20,7 +20,7 @@ use crate::tasks::types::AgentMode;
 pub struct TurnRequest {
     pub conversation_id: String,
     pub api_messages: Vec<Message>,
-    pub tools: Vec<crate::anthropic::types::Tool>,
+    pub tools: Vec<nexus_provider::types::Tool>,
     pub cancel: tokio_util::sync::CancellationToken,
     pub run_id: String,
     pub assistant_message_id: Option<String>,
@@ -83,21 +83,21 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
         tools.push(crate::ask_user::tool_definition());
         tools.push(crate::agent::sub_agent::tool_definition());
         if state_clone.config.fetch.enabled {
-            tools.push(crate::fetch::tool_definition());
+            tools.push(nexus_tools::fetch::tool_definition());
         }
-        tools.push(crate::bash::tool_definition());
+        tools.push(nexus_tools::bash::tool_definition());
         tools.extend(crate::bg_process::tools::tool_definitions());
         tools.extend(crate::mcp_resources::tool_definitions());
         tools.extend(crate::control_plane::tool_definitions());
         let effective_fs = state_clone.effective_fs_config.read().await.clone();
-        tools.extend(crate::filesystem::tool_definitions(&effective_fs));
+        tools.extend(nexus_tools::filesystem::tool_definitions(&effective_fs));
         // HOOK: ToolRegister — collect tools from modules.
         tools.extend(
             state_clone.modules.collect_tools()
                 .into_iter()
                 .map(crate::module::tool_from_definition)
         );
-        crate::anthropic::types::inject_tool_description_field(&mut tools);
+        nexus_provider::types::inject_tool_description_field(&mut tools);
 
         // 3. Derive agent mode + plan context from task state
         let (mode, mode_enum, plan_context) = resolve_task_mode(&state_clone, &conversation_id).await;
@@ -446,7 +446,7 @@ async fn resolve_task_mode(
 async fn compact_context(
     api_messages: &mut Vec<Message>,
     system_prompt: &str,
-    tools: &[crate::anthropic::types::Tool],
+    tools: &[nexus_provider::types::Tool],
     context_window: u32,
     mode_enum: AgentMode,
     state: &AppState,
@@ -454,13 +454,13 @@ async fn compact_context(
     emitter: &TurnEmitter,
 ) {
     let estimated_tokens =
-        crate::compaction::estimate_tokens(api_messages, Some(system_prompt), tools);
+        nexus_compaction::estimate_tokens(api_messages, Some(system_prompt), tools);
 
     // Layer 1: Tool result pruning
     let prune_threshold =
-        (context_window as f64 * crate::compaction::PRUNE_THRESHOLD_PCT) as u32;
+        (context_window as f64 * nexus_compaction::PRUNE_THRESHOLD_PCT) as u32;
     if estimated_tokens > prune_threshold {
-        crate::compaction::prune_tool_results(api_messages, 3);
+        nexus_compaction::prune_tool_results(api_messages, 3);
     }
 
     // Layer 2: LLM summarization
@@ -468,7 +468,7 @@ async fn compact_context(
     let summarize_pct = if mode_enum == AgentMode::Execution {
         0.4
     } else {
-        crate::compaction::SUMMARIZE_THRESHOLD_PCT
+        nexus_compaction::SUMMARIZE_THRESHOLD_PCT
     };
     let summarize_threshold = (effective_window as f64 * summarize_pct) as u32;
 
@@ -720,7 +720,7 @@ pub async fn drain_queue_and_follow_up(
     }
 
     let mcp_guard = state.mcp.mcp.read().await;
-    let tools: Vec<crate::anthropic::types::Tool> = mcp_guard.tools();
+    let tools: Vec<nexus_provider::types::Tool> = mcp_guard.tools();
     drop(mcp_guard);
 
     // Register the follow-up turn so the queue watcher skips this conversation

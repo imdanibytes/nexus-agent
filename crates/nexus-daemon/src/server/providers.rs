@@ -101,9 +101,9 @@ pub async fn test_connection(
     match state.providers.get_client(&provider).await {
         Ok(client) => {
             // Send a minimal request to test the connection
-            let messages = vec![crate::anthropic::types::Message {
-                role: crate::anthropic::types::Role::User,
-                content: vec![crate::anthropic::types::ContentBlock::Text {
+            let messages = vec![nexus_provider::types::Message {
+                role: nexus_provider::types::Role::User,
+                content: vec![nexus_provider::types::ContentBlock::Text {
                     text: "Hi".to_string(),
                 }],
             }];
@@ -165,9 +165,9 @@ pub async fn test_inline(
         }
     };
 
-    let messages = vec![crate::anthropic::types::Message {
-        role: crate::anthropic::types::Role::User,
-        content: vec![crate::anthropic::types::ContentBlock::Text {
+    let messages = vec![nexus_provider::types::Message {
+        role: nexus_provider::types::Role::User,
+        content: vec![nexus_provider::types::ContentBlock::Text {
             text: "Hi".to_string(),
         }],
     }];

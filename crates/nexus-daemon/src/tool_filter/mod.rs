@@ -1,4 +1,4 @@
-use crate::anthropic::types::Tool;
+use nexus_provider::types::Tool;
 use crate::tasks::types::AgentMode;
 
 /// Snapshot of plan state for filter decisions.

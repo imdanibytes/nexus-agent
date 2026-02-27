@@ -5,11 +5,11 @@ use uuid::Uuid;
 use std::sync::Arc;
 
 use crate::ask_user::{self, AskUserArgs, PendingQuestion, PendingQuestionStore, UserAnswer};
-use crate::bash;
+use nexus_tools::bash;
 use crate::bg_process::{ProcessKind, ProcessManager};
 use crate::config::{FetchConfig, FilesystemConfig};
-use crate::fetch;
-use crate::filesystem;
+use nexus_tools::fetch;
+use nexus_tools::filesystem;
 use crate::mcp::McpManager;
 use crate::module;
 use crate::tasks;

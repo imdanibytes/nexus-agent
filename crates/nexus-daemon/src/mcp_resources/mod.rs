@@ -1,4 +1,4 @@
-use crate::anthropic::types::Tool;
+use nexus_provider::types::Tool;
 use crate::mcp::McpManager;
 
 const LIST_TOOL: &str = "mcp_list_resources";

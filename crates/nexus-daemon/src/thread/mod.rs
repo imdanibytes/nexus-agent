@@ -68,7 +68,7 @@ impl ThreadService {
     pub async fn build_api_messages(
         &self,
         id: &str,
-    ) -> Result<Vec<crate::anthropic::types::Message>> {
+    ) -> Result<Vec<nexus_provider::types::Message>> {
         let conv = self
             .get(id)
             .await?

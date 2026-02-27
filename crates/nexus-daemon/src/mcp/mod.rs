@@ -5,7 +5,7 @@ pub mod store;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use crate::anthropic::types::Tool as AnthropicTool;
+use nexus_provider::types::Tool as AnthropicTool;
 use crate::config::McpServerConfig;
 pub use handler::ClientHandlerState;
 use server::McpServer;
