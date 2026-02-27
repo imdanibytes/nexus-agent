@@ -4,4 +4,3 @@ pub mod types;
 
 pub use service::AgentService;
 pub use store::AgentStore;
-pub use types::AgentEntry;

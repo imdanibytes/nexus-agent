@@ -86,10 +86,10 @@ fn parse_sse_event(text: &str) -> Result<Option<StreamEvent>> {
             event_type = Some(value.trim().to_string());
         } else if let Some(value) = line.strip_prefix("data: ") {
             data = Some(value.to_string());
-        } else if line.starts_with("event:") {
-            event_type = Some(line["event:".len()..].trim().to_string());
-        } else if line.starts_with("data:") {
-            data = Some(line["data:".len()..].trim().to_string());
+        } else if let Some(value) = line.strip_prefix("event:") {
+            event_type = Some(value.trim().to_string());
+        } else if let Some(value) = line.strip_prefix("data:") {
+            data = Some(value.trim().to_string());
         }
     }
 

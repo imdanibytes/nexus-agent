@@ -18,6 +18,7 @@ impl McpServerStore {
         &self.configs
     }
 
+    #[allow(dead_code)] // part of store API
     pub fn get(&self, id: &str) -> Option<&McpServerConfig> {
         self.configs.iter().find(|c| c.id == id)
     }

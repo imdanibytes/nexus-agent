@@ -9,8 +9,10 @@ use super::bedrock_provider::BedrockProvider;
 use super::types::{Provider, ProviderType};
 use super::InferenceProvider;
 
+type ProviderCache = HashMap<String, (DateTime<Utc>, Arc<dyn InferenceProvider>)>;
+
 pub struct ProviderFactory {
-    cache: RwLock<HashMap<String, (DateTime<Utc>, Arc<dyn InferenceProvider>)>>,
+    cache: RwLock<ProviderCache>,
 }
 
 impl ProviderFactory {

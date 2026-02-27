@@ -15,6 +15,7 @@ use super::tool_dispatch::{
     self, AskUserHandler, BashHandler, FetchHandler, FilesystemHandler, McpToolHandler,
     TaskToolHandler, ToolContext,
 };
+use crate::provider::InferenceRequest;
 use super::{AgentTurnResult, InferenceConfig, TimingSpan, TurnContext, TurnServices};
 
 const MAX_ROUNDS: usize = 50;
@@ -157,15 +158,15 @@ pub async fn run_agent_turn(
         }
 
         let stream = match inference.provider
-            .create_message_stream(
-                inference.model,
-                inference.max_tokens,
-                inference.system_prompt.clone(),
-                inference.temperature,
-                inference.thinking_budget,
-                messages_for_api,
-                tools.clone(),
-            )
+            .create_message_stream(InferenceRequest {
+                model: inference.model.to_string(),
+                max_tokens: inference.max_tokens,
+                system: inference.system_prompt.clone(),
+                temperature: inference.temperature,
+                thinking_budget: inference.thinking_budget,
+                messages: messages_for_api,
+                tools: tools.clone(),
+            })
             .await
         {
             Ok(s) => s,

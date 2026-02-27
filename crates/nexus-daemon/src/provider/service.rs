@@ -3,8 +3,8 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use super::factory::ProviderFactory;
-use super::store::{ProviderStore, ProviderUpdate};
-use super::types::{Provider, ProviderType};
+use super::store::{CreateProviderParams, ProviderStore, ProviderUpdate};
+use super::types::Provider;
 use super::InferenceProvider;
 use crate::event_bus::EventBus;
 
@@ -51,6 +51,7 @@ impl ProviderService {
     }
 
     /// Look up a provider by ID and return a cached inference client.
+    #[allow(dead_code)] // part of service API
     pub async fn get_client_by_id(&self, id: &str) -> Result<Option<Arc<dyn InferenceProvider>>> {
         let provider = {
             let store = self.store.read().await;
@@ -65,18 +66,8 @@ impl ProviderService {
 
     // -- Writes ---------------------------------------------------------------
 
-    pub async fn create(
-        &self,
-        name: String,
-        provider_type: ProviderType,
-        endpoint: Option<String>,
-        api_key: Option<String>,
-        aws_region: Option<String>,
-        aws_profile: Option<String>,
-    ) -> Result<Provider> {
-        let provider = self.store.write().await.create(
-            name, provider_type, endpoint, api_key, aws_region, aws_profile,
-        )?;
+    pub async fn create(&self, params: CreateProviderParams) -> Result<Provider> {
+        let provider = self.store.write().await.create(params)?;
         self.event_bus.emit_global("data:provider_created", serde_json::to_value(&provider).unwrap_or_default());
         Ok(provider)
     }

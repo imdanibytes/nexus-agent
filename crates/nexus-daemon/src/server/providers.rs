@@ -4,7 +4,8 @@ use axum::Json;
 use serde::Deserialize;
 use std::sync::Arc;
 
-use crate::provider::store::ProviderUpdate;
+use crate::provider::InferenceRequest;
+use crate::provider::store::{CreateProviderParams, ProviderUpdate};
 use crate::provider::types::{Provider, ProviderPublic, ProviderType};
 use crate::server::AppState;
 
@@ -22,14 +23,14 @@ pub async fn create(
 ) -> Result<(StatusCode, Json<serde_json::Value>), StatusCode> {
     let provider = state
         .providers
-        .create(
-            body.name,
-            body.provider_type,
-            body.endpoint,
-            body.api_key,
-            body.aws_region,
-            body.aws_profile,
-        )
+        .create(CreateProviderParams {
+            name: body.name,
+            provider_type: body.provider_type,
+            endpoint: body.endpoint,
+            api_key: body.api_key,
+            aws_region: body.aws_region,
+            aws_profile: body.aws_profile,
+        })
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -113,7 +114,15 @@ pub async fn test_connection(
             };
 
             match client
-                .create_message_stream(model, 1, None, None, None, messages, vec![])
+                .create_message_stream(InferenceRequest {
+                    model: model.to_string(),
+                    max_tokens: 1,
+                    system: None,
+                    temperature: None,
+                    thinking_budget: None,
+                    messages,
+                    tools: vec![],
+                })
                 .await
             {
                 Ok(_) => Ok(Json(serde_json::json!({ "ok": true }))),
@@ -164,7 +173,15 @@ pub async fn test_inline(
     }];
 
     match client
-        .create_message_stream(test_model, 1, None, None, None, messages, vec![])
+        .create_message_stream(InferenceRequest {
+            model: test_model.to_string(),
+            max_tokens: 1,
+            system: None,
+            temperature: None,
+            thinking_budget: None,
+            messages,
+            tools: vec![],
+        })
         .await
     {
         Ok(_) => Json(serde_json::json!({ "ok": true })),

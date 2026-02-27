@@ -375,6 +375,7 @@ async fn resolve_task_mode(
 ///
 /// Layer 1: Mechanical tool result pruning (no LLM call).
 /// Layer 2: LLM summarization with span tracking.
+#[allow(clippy::too_many_arguments)]
 async fn compact_context(
     api_messages: &mut Vec<Message>,
     system_prompt: &str,
@@ -505,6 +506,7 @@ fn adjust_timing_spans(timing_spans: &mut Vec<TimingSpan>, setup_duration_ms: u6
 }
 
 /// Convert API messages to ChatMessages, inject metadata, and save to store.
+#[allow(clippy::too_many_arguments)]
 async fn persist_turn_results(
     state: &AppState,
     conversation_id: &str,

@@ -4,10 +4,10 @@ use futures::stream::BoxStream;
 use futures::StreamExt;
 
 use crate::anthropic::types::{
-    inject_cache_control, Message, MessagesRequest, StreamEvent, ThinkingConfig, Tool,
+    inject_cache_control, MessagesRequest, StreamEvent, ThinkingConfig,
 };
 use crate::anthropic::AnthropicClient;
-use crate::provider::InferenceProvider;
+use crate::provider::{InferenceProvider, InferenceRequest};
 
 /// Beta header required for extended thinking.
 const THINKING_BETA_HEADER: &str = "interleaved-thinking-2025-05-14";
@@ -31,16 +31,10 @@ impl AnthropicProvider {
 impl InferenceProvider for AnthropicProvider {
     async fn create_message_stream(
         &self,
-        model: &str,
-        max_tokens: u32,
-        system: Option<String>,
-        temperature: Option<f32>,
-        thinking_budget: Option<u32>,
-        messages: Vec<Message>,
-        tools: Vec<Tool>,
+        request: InferenceRequest,
     ) -> Result<BoxStream<'static, Result<StreamEvent>>> {
         // When thinking is enabled, temperature must be omitted (API requirement)
-        let (temperature, thinking) = match thinking_budget {
+        let (temperature, thinking) = match request.thinking_budget {
             Some(budget) => (
                 None,
                 Some(ThinkingConfig {
@@ -48,26 +42,28 @@ impl InferenceProvider for AnthropicProvider {
                     budget_tokens: budget,
                 }),
             ),
-            None => (temperature, None),
+            None => (request.temperature, None),
         };
 
-        let request = MessagesRequest {
-            model: model.to_string(),
-            max_tokens,
-            system,
-            messages,
-            tools,
+        let has_thinking = request.thinking_budget.is_some();
+
+        let api_request = MessagesRequest {
+            model: request.model.clone(),
+            max_tokens: request.max_tokens,
+            system: request.system,
+            messages: request.messages,
+            tools: request.tools,
             stream: true,
             temperature,
             thinking,
         };
 
         // Serialize to JSON, inject prompt caching breakpoints, send raw
-        let mut body = serde_json::to_value(&request)?;
+        let mut body = serde_json::to_value(&api_request)?;
         inject_cache_control(&mut body);
 
         // Add beta header for extended thinking
-        let extra_headers = if thinking_budget.is_some() {
+        let extra_headers = if has_thinking {
             Some(vec![("anthropic-beta", THINKING_BETA_HEADER)])
         } else {
             None

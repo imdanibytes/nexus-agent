@@ -5,6 +5,16 @@ use uuid::Uuid;
 use super::types::{Provider, ProviderType};
 use crate::config::NexusConfig;
 
+/// Parameters for creating a new provider.
+pub struct CreateProviderParams {
+    pub name: String,
+    pub provider_type: ProviderType,
+    pub endpoint: Option<String>,
+    pub api_key: Option<String>,
+    pub aws_region: Option<String>,
+    pub aws_profile: Option<String>,
+}
+
 pub struct ProviderStore {
     providers: Vec<Provider>,
 }
@@ -22,24 +32,16 @@ impl ProviderStore {
         self.providers.iter().find(|p| p.id == id)
     }
 
-    pub fn create(
-        &mut self,
-        name: String,
-        provider_type: ProviderType,
-        endpoint: Option<String>,
-        api_key: Option<String>,
-        aws_region: Option<String>,
-        aws_profile: Option<String>,
-    ) -> Result<Provider> {
+    pub fn create(&mut self, params: CreateProviderParams) -> Result<Provider> {
         let now = Utc::now();
         let provider = Provider {
             id: Uuid::new_v4().to_string(),
-            name,
-            provider_type,
-            endpoint,
-            api_key,
-            aws_region,
-            aws_profile,
+            name: params.name,
+            provider_type: params.provider_type,
+            endpoint: params.endpoint,
+            api_key: params.api_key,
+            aws_region: params.aws_region,
+            aws_profile: params.aws_profile,
             created_at: now,
             updated_at: now,
         };

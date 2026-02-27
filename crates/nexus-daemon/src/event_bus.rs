@@ -15,6 +15,7 @@ pub struct EventBus {
     tx: broadcast::Sender<EventEnvelope>,
 }
 
+#[allow(dead_code)] // core API surface: new, sender, subscribe used across services
 impl EventBus {
     pub fn new() -> Self {
         let (tx, _) = broadcast::channel(4096);

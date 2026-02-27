@@ -32,6 +32,7 @@ impl ThreadService {
     }
 
     /// Access to the EventBus (for callers that need to emit non-data events).
+    #[allow(dead_code)] // part of service API
     pub fn event_bus(&self) -> &EventBus {
         &self.event_bus
     }
@@ -63,6 +64,7 @@ impl ThreadService {
     }
 
     /// Build Anthropic API messages for a conversation.
+    #[allow(dead_code)] // part of service API
     pub async fn build_api_messages(
         &self,
         id: &str,
@@ -122,6 +124,7 @@ impl ThreadService {
     }
 
     /// Add a single message to a conversation's active path and persist.
+    #[allow(dead_code)] // part of service API
     pub async fn add_message(&self, id: &str, msg: ChatMessage) -> Result<()> {
         let msg_id = msg.id.clone();
 
@@ -149,6 +152,7 @@ impl ThreadService {
     }
 
     /// Add multiple messages and path IDs, then persist.
+    #[allow(dead_code)] // part of service API
     pub async fn add_messages(
         &self,
         id: &str,
@@ -179,6 +183,7 @@ impl ThreadService {
     }
 
     /// Replace the active path for a conversation and persist.
+    #[allow(dead_code)] // part of service API
     pub async fn update_path(&self, id: &str, new_path: Vec<String>) -> Result<()> {
         let mut store = self.store.write().await;
         let mut conv = store
@@ -197,6 +202,7 @@ impl ThreadService {
     }
 
     /// Update usage stats for a conversation and persist.
+    #[allow(dead_code)] // part of service API
     pub async fn update_usage(&self, id: &str, usage: ConversationUsage) -> Result<()> {
         let mut store = self.store.write().await;
         let mut conv = store

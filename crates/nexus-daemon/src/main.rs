@@ -27,6 +27,7 @@ use anyhow::Result;
 use std::sync::Arc;
 
 use crate::agent_config::{AgentService, AgentStore};
+use crate::agent_config::store::CreateAgentParams;
 use crate::anthropic::AnthropicClient;
 use crate::config::NexusConfig;
 use crate::conversation::ConversationStore;
@@ -34,6 +35,7 @@ use crate::event_bus::EventBus;
 use crate::mcp::store::McpServerStore;
 use crate::mcp::{ClientHandlerState, McpManager};
 use crate::provider::{ProviderService, ProviderStore, ProviderType};
+use crate::provider::store::CreateProviderParams;
 use crate::server::sse::AgentEventBridge;
 use crate::server::{AppState, McpService, TurnManager};
 use crate::thread::ThreadService;
@@ -83,24 +85,25 @@ async fn main() -> Result<()> {
     if provider_store.list().is_empty() {
         if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
             tracing::info!("No providers configured — seeding default from ANTHROPIC_API_KEY");
-            let provider = provider_store.create(
-                "Default (Anthropic)".to_string(),
-                ProviderType::Anthropic,
-                None,
-                Some(api_key),
-                None,
-                None,
-            )?;
+            let provider = provider_store.create(CreateProviderParams {
+                name: "Default (Anthropic)".to_string(),
+                provider_type: ProviderType::Anthropic,
+                endpoint: None,
+                api_key: Some(api_key),
+                aws_region: None,
+                aws_profile: None,
+            })?;
 
             if agent_store.list().is_empty() {
-                let agent = agent_store.create(
-                    "Default Agent".to_string(),
-                    provider.id.clone(),
-                    config.api.model.clone(),
-                    config.agent.system_prompt.clone(),
-                    None,
-                    Some(config.api.max_tokens),
-                )?;
+                let agent = agent_store.create(CreateAgentParams {
+                    name: "Default Agent".to_string(),
+                    provider_id: provider.id.clone(),
+                    model: config.api.model.clone(),
+                    system_prompt: config.agent.system_prompt.clone(),
+                    temperature: None,
+                    max_tokens: Some(config.api.max_tokens),
+                    mcp_server_ids: None,
+                })?;
                 agent_store.set_active(Some(agent.id))?;
                 tracing::info!("Created default agent with model {}", config.api.model);
             }

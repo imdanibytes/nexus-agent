@@ -8,6 +8,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::provider::error::{ProviderError, ProviderErrorKind};
 
+/// Callback signature for retry notifications: (attempt, max_attempts, error_kind, delay_ms).
+type RetryNotifyFn = dyn Fn(u32, u32, &ProviderErrorKind, u64);
+
 const MAX_ATTEMPTS: u32 = 3;
 const INITIAL_DELAY_MS: u64 = 1000;
 const MAX_DELAY_MS: u64 = 30_000;
@@ -31,9 +34,10 @@ pub fn backoff_delay(attempt: u32) -> u64 {
 /// Non-retryable errors are returned immediately. Respects cancellation.
 ///
 /// Returns a tuple of (result, attempt_count) so callers can log retry info.
+#[allow(dead_code)] // utility function, will be wired into agent turn loop
 pub async fn with_backoff<F, Fut, T>(
     cancel: &CancellationToken,
-    notify: Option<&dyn Fn(u32, u32, &ProviderErrorKind, u64)>,
+    notify: Option<&RetryNotifyFn>,
     mut f: F,
 ) -> (Result<T>, u32)
 where

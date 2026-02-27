@@ -46,6 +46,7 @@ pub struct UserAnswer {
 }
 
 /// A question waiting for user input. Holds the oneshot sender to resume the agent turn.
+#[allow(dead_code)] // fields used when serving pending questions to the frontend
 pub struct PendingQuestion {
     pub id: String,
     pub conversation_id: String,
@@ -76,6 +77,7 @@ impl PendingQuestionStore {
         self.questions.remove(question_id)
     }
 
+    #[allow(dead_code)] // part of store API, will be used by question listing endpoint
     pub fn get_for_conversation(&self, conversation_id: &str) -> Vec<&PendingQuestion> {
         self.questions
             .values()

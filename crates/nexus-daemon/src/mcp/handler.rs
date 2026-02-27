@@ -55,60 +55,52 @@ impl ClientHandler for NexusClientHandler {
         }
     }
 
-    fn list_roots(
+    async fn list_roots(
         &self,
         _context: RequestContext<RoleClient>,
-    ) -> impl std::future::Future<Output = Result<ListRootsResult, McpError>> + Send + '_ {
-        async move {
-            let store = self.state.projects.read().await;
-            let roots: Vec<Root> = store
-                .list()
-                .iter()
-                .map(|p| Root {
-                    uri: format!("file://{}", p.path),
-                    name: Some(p.name.clone()),
-                })
-                .collect();
-            Ok(ListRootsResult { roots })
-        }
+    ) -> Result<ListRootsResult, McpError> {
+        let store = self.state.projects.read().await;
+        let roots: Vec<Root> = store
+            .list()
+            .iter()
+            .map(|p| Root {
+                uri: format!("file://{}", p.path),
+                name: Some(p.name.clone()),
+            })
+            .collect();
+        Ok(ListRootsResult { roots })
     }
 
-    fn on_logging_message(
+    async fn on_logging_message(
         &self,
         params: LoggingMessageNotificationParam,
         _context: NotificationContext<RoleClient>,
-    ) -> impl std::future::Future<Output = ()> + Send + '_ {
-        async move {
-            let logger = params.logger.as_deref().unwrap_or("mcp");
-            let data = &params.data;
-            match params.level {
-                LoggingLevel::Debug => tracing::debug!(logger, %data, "MCP server log"),
-                LoggingLevel::Info | LoggingLevel::Notice => {
-                    tracing::info!(logger, %data, "MCP server log")
-                }
-                LoggingLevel::Warning => tracing::warn!(logger, %data, "MCP server log"),
-                LoggingLevel::Error | LoggingLevel::Critical | LoggingLevel::Alert | LoggingLevel::Emergency => {
-                    tracing::error!(logger, %data, "MCP server log")
-                }
+    ) {
+        let logger = params.logger.as_deref().unwrap_or("mcp");
+        let data = &params.data;
+        match params.level {
+            LoggingLevel::Debug => tracing::debug!(logger, %data, "MCP server log"),
+            LoggingLevel::Info | LoggingLevel::Notice => {
+                tracing::info!(logger, %data, "MCP server log")
+            }
+            LoggingLevel::Warning => tracing::warn!(logger, %data, "MCP server log"),
+            LoggingLevel::Error | LoggingLevel::Critical | LoggingLevel::Alert | LoggingLevel::Emergency => {
+                tracing::error!(logger, %data, "MCP server log")
             }
         }
     }
 
-    fn on_tool_list_changed(
+    async fn on_tool_list_changed(
         &self,
         _context: NotificationContext<RoleClient>,
-    ) -> impl std::future::Future<Output = ()> + Send + '_ {
-        async {
-            tracing::info!("MCP server reported tool list changed (dynamic refresh not yet implemented)");
-        }
+    ) {
+        tracing::info!("MCP server reported tool list changed (dynamic refresh not yet implemented)");
     }
 
-    fn on_resource_list_changed(
+    async fn on_resource_list_changed(
         &self,
         _context: NotificationContext<RoleClient>,
-    ) -> impl std::future::Future<Output = ()> + Send + '_ {
-        async {
-            tracing::info!("MCP server reported resource list changed");
-        }
+    ) {
+        tracing::info!("MCP server reported resource list changed");
     }
 }

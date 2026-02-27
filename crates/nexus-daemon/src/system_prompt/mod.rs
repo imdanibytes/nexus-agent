@@ -26,6 +26,7 @@ pub struct PlanContext {
 }
 
 /// Context passed to each provider so it can decide what to emit.
+#[allow(dead_code)] // fields consumed by various SystemPromptProvider implementations
 pub struct SystemPromptContext {
     pub conversation_title: String,
     pub message_count: usize,
@@ -48,6 +49,7 @@ pub struct SystemPromptContext {
 }
 
 /// A composable section of the system prompt.
+#[allow(dead_code)] // trait methods used by implementations and builder
 pub trait SystemPromptProvider: Send + Sync {
     fn name(&self) -> &str;
     fn provide(&self, ctx: &SystemPromptContext) -> Option<String>;
@@ -88,6 +90,7 @@ impl SystemPromptBuilder {
 
     /// Build the final system prompt by running each provider in order.
     /// Includes both cacheable and dynamic providers in a single string.
+    #[allow(dead_code)] // non-split variant of build_parts, kept for simpler use cases
     pub fn build(&self, ctx: &SystemPromptContext) -> String {
         self.providers
             .iter()

@@ -36,6 +36,7 @@ enum McpRequest {
 /// The actual service runs in a background task; we communicate via channels.
 pub struct McpServer {
     pub id: String,
+    #[allow(dead_code)] // stored for display/logging purposes
     pub name: String,
     tools: Vec<rmcp::model::Tool>,
     tx: mpsc::Sender<McpRequest>,
@@ -149,7 +150,7 @@ impl McpServer {
                     McpRequest::ReadResource { uri, reply } => {
                         let result = service
                             .read_resource(ReadResourceRequestParams {
-                                uri: uri.into(),
+                                uri,
                                 meta: None,
                             })
                             .await

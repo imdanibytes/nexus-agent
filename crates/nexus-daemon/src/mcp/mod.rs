@@ -60,15 +60,18 @@ impl McpManager {
                         let original = tool.name.to_string();
                         let namespaced = format!("mcp_{prefix}__{original}");
 
-                        if tool_routing.contains_key(&namespaced) {
-                            tracing::warn!(
-                                tool = %original,
-                                namespaced = %namespaced,
-                                server = %config.name,
-                                "Duplicate namespaced tool name, skipping"
-                            );
-                        } else {
-                            tool_routing.insert(namespaced, (idx, original));
+                        match tool_routing.entry(namespaced) {
+                            std::collections::hash_map::Entry::Occupied(e) => {
+                                tracing::warn!(
+                                    tool = %original,
+                                    namespaced = %e.key(),
+                                    server = %config.name,
+                                    "Duplicate namespaced tool name, skipping"
+                                );
+                            }
+                            std::collections::hash_map::Entry::Vacant(e) => {
+                                e.insert((idx, original));
+                            }
                         }
                     }
                     servers.push(srv);

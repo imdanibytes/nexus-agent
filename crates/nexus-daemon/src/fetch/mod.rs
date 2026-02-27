@@ -156,7 +156,7 @@ pub async fn execute_fetch(args: &FetchArgs, config: &FetchConfig) -> Result<Str
     check_url(&args.url, config)?;
 
     // Clamp max_length
-    let max_length = args.max_length.min(ABSOLUTE_MAX_LENGTH).max(1);
+    let max_length = args.max_length.clamp(1, ABSOLUTE_MAX_LENGTH);
 
     // Build HTTP client
     let mut headers = HeaderMap::new();

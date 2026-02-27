@@ -45,6 +45,7 @@ pub struct AgentTurnResult {
     /// If the turn ended with an error, this contains the error message.
     pub error: Option<String>,
     /// Structured error details (serialized ProviderError) for the frontend.
+    #[allow(dead_code)] // read by the caller that constructs AgentTurnResult
     pub error_details: Option<serde_json::Value>,
 }
 

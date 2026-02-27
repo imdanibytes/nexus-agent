@@ -13,7 +13,7 @@ use crate::anthropic::types::{
     ContentBlock, Delta, Message, Role, StreamEvent,
 };
 use crate::conversation::types::{ChatMessage, MessagePart, MessageRole};
-use crate::provider::InferenceProvider;
+use crate::provider::{InferenceProvider, InferenceRequest};
 use crate::server::AppState;
 
 const TITLE_PROMPT: &str = "\
@@ -144,15 +144,15 @@ async fn call_title_model(
     }];
 
     let mut stream = provider
-        .create_message_stream(
-            model,
-            30, // max_tokens — titles are short
-            Some(TITLE_PROMPT.to_string()),
-            None, // temperature
-            None, // thinking_budget
+        .create_message_stream(InferenceRequest {
+            model: model.to_string(),
+            max_tokens: 30, // titles are short
+            system: Some(TITLE_PROMPT.to_string()),
+            temperature: None,
+            thinking_budget: None,
             messages,
-            Vec::new(), // no tools
-        )
+            tools: Vec::new(),
+        })
         .await
         .map_err(|e| format!("stream creation failed: {}", e))?;
 
@@ -162,11 +162,8 @@ async fn call_title_model(
     let mut output_tokens: u32 = 0;
     while let Some(event) = stream.next().await {
         match event {
-            Ok(StreamEvent::MessageStart { usage, .. }) => {
-                // Capture input token count from the message start event
-                if let Some(usage) = &usage {
-                    input_tokens = usage.input_tokens;
-                }
+            Ok(StreamEvent::MessageStart { usage: Some(ref usage), .. }) => {
+                input_tokens = usage.input_tokens;
             }
             Ok(StreamEvent::ContentBlockDelta {
                 delta: Delta::TextDelta { text: chunk },
@@ -174,11 +171,8 @@ async fn call_title_model(
             }) => {
                 text.push_str(&chunk);
             }
-            Ok(StreamEvent::MessageDelta { usage, .. }) => {
-                // Capture output token count from the message delta event
-                if let Some(u) = &usage {
-                    output_tokens = u.output_tokens;
-                }
+            Ok(StreamEvent::MessageDelta { usage: Some(ref u), .. }) => {
+                output_tokens = u.output_tokens;
             }
             Ok(StreamEvent::MessageStop) => break,
             Ok(StreamEvent::Error { message, .. }) => {

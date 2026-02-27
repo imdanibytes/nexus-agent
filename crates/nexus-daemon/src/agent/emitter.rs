@@ -33,6 +33,7 @@ impl TurnEmitter {
         &self.thread_id
     }
 
+    #[allow(dead_code)] // part of emitter API, used in tests
     pub fn run_id(&self) -> &str {
         &self.run_id
     }

@@ -54,6 +54,7 @@ impl AnthropicClient {
     }
 
     /// Send a streaming Messages API request. Returns a stream of parsed SSE events.
+    #[allow(dead_code)] // part of client API, callers use create_message_stream_json
     pub async fn create_message_stream(
         &self,
         request: MessagesRequest,

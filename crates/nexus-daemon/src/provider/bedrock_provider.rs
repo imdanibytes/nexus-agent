@@ -5,9 +5,9 @@ use aws_sdk_bedrockruntime::Client as BedrockClient;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 
-use crate::anthropic::types::{inject_cache_control, Message, StreamEvent, Tool};
+use crate::anthropic::types::{inject_cache_control, StreamEvent};
 use crate::provider::error::ProviderError;
-use crate::provider::InferenceProvider;
+use crate::provider::{InferenceProvider, InferenceRequest};
 
 pub struct BedrockProvider {
     client: BedrockClient,
@@ -33,37 +33,31 @@ impl BedrockProvider {
 impl InferenceProvider for BedrockProvider {
     async fn create_message_stream(
         &self,
-        model: &str,
-        max_tokens: u32,
-        system: Option<String>,
-        temperature: Option<f32>,
-        _thinking_budget: Option<u32>,
-        messages: Vec<Message>,
-        tools: Vec<Tool>,
+        request: InferenceRequest,
     ) -> Result<BoxStream<'static, Result<StreamEvent>>> {
         // Build the Anthropic Messages API request body for invoke_model
         let mut body = serde_json::json!({
             "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": max_tokens,
-            "messages": messages,
+            "max_tokens": request.max_tokens,
+            "messages": request.messages,
         });
 
-        if let Some(sys) = system {
+        if let Some(sys) = request.system {
             body["system"] = serde_json::Value::String(sys);
         }
-        if let Some(t) = temperature {
+        if let Some(t) = request.temperature {
             body["temperature"] = serde_json::json!(t);
         }
-        if !tools.is_empty() {
-            body["tools"] = serde_json::to_value(&tools)?;
+        if !request.tools.is_empty() {
+            body["tools"] = serde_json::to_value(&request.tools)?;
         }
 
         // Inject prompt caching breakpoints
         inject_cache_control(&mut body);
 
         tracing::debug!(
-            model = model,
-            tools = tools.len(),
+            model = %request.model,
+            tools = request.tools.len(),
             body = %serde_json::to_string_pretty(&body).unwrap_or_default(),
             "Bedrock request body"
         );
@@ -73,7 +67,7 @@ impl InferenceProvider for BedrockProvider {
         let output = self
             .client
             .invoke_model_with_response_stream()
-            .model_id(model)
+            .model_id(&request.model)
             .content_type("application/json")
             .body(Blob::new(body_bytes))
             .send()

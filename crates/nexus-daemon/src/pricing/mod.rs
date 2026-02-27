@@ -4,7 +4,6 @@
 /// https://docs.anthropic.com/en/docs/about-claude/pricing
 ///
 /// For unknown models, falls back to the cheapest tier to avoid overstating costs.
-
 /// Per-token pricing for a model.
 #[derive(Debug, Clone, Copy)]
 pub struct ModelPricing {

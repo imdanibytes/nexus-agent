@@ -91,15 +91,10 @@ impl Conversation {
         // Walk UP: target → root
         let mut path = Vec::new();
         let mut current = message_id;
-        loop {
-            match by_id.get(current) {
-                Some(msg) => {
-                    path.push(msg.id.clone());
-                    match &msg.parent_id {
-                        Some(pid) => current = pid,
-                        None => break,
-                    }
-                }
+        while let Some(msg) = by_id.get(current) {
+            path.push(msg.id.clone());
+            match &msg.parent_id {
+                Some(pid) => current = pid,
                 None => break,
             }
         }
@@ -113,15 +108,13 @@ impl Conversation {
         }
 
         let mut tip = message_id;
-        loop {
-            match children_map.get(tip) {
-                Some(children) if !children.is_empty() => {
-                    let last = children[children.len() - 1];
-                    path.push(last.to_string());
-                    tip = last;
-                }
-                _ => break,
+        while let Some(children) = children_map.get(tip) {
+            if children.is_empty() {
+                break;
             }
+            let last = children[children.len() - 1];
+            path.push(last.to_string());
+            tip = last;
         }
 
         path
@@ -134,15 +127,10 @@ impl Conversation {
             self.messages.iter().map(|m| (m.id.as_str(), m)).collect();
         let mut path = Vec::new();
         let mut current = message_id;
-        loop {
-            match by_id.get(current) {
-                Some(msg) => {
-                    path.push(msg.id.clone());
-                    match &msg.parent_id {
-                        Some(pid) => current = pid,
-                        None => break,
-                    }
-                }
+        while let Some(msg) = by_id.get(current) {
+            path.push(msg.id.clone());
+            match &msg.parent_id {
+                Some(pid) => current = pid,
                 None => break,
             }
         }
@@ -151,6 +139,7 @@ impl Conversation {
     }
 
     /// Returns all child message IDs for a given parent_id.
+    #[allow(dead_code)] // part of branching API
     pub fn children_of(&self, parent_id: Option<&str>) -> Vec<&str> {
         self.messages
             .iter()

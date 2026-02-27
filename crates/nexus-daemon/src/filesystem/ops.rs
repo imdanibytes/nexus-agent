@@ -230,22 +230,22 @@ pub fn directory_tree(
 
     let mut output = format!("{}/\n", name);
     let mut entry_count: usize = 0;
-    const MAX_ENTRIES: usize = 5_000;
-    const MAX_DEPTH: usize = 10;
-    const MAX_PER_DIR: usize = 100;
+    let limits = TreeLimits {
+        max_depth: 10,
+        max_entries: 5_000,
+        max_per_dir: 100,
+    };
     build_tree(
         &resolved,
         "",
         exclude_patterns,
         &mut output,
         0,
-        MAX_DEPTH,
         &mut entry_count,
-        MAX_ENTRIES,
-        MAX_PER_DIR,
+        &limits,
     );
 
-    if entry_count >= MAX_ENTRIES {
+    if entry_count >= limits.max_entries {
         output.push_str("\n... (truncated at 5,000 entries)\n");
     }
 
@@ -462,18 +462,22 @@ fn should_exclude(name: &str, patterns: &[String]) -> bool {
     false
 }
 
+struct TreeLimits {
+    max_depth: usize,
+    max_entries: usize,
+    max_per_dir: usize,
+}
+
 fn build_tree(
     dir: &Path,
     prefix: &str,
     exclude: &[String],
     output: &mut String,
     depth: usize,
-    max_depth: usize,
     entry_count: &mut usize,
-    max_entries: usize,
-    max_per_dir: usize,
+    limits: &TreeLimits,
 ) {
-    if depth >= max_depth || *entry_count >= max_entries {
+    if depth >= limits.max_depth || *entry_count >= limits.max_entries {
         return;
     }
 
@@ -488,11 +492,11 @@ fn build_tree(
     entries.sort_by_key(|e| e.file_name());
 
     let total = entries.len();
-    let truncated = total > max_per_dir;
-    let visible = if truncated { max_per_dir } else { total };
+    let truncated = total > limits.max_per_dir;
+    let visible = if truncated { limits.max_per_dir } else { total };
 
     for (i, entry) in entries.iter().take(visible).enumerate() {
-        if *entry_count >= max_entries {
+        if *entry_count >= limits.max_entries {
             return;
         }
         *entry_count += 1;
@@ -513,10 +517,8 @@ fn build_tree(
                 exclude,
                 output,
                 depth + 1,
-                max_depth,
                 entry_count,
-                max_entries,
-                max_per_dir,
+                limits,
             );
         }
     }

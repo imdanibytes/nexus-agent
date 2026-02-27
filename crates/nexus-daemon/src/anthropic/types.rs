@@ -105,6 +105,7 @@ pub fn inject_tool_description_field(tools: &mut [Tool]) {
 // ── SSE event types (streaming response) ──
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // fields populated from SSE deserialization, read downstream
 pub enum StreamEvent {
     MessageStart {
         message_id: String,
@@ -143,6 +144,7 @@ pub enum ContentBlockInfo {
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::enum_variant_names)]
 pub enum Delta {
     TextDelta { text: String },
     InputJsonDelta { partial_json: String },
@@ -283,6 +285,7 @@ pub(crate) struct RawContentBlockStart {
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[allow(dead_code)] // variant fields populated by serde deserialization
 pub(crate) enum RawContentBlock {
     Text { text: String },
     ToolUse { id: String, name: String },
@@ -297,6 +300,7 @@ pub(crate) struct RawContentBlockDelta {
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[allow(clippy::enum_variant_names)]
 pub(crate) enum RawDelta {
     TextDelta { text: String },
     InputJsonDelta { partial_json: String },
@@ -322,6 +326,7 @@ pub(crate) struct RawMessageDeltaInner {
 // ── Non-streaming response ──
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)] // deserialized API response, fields read as needed
 pub struct MessagesResponse {
     pub id: String,
     pub role: Role,

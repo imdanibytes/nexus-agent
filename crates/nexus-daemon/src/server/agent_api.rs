@@ -4,7 +4,7 @@ use axum::Json;
 use serde::Deserialize;
 use std::sync::Arc;
 
-use crate::agent_config::store::AgentUpdate;
+use crate::agent_config::store::{AgentUpdate, CreateAgentParams};
 use crate::server::AppState;
 
 pub async fn list(
@@ -25,15 +25,15 @@ pub async fn create(
 
     let agent = state
         .agents
-        .create_with_mcp(
-            body.name,
-            body.provider_id,
-            body.model,
-            body.system_prompt,
-            body.temperature,
-            body.max_tokens,
-            body.mcp_server_ids,
-        )
+        .create(CreateAgentParams {
+            name: body.name,
+            provider_id: body.provider_id,
+            model: body.model,
+            system_prompt: body.system_prompt,
+            temperature: body.temperature,
+            max_tokens: body.max_tokens,
+            mcp_server_ids: body.mcp_server_ids,
+        })
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 

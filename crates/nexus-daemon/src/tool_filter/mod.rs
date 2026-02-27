@@ -2,6 +2,7 @@ use crate::anthropic::types::Tool;
 use crate::tasks::types::AgentMode;
 
 /// Snapshot of plan state for filter decisions.
+#[allow(dead_code)] // fields read by filter implementations as plan-gating is wired up
 pub struct PlanSnapshot {
     pub approved: Option<bool>,
     pub task_count: usize,
@@ -9,12 +10,14 @@ pub struct PlanSnapshot {
 }
 
 /// Context passed to each filter for decision-making.
+#[allow(dead_code)] // fields read by filter implementations
 pub struct ToolFilterContext {
     pub mode: AgentMode,
     pub plan: Option<PlanSnapshot>,
 }
 
 /// A composable filter that decides which tools the model can see.
+#[allow(dead_code)] // trait methods used by implementations
 pub trait ToolFilter: Send + Sync {
     fn name(&self) -> &str;
     /// Return true to keep the tool, false to exclude it.

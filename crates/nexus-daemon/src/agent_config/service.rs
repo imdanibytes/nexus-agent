@@ -1,7 +1,7 @@
 use anyhow::Result;
 use tokio::sync::RwLock;
 
-use super::store::{AgentStore, AgentUpdate};
+use super::store::{AgentStore, AgentUpdate, CreateAgentParams};
 use super::types::AgentEntry;
 use crate::event_bus::EventBus;
 
@@ -44,31 +44,9 @@ impl AgentService {
 
     // -- Writes ---------------------------------------------------------------
 
-    pub async fn create(
-        &self,
-        name: String,
-        provider_id: String,
-        model: String,
-        system_prompt: Option<String>,
-        temperature: Option<f32>,
-        max_tokens: Option<u32>,
-    ) -> Result<AgentEntry> {
-        self.create_with_mcp(name, provider_id, model, system_prompt, temperature, max_tokens, None).await
-    }
-
-    pub async fn create_with_mcp(
-        &self,
-        name: String,
-        provider_id: String,
-        model: String,
-        system_prompt: Option<String>,
-        temperature: Option<f32>,
-        max_tokens: Option<u32>,
-        mcp_server_ids: Option<Vec<String>>,
-    ) -> Result<AgentEntry> {
-        let agent = self.store.write().await.create_with_mcp(
-            name, provider_id, model, system_prompt, temperature, max_tokens, mcp_server_ids,
-        )?;
+    #[allow(dead_code)] // part of service API
+    pub async fn create(&self, params: CreateAgentParams) -> Result<AgentEntry> {
+        let agent = self.store.write().await.create(params)?;
         self.event_bus.emit_global("data:agent_created", serde_json::to_value(&agent).unwrap_or_default());
         Ok(agent)
     }

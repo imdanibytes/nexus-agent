@@ -67,19 +67,14 @@ pub fn tool_definition() -> Tool {
 
 // ── Agent type presets ──
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SubAgentType {
+    #[default]
     Explore,
     Plan,
     Execute,
     Custom,
-}
-
-impl Default for SubAgentType {
-    fn default() -> Self {
-        Self::Explore
-    }
 }
 
 impl std::fmt::Display for SubAgentType {
@@ -93,17 +88,12 @@ impl std::fmt::Display for SubAgentType {
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ContextMode {
+    #[default]
     Fresh,
     Branched,
-}
-
-impl Default for ContextMode {
-    fn default() -> Self {
-        Self::Fresh
-    }
 }
 
 /// Resolved sub-agent configuration from tool args + presets.

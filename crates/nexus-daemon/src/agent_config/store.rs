@@ -5,6 +5,17 @@ use uuid::Uuid;
 use super::types::AgentEntry;
 use crate::config::NexusConfig;
 
+/// Parameters for creating a new agent.
+pub struct CreateAgentParams {
+    pub name: String,
+    pub provider_id: String,
+    pub model: String,
+    pub system_prompt: Option<String>,
+    pub temperature: Option<f32>,
+    pub max_tokens: Option<u32>,
+    pub mcp_server_ids: Option<Vec<String>>,
+}
+
 pub struct AgentStore {
     agents: Vec<AgentEntry>,
     active_agent_id: Option<String>,
@@ -35,39 +46,18 @@ impl AgentStore {
         self.save()
     }
 
-    pub fn create(
-        &mut self,
-        name: String,
-        provider_id: String,
-        model: String,
-        system_prompt: Option<String>,
-        temperature: Option<f32>,
-        max_tokens: Option<u32>,
-    ) -> Result<AgentEntry> {
-        self.create_with_mcp(name, provider_id, model, system_prompt, temperature, max_tokens, None)
-    }
-
-    pub fn create_with_mcp(
-        &mut self,
-        name: String,
-        provider_id: String,
-        model: String,
-        system_prompt: Option<String>,
-        temperature: Option<f32>,
-        max_tokens: Option<u32>,
-        mcp_server_ids: Option<Vec<String>>,
-    ) -> Result<AgentEntry> {
+    pub fn create(&mut self, params: CreateAgentParams) -> Result<AgentEntry> {
         let now = Utc::now();
         let agent = AgentEntry {
             id: Uuid::new_v4().to_string(),
-            name,
-            provider_id,
-            model,
-            system_prompt,
-            temperature,
-            max_tokens,
+            name: params.name,
+            provider_id: params.provider_id,
+            model: params.model,
+            system_prompt: params.system_prompt,
+            temperature: params.temperature,
+            max_tokens: params.max_tokens,
             thinking_budget: None,
-            mcp_server_ids,
+            mcp_server_ids: params.mcp_server_ids,
             created_at: now,
             updated_at: now,
         };

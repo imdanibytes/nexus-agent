@@ -3,6 +3,7 @@ use std::fmt;
 /// Normalized error kind across all providers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
+#[allow(dead_code)] // variants constructed as needed when classifying errors
 pub enum ProviderErrorKind {
     RateLimit,
     Authentication,
@@ -38,6 +39,7 @@ impl std::error::Error for ProviderError {}
 
 impl ProviderError {
     /// User-facing title for this error kind.
+    #[allow(dead_code)] // will be used by frontend error rendering
     pub fn title(&self) -> &'static str {
         match self.kind {
             ProviderErrorKind::RateLimit => "Rate limit exceeded",
