@@ -102,26 +102,6 @@ pub async fn delete(
     }
 }
 
-pub async fn get_active(
-    State(state): State<Arc<AppState>>,
-) -> Json<serde_json::Value> {
-    let store = state.workspaces.read().await;
-    match store.active() {
-        Some(ws) => Json(serde_json::to_value(ws).unwrap()),
-        None => Json(serde_json::json!(null)),
-    }
-}
-
-pub async fn set_active(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<SetActiveRequest>,
-) -> StatusCode {
-    let mut store = state.workspaces.write().await;
-    match store.set_active(body.id) {
-        Ok(()) => StatusCode::OK,
-        Err(_) => StatusCode::NOT_FOUND,
-    }
-}
 
 #[derive(Debug, Deserialize)]
 pub struct CreateWorkspaceRequest {
@@ -137,7 +117,3 @@ pub struct UpdateWorkspaceRequest {
     pub project_ids: Option<Vec<String>>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct SetActiveRequest {
-    pub id: Option<String>,
-}

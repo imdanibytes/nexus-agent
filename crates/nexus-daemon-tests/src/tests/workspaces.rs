@@ -137,31 +137,44 @@ async fn workspaces_delete_returns_204() {
 }
 
 #[tokio::test]
-async fn workspaces_active_initially_null() {
+async fn conversation_workspace_via_patch() {
     let d = TestDaemon::spawn().await.unwrap();
     let c = d.client();
 
-    let (status, body) = c.get("/api/workspaces/active").await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(body.is_null());
-}
-
-#[tokio::test]
-async fn workspaces_set_active() {
-    let d = TestDaemon::spawn().await.unwrap();
-    let c = d.client();
-
-    let (_, created) = c
+    // Create workspace
+    let (_, ws) = c
         .post("/api/workspaces", &fixtures::workspace_body("My Workspace"))
         .await;
-    let id = created["id"].as_str().unwrap();
+    let ws_id = ws["id"].as_str().unwrap();
 
+    // Create conversation (starts with no workspace)
+    let (_, conv) = c.post("/api/conversations", &json!({})).await;
+    let conv_id = conv["id"].as_str().unwrap();
+    let (_, conv_data) = c.get(&format!("/api/conversations/{conv_id}")).await;
+    assert!(conv_data["workspace_id"].is_null());
+
+    // Set workspace on conversation via PATCH
     let (status, _) = c
-        .put("/api/workspaces/active", &json!({ "id": id }))
+        .patch(
+            &format!("/api/conversations/{conv_id}"),
+            &json!({ "workspace_id": ws_id }),
+        )
         .await;
     assert_eq!(status, StatusCode::OK);
 
-    let (_, active) = c.get("/api/workspaces/active").await;
-    assert_eq!(active["id"], id);
-    assert_eq!(active["name"], "My Workspace");
+    // Verify it stuck
+    let (_, conv_data) = c.get(&format!("/api/conversations/{conv_id}")).await;
+    assert_eq!(conv_data["workspace_id"].as_str(), Some(ws_id));
+
+    // Clear workspace
+    let (status, _) = c
+        .patch(
+            &format!("/api/conversations/{conv_id}"),
+            &json!({ "workspace_id": "" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (_, conv_data) = c.get(&format!("/api/conversations/{conv_id}")).await;
+    assert!(conv_data["workspace_id"].is_null());
 }

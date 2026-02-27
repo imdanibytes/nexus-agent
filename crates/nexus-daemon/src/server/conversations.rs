@@ -19,14 +19,9 @@ pub async fn create(
     body: Option<Json<CreateRequest>>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), StatusCode> {
     let client_id = body.and_then(|b| b.id.clone());
-    // Stamp conversation with the currently active workspace
-    let workspace_id = {
-        let store = state.workspaces.read().await;
-        store.active_id().map(|s| s.to_string())
-    };
     let meta = state
         .threads
-        .create(client_id, workspace_id)
+        .create(client_id, None)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok((StatusCode::CREATED, Json(serde_json::to_value(&meta).unwrap())))

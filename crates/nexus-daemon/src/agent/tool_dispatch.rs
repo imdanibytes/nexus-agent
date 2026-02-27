@@ -386,6 +386,7 @@ impl ToolHandler for ControlPlaneHandler {
         let (content, is_error) = crate::control_plane::execute(
             ctx.tool_name,
             ctx.args_json,
+            ctx.conversation_id,
             &self.deps,
         )
         .await;

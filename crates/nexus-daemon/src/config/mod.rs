@@ -68,8 +68,6 @@ pub struct NexusConfig {
     #[serde(default)]
     pub workspaces: Vec<Workspace>,
     #[serde(default)]
-    pub active_workspace_id: Option<String>,
-    #[serde(default)]
     pub providers: Vec<Provider>,
     #[serde(default)]
     pub agents: Vec<AgentEntry>,

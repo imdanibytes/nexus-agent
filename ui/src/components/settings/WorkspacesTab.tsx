@@ -6,7 +6,6 @@ import {
   LayersIcon,
   CheckIcon,
   XIcon,
-  StarIcon,
 } from "lucide-react";
 import { useWorkspaceStore } from "../../stores/workspaceStore";
 import { useProjectStore } from "../../stores/projectStore";
@@ -24,8 +23,7 @@ type EditorMode =
     };
 
 export const WorkspacesTab: FC = () => {
-  const { workspaces, activeWorkspace, deleteWorkspace, setActive } =
-    useWorkspaceStore();
+  const { workspaces, deleteWorkspace } = useWorkspaceStore();
   const { projects } = useProjectStore();
   const [mode, setMode] = useState<EditorMode>({ type: "closed" });
 
@@ -38,8 +36,8 @@ export const WorkspacesTab: FC = () => {
         <div>
           <h3 className="text-sm font-medium text-foreground">Workspaces</h3>
           <p className="text-[11px] text-default-400 mt-0.5">
-            Logical groupings of projects. The active workspace is stamped on
-            new conversations.
+            Logical groupings of projects. Assign a workspace to a conversation
+            to give the agent project context.
           </p>
         </div>
         <button
@@ -57,83 +55,53 @@ export const WorkspacesTab: FC = () => {
         </p>
       )}
 
-      {workspaces.map((ws) => {
-        const isActive = activeWorkspace?.id === ws.id;
-        return (
-          <div
-            key={ws.id}
-            className={cn(
-              "flex items-center gap-3 rounded-lg border p-3",
-              isActive
-                ? "border-primary/40 bg-primary/5"
-                : "border-default-200/50 bg-default-50/30",
-            )}
-          >
-            <LayersIcon className="size-4 text-default-400 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-foreground">
-                  {ws.name}
-                </span>
-                {isActive && (
-                  <span className="text-[10px] font-medium text-primary bg-primary/10 px-1.5 py-0.5 rounded">
-                    Active
-                  </span>
-                )}
+      {workspaces.map((ws) => (
+        <div
+          key={ws.id}
+          className="flex items-center gap-3 rounded-lg border border-default-200/50 bg-default-50/30 p-3"
+        >
+          <LayersIcon className="size-4 text-default-400 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <span className="text-sm font-medium text-foreground">
+              {ws.name}
+            </span>
+            {ws.description && (
+              <div className="text-[11px] text-default-400 truncate">
+                {ws.description}
               </div>
-              {ws.description && (
-                <div className="text-[11px] text-default-400 truncate">
-                  {ws.description}
-                </div>
-              )}
-              {ws.project_ids.length > 0 && (
-                <div className="text-[11px] text-default-400 mt-0.5">
-                  {ws.project_ids.map(projectName).join(", ")}
-                </div>
-              )}
-            </div>
-            <button
-              onClick={() => setActive(isActive ? null : ws.id)}
-              title={isActive ? "Deactivate" : "Set active"}
-              className={cn(
-                "p-1 rounded transition-colors",
-                isActive
-                  ? "text-primary hover:text-primary/70"
-                  : "text-default-400 hover:text-foreground hover:bg-default-200/40",
-              )}
-            >
-              <StarIcon
-                className="size-3.5"
-                fill={isActive ? "currentColor" : "none"}
-              />
-            </button>
-            <button
-              onClick={() =>
-                setMode({
-                  type: "edit",
-                  id: ws.id,
-                  name: ws.name,
-                  description: ws.description ?? "",
-                  projectIds: ws.project_ids,
-                })
-              }
-              className="text-default-400 hover:text-foreground p-1 rounded hover:bg-default-200/40 transition-colors"
-            >
-              <PencilIcon className="size-3.5" />
-            </button>
-            <button
-              onClick={async () => {
-                if (confirm(`Remove workspace "${ws.name}"?`)) {
-                  await deleteWorkspace(ws.id);
-                }
-              }}
-              className="text-default-400 hover:text-danger p-1 rounded hover:bg-danger/10 transition-colors"
-            >
-              <TrashIcon className="size-3.5" />
-            </button>
+            )}
+            {ws.project_ids.length > 0 && (
+              <div className="text-[11px] text-default-400 mt-0.5">
+                {ws.project_ids.map(projectName).join(", ")}
+              </div>
+            )}
           </div>
-        );
-      })}
+          <button
+            onClick={() =>
+              setMode({
+                type: "edit",
+                id: ws.id,
+                name: ws.name,
+                description: ws.description ?? "",
+                projectIds: ws.project_ids,
+              })
+            }
+            className="text-default-400 hover:text-foreground p-1 rounded hover:bg-default-200/40 transition-colors"
+          >
+            <PencilIcon className="size-3.5" />
+          </button>
+          <button
+            onClick={async () => {
+              if (confirm(`Remove workspace "${ws.name}"?`)) {
+                await deleteWorkspace(ws.id);
+              }
+            }}
+            className="text-default-400 hover:text-danger p-1 rounded hover:bg-danger/10 transition-colors"
+          >
+            <TrashIcon className="size-3.5" />
+          </button>
+        </div>
+      ))}
 
       {mode.type !== "closed" && (
         <WorkspaceEditor

@@ -160,10 +160,6 @@ pub fn build_router(state: AppState, queue_rx: tokio::sync::mpsc::UnboundedRecei
         )
         // Workspaces (logical groupings of projects)
         .route(
-            "/api/workspaces/active",
-            get(workspace_api::get_active).put(workspace_api::set_active),
-        )
-        .route(
             "/api/workspaces",
             get(workspace_api::list).post(workspace_api::create),
         )

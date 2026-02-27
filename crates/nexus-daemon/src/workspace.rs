@@ -7,15 +7,11 @@ use crate::config::{NexusConfig, Workspace};
 /// Manages CRUD for logical workspace groupings (persisted to nexus.json).
 pub struct WorkspaceStore {
     workspaces: Vec<Workspace>,
-    active_id: Option<String>,
 }
 
 impl WorkspaceStore {
-    pub fn new(workspaces: Vec<Workspace>, active_id: Option<String>) -> Self {
-        Self {
-            workspaces,
-            active_id,
-        }
+    pub fn new(workspaces: Vec<Workspace>) -> Self {
+        Self { workspaces }
     }
 
     pub fn list(&self) -> &[Workspace] {
@@ -24,25 +20,6 @@ impl WorkspaceStore {
 
     pub fn get(&self, id: &str) -> Option<&Workspace> {
         self.workspaces.iter().find(|w| w.id == id)
-    }
-
-    pub fn active_id(&self) -> Option<&str> {
-        self.active_id.as_deref()
-    }
-
-    pub fn active(&self) -> Option<&Workspace> {
-        let id = self.active_id.as_deref()?;
-        self.get(id)
-    }
-
-    pub fn set_active(&mut self, id: Option<String>) -> Result<()> {
-        if let Some(ref id) = id {
-            if self.get(id).is_none() {
-                anyhow::bail!("Workspace not found: {}", id);
-            }
-        }
-        self.active_id = id;
-        self.save()
     }
 
     pub fn create(
@@ -94,10 +71,6 @@ impl WorkspaceStore {
         let len = self.workspaces.len();
         self.workspaces.retain(|w| w.id != id);
         if self.workspaces.len() < len {
-            // Clear active if we just deleted it
-            if self.active_id.as_deref() == Some(id) {
-                self.active_id = None;
-            }
             self.save()?;
             Ok(true)
         } else {
@@ -105,11 +78,10 @@ impl WorkspaceStore {
         }
     }
 
-    /// Persist workspaces + active_workspace_id back to nexus.json.
+    /// Persist workspaces back to nexus.json.
     fn save(&self) -> Result<()> {
         let mut config = NexusConfig::load()?;
         config.workspaces = self.workspaces.clone();
-        config.active_workspace_id = self.active_id.clone();
         config.save()
     }
 }

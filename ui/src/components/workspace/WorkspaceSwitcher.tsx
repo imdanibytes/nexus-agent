@@ -49,15 +49,21 @@ export const WorkspaceSwitcher: FC = () => {
           }
         }}
       >
-        <DropdownSection showDivider>
-          <DropdownItem key="__none" className="text-default-400">
-            None
-          </DropdownItem>
-          {workspaces.map((ws) => (
-            <DropdownItem key={ws.id} description={ws.description ?? undefined}>
-              {ws.name}
-            </DropdownItem>
-          ))}
+        <DropdownSection showDivider items={[{ id: "__none" }, ...workspaces]}>
+          {(item) =>
+            item.id === "__none" ? (
+              <DropdownItem key="__none" className="text-default-400">
+                None
+              </DropdownItem>
+            ) : (
+              <DropdownItem
+                key={item.id}
+                description={"description" in item ? (item.description ?? undefined) : undefined}
+              >
+                {"name" in item ? item.name : ""}
+              </DropdownItem>
+            )
+          }
         </DropdownSection>
         <DropdownSection>
           <DropdownItem

@@ -17,6 +17,7 @@ use crate::project::{ProjectStore, ProjectUpdate};
 use crate::provider::store::{CreateProviderParams, ProviderUpdate};
 use crate::provider::{ProviderService, ProviderType};
 use crate::server::McpService;
+use crate::thread::ThreadService;
 use crate::workspace::{WorkspaceStore, WorkspaceUpdate};
 
 // Tool names
@@ -32,6 +33,7 @@ pub struct ControlPlaneDeps {
     pub providers: Arc<ProviderService>,
     pub projects: Arc<RwLock<ProjectStore>>,
     pub workspaces: Arc<RwLock<WorkspaceStore>>,
+    pub threads: Arc<ThreadService>,
     pub mcp_svc: Arc<McpService>,
     pub event_bus: EventBus,
 }
@@ -54,11 +56,12 @@ pub fn tool_definitions() -> Vec<Tool> {
 pub async fn execute(
     tool_name: &str,
     args_json: &str,
+    conversation_id: &str,
     deps: &ControlPlaneDeps,
 ) -> (String, bool) {
     match tool_name {
         PROJECTS => exec_projects(args_json, deps).await,
-        WORKSPACES => exec_workspaces(args_json, deps).await,
+        WORKSPACES => exec_workspaces(args_json, conversation_id, deps).await,
         AGENTS => exec_agents(args_json, deps).await,
         PROVIDERS => exec_providers(args_json, deps).await,
         MCP_SERVERS => exec_mcp_servers(args_json, deps).await,
@@ -97,7 +100,7 @@ fn workspaces_def() -> Tool {
         name: WORKSPACES.to_string(),
         description: "Manage Nexus workspaces (logical groupings of projects). \
             Use action 'list', 'create', 'update', 'delete', or 'set_active' \
-            to switch the active workspace."
+            to set this conversation's workspace context."
             .to_string(),
         input_schema: serde_json::json!({
             "type": "object",
@@ -331,7 +334,7 @@ async fn exec_projects(args_json: &str, deps: &ControlPlaneDeps) -> (String, boo
 
 // ── Workspaces ───────────────────────────────────────────────────
 
-async fn exec_workspaces(args_json: &str, deps: &ControlPlaneDeps) -> (String, bool) {
+async fn exec_workspaces(args_json: &str, conversation_id: &str, deps: &ControlPlaneDeps) -> (String, bool) {
     let args: ActionArgs = match serde_json::from_str(args_json) {
         Ok(a) => a,
         Err(e) => return (format!("Invalid arguments: {e}"), true),
@@ -339,16 +342,22 @@ async fn exec_workspaces(args_json: &str, deps: &ControlPlaneDeps) -> (String, b
 
     match args.action.as_str() {
         "list" => {
-            let (workspaces, active_id) = {
+            let workspaces = {
                 let store = deps.workspaces.read().await;
-                let ws = serde_json::to_value(store.list()).unwrap_or_default();
-                let aid = store.active().map(|w| w.id.clone());
-                (ws, aid)
+                serde_json::to_value(store.list()).unwrap_or_default()
             };
+            // Show which workspace is set on this conversation
+            let conv_workspace_id = deps
+                .threads
+                .get(conversation_id)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|c| c.workspace_id);
             (
                 serde_json::json!({
                     "workspaces": workspaces,
-                    "active_workspace_id": active_id,
+                    "current_workspace_id": conv_workspace_id,
                 })
                 .to_string(),
                 false,
@@ -429,21 +438,24 @@ async fn exec_workspaces(args_json: &str, deps: &ControlPlaneDeps) -> (String, b
             }
         }
         "set_active" => {
-            let id = get_str(&args.rest, "id"); // None = clear active
+            let id = get_str(&args.rest, "id"); // None = clear
 
-            let mut store = deps.workspaces.write().await;
-            match store.set_active(id.clone()) {
-                Ok(()) => {
-                    deps.event_bus.emit_global(
-                        "active_workspace_changed",
-                        serde_json::json!({ "workspace_id": id }),
-                    );
-                    match id {
-                        Some(id) => (format!("Active workspace set to {id}"), false),
-                        None => ("Active workspace cleared".to_string(), false),
-                    }
+            // Validate workspace exists (if setting, not clearing)
+            if let Some(ref ws_id) = id {
+                let store = deps.workspaces.read().await;
+                if store.get(ws_id).is_none() {
+                    return (format!("Workspace not found: {ws_id}"), true);
                 }
-                Err(e) => (format!("Failed to set active workspace: {e}"), true),
+            }
+
+            // Set workspace on the current conversation
+            if let Err(e) = deps.threads.set_workspace(conversation_id, id.clone()).await {
+                return (format!("Failed to set workspace: {e}"), true);
+            }
+
+            match id {
+                Some(id) => (format!("Workspace set to {id}"), false),
+                None => ("Workspace cleared".to_string(), false),
             }
         }
         other => (format!("Unknown action for nexus_workspaces: '{other}'"), true),

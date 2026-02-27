@@ -129,10 +129,7 @@ async fn main() -> Result<()> {
 
     // Projects + workspaces + effective filesystem config
     let project_store = ProjectStore::new(config.projects.clone());
-    let workspace_store = WorkspaceStore::new(
-        config.workspaces.clone(),
-        config.active_workspace_id.clone(),
-    );
+    let workspace_store = WorkspaceStore::new(config.workspaces.clone());
     let effective_fs = config.effective_filesystem_config();
 
     tracing::info!(

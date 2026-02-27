@@ -198,6 +198,7 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
                 providers: Arc::clone(&state_clone.providers),
                 projects: Arc::clone(&state_clone.projects),
                 workspaces: Arc::clone(&state_clone.workspaces),
+                threads: Arc::clone(&state_clone.threads),
                 mcp_svc: Arc::clone(&state_clone.mcp),
                 event_bus: state_clone.event_bus.clone(),
             })),

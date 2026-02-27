@@ -601,22 +601,6 @@ export async function deleteWorkspace(id: string): Promise<void> {
   await fetch(`/api/workspaces/${id}`, { method: "DELETE" });
 }
 
-export async function fetchActiveWorkspace(): Promise<WorkspaceConfig | null> {
-  const res = await fetch("/api/workspaces/active");
-  if (!res.ok) throw new Error(`Failed to load active workspace (${res.status})`);
-  const data = await res.json();
-  return data ?? null;
-}
-
-export async function setActiveWorkspace(id: string | null): Promise<void> {
-  const res = await fetch("/api/workspaces/active", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id }),
-  });
-  if (!res.ok) throw new Error(`Set active workspace failed (${res.status})`);
-}
-
 // ── Folder Picking ──
 
 export interface BrowseEntry {
