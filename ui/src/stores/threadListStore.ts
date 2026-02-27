@@ -5,6 +5,7 @@ import {
   deleteConversation,
   renameConversation,
   updateConversationWorkspace,
+  updateConversationAgent,
   type ConversationMeta,
 } from "../api/client";
 import { snowflake } from "../lib/snowflake";
@@ -28,6 +29,9 @@ interface ThreadListState {
   setThreadWorkspace: (id: string, workspaceId: string | null) => Promise<void>;
   /** Update workspace_id locally (e.g., from SSE workspace_changed event). */
   updateThreadWorkspace: (id: string, workspaceId: string | null) => void;
+  setThreadAgent: (id: string, agentId: string | null) => Promise<void>;
+  /** Update agent_id locally (e.g., from SSE agent_changed event). */
+  updateThreadAgent: (id: string, agentId: string | null) => void;
   /** Remove a thread from the local list (e.g., after SSE thread_deleted event). */
   removeThread: (id: string) => void;
   touchThread: (id: string) => void;
@@ -119,6 +123,23 @@ export const useThreadListStore = create<ThreadListState>((set, get) => ({
     set((s) => ({
       threads: s.threads.map((t) =>
         t.id === id ? { ...t, workspace_id: workspaceId } : t,
+      ),
+    }));
+  },
+
+  setThreadAgent: async (id, agentId) => {
+    await updateConversationAgent(id, agentId);
+    set((s) => ({
+      threads: s.threads.map((t) =>
+        t.id === id ? { ...t, agent_id: agentId } : t,
+      ),
+    }));
+  },
+
+  updateThreadAgent: (id, agentId) => {
+    set((s) => ({
+      threads: s.threads.map((t) =>
+        t.id === id ? { ...t, agent_id: agentId } : t,
       ),
     }));
   },

@@ -139,6 +139,16 @@ export function useStreamBroadcasts(): void {
       useProjectStore.getState().loadProjects();
     });
 
+    // Per-conversation agent change
+    const unsubAgentChanged = eventBus.on("agent_changed", (event) => {
+      const val = event.value as { id?: string; agent_id?: string | null };
+      if (val?.id) {
+        useThreadListStore
+          .getState()
+          .updateThreadAgent(val.id, val.agent_id ?? null);
+      }
+    });
+
     // Per-conversation workspace change
     const unsubWorkspaceChanged = eventBus.on("workspace_changed", (event) => {
       const val = event.value as { id?: string; workspace_id?: string | null };
@@ -228,6 +238,7 @@ export function useStreamBroadcasts(): void {
       unsubProjCreated();
       unsubProjUpdated();
       unsubProjDeleted();
+      unsubAgentChanged();
       unsubWorkspaceChanged();
       unsubWsCreated();
       unsubWsUpdated();

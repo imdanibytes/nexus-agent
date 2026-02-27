@@ -19,9 +19,11 @@ pub async fn create(
     body: Option<Json<CreateRequest>>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), StatusCode> {
     let client_id = body.and_then(|b| b.id.clone());
+    // Stamp with the global default agent
+    let default_agent_id = state.agents.active_agent().await.map(|a| a.id);
     let meta = state
         .threads
-        .create(client_id, None)
+        .create(client_id, None, default_agent_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok((StatusCode::CREATED, Json(serde_json::to_value(&meta).unwrap())))
@@ -74,13 +76,14 @@ pub async fn update(
         }
     }
     if let Some(ref workspace_id) = body.workspace_id {
-        // Empty string means clear workspace, otherwise set it
-        let ws = if workspace_id.is_empty() {
-            None
-        } else {
-            Some(workspace_id.clone())
-        };
+        let ws = if workspace_id.is_empty() { None } else { Some(workspace_id.clone()) };
         if let Err(_) = state.threads.set_workspace(&id, ws).await {
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+    }
+    if let Some(ref agent_id) = body.agent_id {
+        let agent = if agent_id.is_empty() { None } else { Some(agent_id.clone()) };
+        if let Err(_) = state.threads.set_agent(&id, agent).await {
             return StatusCode::INTERNAL_SERVER_ERROR;
         }
     }
@@ -95,8 +98,10 @@ pub struct CreateRequest {
 #[derive(Debug, Deserialize)]
 pub struct UpdateRequest {
     pub title: Option<String>,
-    /// Empty string = clear workspace, non-empty = set, absent = no change
+    /// Empty string = clear, non-empty = set, absent = no change
     pub workspace_id: Option<String>,
+    /// Empty string = clear (use default), non-empty = set, absent = no change
+    pub agent_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

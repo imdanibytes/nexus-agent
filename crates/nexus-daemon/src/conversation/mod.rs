@@ -32,7 +32,7 @@ impl ConversationStore {
         &self.index
     }
 
-    pub fn create(&mut self, client_id: Option<String>, workspace_id: Option<String>) -> Result<ConversationMeta> {
+    pub fn create(&mut self, client_id: Option<String>, workspace_id: Option<String>, agent_id: Option<String>) -> Result<ConversationMeta> {
         let id = client_id.unwrap_or_else(|| Uuid::new_v4().to_string());
         let now = Utc::now();
         let meta = ConversationMeta {
@@ -42,6 +42,7 @@ impl ConversationStore {
             updated_at: now,
             message_count: 0,
             workspace_id: workspace_id.clone(),
+            agent_id: agent_id.clone(),
         };
 
         let conv = Conversation {
@@ -52,7 +53,7 @@ impl ConversationStore {
             messages: Vec::new(),
             active_path: Vec::new(),
             usage: None,
-            agent_id: None,
+            agent_id,
             workspace_id,
             spans: Vec::new(),
         };
@@ -83,6 +84,7 @@ impl ConversationStore {
             meta.updated_at = conv.updated_at;
             meta.message_count = conv.messages.len();
             meta.workspace_id = conv.workspace_id.clone();
+            meta.agent_id = conv.agent_id.clone();
         }
         self.save_index()?;
         Ok(())
@@ -106,6 +108,21 @@ impl ConversationStore {
 
             if let Some(meta) = self.index.iter_mut().find(|m| m.id == id) {
                 meta.workspace_id = workspace_id;
+                meta.updated_at = conv.updated_at;
+            }
+            self.save_index()?;
+        }
+        Ok(())
+    }
+
+    pub fn set_agent(&mut self, id: &str, agent_id: Option<String>) -> Result<()> {
+        if let Some(mut conv) = self.get(id)? {
+            conv.agent_id = agent_id.clone();
+            conv.updated_at = Utc::now();
+            self.write_conversation(&conv)?;
+
+            if let Some(meta) = self.index.iter_mut().find(|m| m.id == id) {
+                meta.agent_id = agent_id;
                 meta.updated_at = conv.updated_at;
             }
             self.save_index()?;

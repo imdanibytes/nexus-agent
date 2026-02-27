@@ -78,9 +78,9 @@ impl ThreadService {
 
     // ── Writes ──
 
-    pub async fn create(&self, client_id: Option<String>, workspace_id: Option<String>) -> Result<ConversationMeta> {
+    pub async fn create(&self, client_id: Option<String>, workspace_id: Option<String>, agent_id: Option<String>) -> Result<ConversationMeta> {
         let mut store = self.store.write().await;
-        let meta = store.create(client_id, workspace_id)?;
+        let meta = store.create(client_id, workspace_id, agent_id)?;
 
         self.event_bus.emit_data(
             &meta.id,
@@ -118,6 +118,22 @@ impl ThreadService {
             id,
             "workspace_changed",
             serde_json::json!({ "id": id, "workspace_id": workspace_id }),
+        );
+
+        Ok(())
+    }
+
+    pub async fn set_agent(&self, id: &str, agent_id: Option<String>) -> Result<()> {
+        let mut store = self.store.write().await;
+        store.set_agent(id, agent_id.clone())?;
+        drop(store);
+
+        self.cache.invalidate(id).await;
+
+        self.event_bus.emit_data(
+            id,
+            "agent_changed",
+            serde_json::json!({ "id": id, "agent_id": agent_id }),
         );
 
         Ok(())

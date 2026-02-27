@@ -4,6 +4,7 @@ export interface ConversationMeta {
   created_at: string;
   updated_at: string;
   workspace_id?: string | null;
+  agent_id?: string | null;
 }
 
 export interface ConversationUsage {
@@ -116,6 +117,17 @@ export async function updateConversationWorkspace(
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ workspace_id: workspaceId ?? "" }),
+  });
+}
+
+export async function updateConversationAgent(
+  id: string,
+  agentId: string | null,
+): Promise<void> {
+  await fetch(`/api/conversations/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agent_id: agentId ?? "" }),
   });
 }
 

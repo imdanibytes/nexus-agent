@@ -62,7 +62,7 @@ pub async fn execute(
     match tool_name {
         PROJECTS => exec_projects(args_json, deps).await,
         WORKSPACES => exec_workspaces(args_json, conversation_id, deps).await,
-        AGENTS => exec_agents(args_json, deps).await,
+        AGENTS => exec_agents(args_json, conversation_id, deps).await,
         PROVIDERS => exec_providers(args_json, deps).await,
         MCP_SERVERS => exec_mcp_servers(args_json, deps).await,
         _ => (format!("Unknown control plane tool: {tool_name}"), true),
@@ -128,7 +128,7 @@ fn agents_def() -> Tool {
     Tool {
         name: AGENTS.to_string(),
         description: "Manage Nexus agent configurations (LLM personas with model + provider binding). \
-            Use action 'list', 'create', 'update', 'delete', or 'set_active' to switch the active agent."
+            Use action 'list', 'create', 'update', 'delete', or 'set_active' to set this conversation's agent."
             .to_string(),
         input_schema: serde_json::json!({
             "type": "object",
@@ -464,7 +464,7 @@ async fn exec_workspaces(args_json: &str, conversation_id: &str, deps: &ControlP
 
 // ── Agents ───────────────────────────────────────────────────────
 
-async fn exec_agents(args_json: &str, deps: &ControlPlaneDeps) -> (String, bool) {
+async fn exec_agents(args_json: &str, conversation_id: &str, deps: &ControlPlaneDeps) -> (String, bool) {
     let args: ActionArgs = match serde_json::from_str(args_json) {
         Ok(a) => a,
         Err(e) => return (format!("Invalid arguments: {e}"), true),
@@ -473,11 +473,19 @@ async fn exec_agents(args_json: &str, deps: &ControlPlaneDeps) -> (String, bool)
     match args.action.as_str() {
         "list" => {
             let agents = deps.agents.list().await;
-            let active_id = deps.agents.active_agent_id().await;
+            let conv_agent_id = deps
+                .threads
+                .get(conversation_id)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|c| c.agent_id);
+            let default_agent_id = deps.agents.active_agent_id().await;
             (
                 serde_json::json!({
                     "agents": agents,
-                    "active_agent_id": active_id,
+                    "current_agent_id": conv_agent_id,
+                    "default_agent_id": default_agent_id,
                 })
                 .to_string(),
                 false,
@@ -563,14 +571,26 @@ async fn exec_agents(args_json: &str, deps: &ControlPlaneDeps) -> (String, bool)
             }
         }
         "set_active" => {
-            let id = get_str(&args.rest, "id"); // None = clear active
+            let id = get_str(&args.rest, "id");
 
-            match deps.agents.set_active(id.clone()).await {
-                Ok(()) => match id {
-                    Some(id) => (format!("Active agent set to {id}"), false),
-                    None => ("Active agent cleared".to_string(), false),
-                },
-                Err(e) => (format!("Failed to set active agent: {e}"), true),
+            // Validate agent exists
+            if let Some(ref agent_id) = id {
+                if deps.agents.get(agent_id).await.is_none() {
+                    return (format!("Agent not found: {agent_id}"), true);
+                }
+            }
+
+            // Set agent on the current conversation
+            if let Err(e) = deps.threads.set_agent(conversation_id, id.clone()).await {
+                return (format!("Failed to set agent: {e}"), true);
+            }
+
+            // Also update the global default for new conversations
+            let _ = deps.agents.set_active(id.clone()).await;
+
+            match id {
+                Some(id) => (format!("Agent set to {id}"), false),
+                None => ("Agent cleared (will use default)".to_string(), false),
             }
         }
         other => (format!("Unknown action for nexus_agents: '{other}'"), true),

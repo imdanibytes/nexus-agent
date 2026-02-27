@@ -72,7 +72,7 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
         );
 
         // 1. Resolve active agent → provider
-        let resolved = match resolve_agent(&state_clone, &emitter).await {
+        let resolved = match resolve_agent(&state_clone, &conversation_id, &emitter).await {
             Some(r) => r,
             None => return,
         };
@@ -303,15 +303,44 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
 // ── Extracted helpers ──
 
 /// Resolve the active agent from AppState, returning provider + config.
-async fn resolve_agent(state: &AppState, emitter: &TurnEmitter) -> Option<ResolvedAgent> {
-    let agent = match state.agents.active_agent().await {
-        Some(a) => a,
-        None => {
-            emitter.run_error(
-                "No active agent configured. Create one in Settings → Agents.",
-                None,
-            );
-            return None;
+async fn resolve_agent(state: &AppState, conversation_id: &str, emitter: &TurnEmitter) -> Option<ResolvedAgent> {
+    // Per-conversation agent takes priority, fall back to global default
+    let conv_agent_id = state
+        .threads
+        .get(conversation_id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|c| c.agent_id);
+
+    let agent = if let Some(ref id) = conv_agent_id {
+        match state.agents.get(id).await {
+            Some(a) => a,
+            None => {
+                // Conversation's agent was deleted — fall back to global default
+                tracing::warn!("Conversation agent {id} not found, falling back to default");
+                match state.agents.active_agent().await {
+                    Some(a) => a,
+                    None => {
+                        emitter.run_error(
+                            "No agent configured. Create one in Settings → Agents.",
+                            None,
+                        );
+                        return None;
+                    }
+                }
+            }
+        }
+    } else {
+        match state.agents.active_agent().await {
+            Some(a) => a,
+            None => {
+                emitter.run_error(
+                    "No agent configured. Create one in Settings → Agents.",
+                    None,
+                );
+                return None;
+            }
         }
     };
 
