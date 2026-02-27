@@ -8,6 +8,8 @@ export interface ConversationMeta {
 export interface ConversationUsage {
   input_tokens: number;
   output_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
   context_window: number;
   total_cost?: number;
 }

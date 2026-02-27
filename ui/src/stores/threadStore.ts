@@ -86,6 +86,7 @@ export interface ChatMessage {
       model: string;
     };
     synthetic?: boolean;
+    source?: string;
   };
 }
 
@@ -353,6 +354,8 @@ function hydrateUsage(convId: string, conv: ConversationFull): void {
     useUsageStore.getState().setUsage(convId, {
       inputTokens: conv.usage.input_tokens,
       outputTokens: conv.usage.output_tokens,
+      cacheReadInputTokens: conv.usage.cache_read_input_tokens ?? 0,
+      cacheCreationInputTokens: conv.usage.cache_creation_input_tokens ?? 0,
       contextWindow: conv.usage.context_window,
       totalCost: conv.usage.total_cost ?? 0,
     });

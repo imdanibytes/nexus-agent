@@ -118,7 +118,7 @@ const ReadOnlyMessage: FC<{ message: ChatMessage }> = ({ message }) => {
         <div className="min-w-0 flex-1 text-xs text-default-500">
           {text ? (
             <div className="line-clamp-3">
-              <MarkdownText content={text} isStreaming={false} />
+              <MarkdownText text={text} isStreaming={false} />
             </div>
           ) : details.length > 0 ? (
             <span className="text-[10px] text-default-300 italic">
