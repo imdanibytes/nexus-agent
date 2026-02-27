@@ -34,7 +34,7 @@ use crate::mcp::store::McpServerStore;
 use crate::mcp::{ClientHandlerState, McpManager};
 use crate::provider::{ProviderService, ProviderStore, ProviderType};
 use crate::server::sse::AgentEventBridge;
-use crate::server::{AppState, ChatService, McpService};
+use crate::server::{AppState, McpService, TurnManager};
 use crate::thread::ThreadService;
 use crate::workspace::WorkspaceStore;
 
@@ -153,13 +153,12 @@ async fn main() -> Result<()> {
         message_queue.clone(),
     ));
 
-    let chat = Arc::new(ChatService {
-        active_turns: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+    let turns = Arc::new(TurnManager::new(
         event_bridge,
-        pending_questions: tokio::sync::RwLock::new(ask_user::PendingQuestionStore::new()),
+        ask_user::PendingQuestionStore::new(),
         process_manager,
         message_queue,
-    });
+    ));
 
     let agents_svc = Arc::new(AgentService::new(agent_store, event_bus.clone()));
     let providers_svc = Arc::new(ProviderService::new(provider_store, event_bus.clone()));
@@ -175,7 +174,7 @@ async fn main() -> Result<()> {
         effective_fs_config: tokio::sync::RwLock::new(effective_fs),
         workspaces: workspaces_lock,
         config: config.clone(),
-        chat,
+        turns,
         agents: agents_svc,
         providers: providers_svc,
         mcp: mcp_svc,

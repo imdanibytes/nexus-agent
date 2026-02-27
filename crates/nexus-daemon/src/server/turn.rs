@@ -46,7 +46,7 @@ struct ResolvedAgent {
 /// Resolves the active agent/provider, builds the system prompt, runs the
 /// agent loop, persists results, and optionally generates a title.
 pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
-    let agent_tx = state.chat.event_bridge.agent_tx();
+    let agent_tx = state.turns.event_bridge.agent_tx();
     let state_clone = Arc::clone(&state);
 
     let TurnRequest {
@@ -140,7 +140,7 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
         // 7. Build InferenceConfig, TurnContext, TurnServices
         let bg_sub_agent_deps = Arc::new(agent::sub_agent::BgSubAgentDeps {
             provider: resolved.provider.clone(),
-            chat: state_clone.chat.clone(),
+            turns: state_clone.turns.clone(),
             tasks: state_clone.tasks.clone(),
             mcp: state_clone.mcp.clone(),
             fetch_config: state_clone.config.fetch.clone(),
@@ -172,8 +172,8 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
             fetch_config: &state_clone.config.fetch,
             filesystem_config: &effective_fs,
             task_store: state_clone.tasks.store(),
-            pending_questions: &state_clone.chat.pending_questions,
-            process_manager: Some(state_clone.chat.process_manager.clone()),
+            pending_questions: &state_clone.turns.pending_questions,
+            process_manager: Some(state_clone.turns.process_manager.clone()),
             bg_sub_agent_deps: Some(bg_sub_agent_deps),
         };
 
@@ -248,18 +248,11 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
                 }
 
                 // 12. Cleanup + follow-up
-                let queued = {
-                    let mut active = state_clone.chat.active_turns.lock().await;
-                    let is_mine = active
-                        .get(&conversation_id)
-                        .map(|t| t.run_id == run_id)
-                        .unwrap_or(false);
-                    if is_mine {
-                        active.remove(&conversation_id);
-                        state_clone.chat.message_queue.drain(&conversation_id).await
-                    } else {
-                        vec![]
-                    }
+                let is_mine = state_clone.turns.finish_turn(&conversation_id, &run_id).await;
+                let queued = if is_mine {
+                    state_clone.turns.message_queue.drain(&conversation_id).await
+                } else {
+                    vec![]
                 };
 
                 if !queued.is_empty() {
@@ -273,12 +266,7 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
             }
             Err(e) => {
                 tracing::error!("Agent turn panicked: {}", e);
-                {
-                    let mut active = state_clone.chat.active_turns.lock().await;
-                    if active.get(&conversation_id).map(|t| t.run_id == run_id).unwrap_or(false) {
-                        active.remove(&conversation_id);
-                    }
-                }
+                state_clone.turns.finish_turn(&conversation_id, &run_id).await;
                 emitter.run_error(e.to_string(), None);
             }
         }
@@ -661,18 +649,7 @@ pub async fn drain_queue_and_follow_up(
     drop(mcp_guard);
 
     // Register the follow-up turn so the queue watcher skips this conversation
-    let follow_up_run_id = Uuid::new_v4().to_string();
-    let follow_up_cancel = tokio_util::sync::CancellationToken::new();
-    {
-        let mut active = state.chat.active_turns.lock().await;
-        active.insert(
-            conversation_id.clone(),
-            crate::server::services::ActiveTurn {
-                run_id: follow_up_run_id.clone(),
-                cancel: follow_up_cancel.clone(),
-            },
-        );
-    }
+    let (follow_up_cancel, follow_up_run_id) = state.turns.register_turn(&conversation_id).await;
 
     spawn_agent_turn(
         state,

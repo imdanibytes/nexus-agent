@@ -51,7 +51,7 @@ pub async fn delete(
     Path(id): Path<String>,
 ) -> StatusCode {
     // Cancel running background processes and clean up output files
-    state.chat.process_manager.cleanup_conversation(&id).await;
+    state.turns.process_manager.cleanup_conversation(&id).await;
 
     match state.threads.delete(&id).await {
         Ok(()) => {

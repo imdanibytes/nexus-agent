@@ -31,11 +31,11 @@ use crate::thread::ThreadService;
 use crate::workspace::WorkspaceStore;
 use tokio::sync::RwLock;
 
-pub use services::{ChatService, McpService};
+pub use services::{McpService, TurnManager};
 
 pub struct AppState {
     pub config: NexusConfig,
-    pub chat: Arc<ChatService>,
+    pub turns: Arc<TurnManager>,
     pub agents: Arc<AgentService>,
     pub providers: Arc<ProviderService>,
     pub mcp: Arc<McpService>,
@@ -222,22 +222,15 @@ async fn events_stream(
     State(state): State<Arc<AppState>>,
 ) -> axum::response::sse::Sse<impl futures::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>>
 {
-    let active_runs: Vec<String> = state
-        .chat
-        .active_turns
-        .lock()
-        .await
-        .keys()
-        .cloned()
-        .collect();
-    state.chat.event_bridge.subscribe(active_runs).await
+    let active_runs = state.turns.active_run_ids().await;
+    state.turns.event_bridge.subscribe(active_runs).await
 }
 
 async fn list_processes(
     State(state): State<Arc<AppState>>,
     Path(conversation_id): Path<String>,
 ) -> Json<serde_json::Value> {
-    let processes = state.chat.process_manager.list(&conversation_id).await;
+    let processes = state.turns.process_manager.list(&conversation_id).await;
     Json(serde_json::to_value(&processes).unwrap_or_default())
 }
 
@@ -245,7 +238,7 @@ async fn stop_process(
     State(state): State<Arc<AppState>>,
     Path(process_id): Path<String>,
 ) -> StatusCode {
-    match state.chat.process_manager.cancel(&process_id).await {
+    match state.turns.process_manager.cancel(&process_id).await {
         Ok(()) => StatusCode::OK,
         Err(_) => StatusCode::NOT_FOUND,
     }
@@ -261,15 +254,11 @@ fn start_queue_watcher(
     tokio::spawn(async move {
         while let Some(conv_id) = rx.recv().await {
             // If a turn is active, the after-turn drain will handle it
-            let active = state.chat.active_turns.lock().await;
-            let turn_active = active.contains_key(&conv_id);
-            drop(active);
-
-            if turn_active {
+            if state.turns.is_active(&conv_id).await {
                 continue;
             }
 
-            let queued = state.chat.message_queue.drain(&conv_id).await;
+            let queued = state.turns.message_queue.drain(&conv_id).await;
             if queued.is_empty() {
                 continue;
             }

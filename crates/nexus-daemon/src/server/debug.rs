@@ -79,7 +79,7 @@ pub async fn force_compact(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Emit the compaction event
-    let _ = state.chat.event_bridge.agent_tx().send(EventEnvelope {
+    let _ = state.turns.event_bridge.agent_tx().send(EventEnvelope {
         thread_id: Some(id.clone()),
         run_id: None,
         event: AgUiEvent::Custom {
@@ -336,7 +336,7 @@ pub async fn emit_event(
     State(state): State<Arc<AppState>>,
     Json(body): Json<EmitEventRequest>,
 ) -> Json<serde_json::Value> {
-    let _ = state.chat.event_bridge.agent_tx().send(EventEnvelope {
+    let _ = state.turns.event_bridge.agent_tx().send(EventEnvelope {
         thread_id: Some(body.thread_id),
         run_id: None,
         event: AgUiEvent::Custom {

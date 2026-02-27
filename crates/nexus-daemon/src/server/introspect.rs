@@ -176,7 +176,7 @@ impl IntrospectMcpServer {
     }
 
     async fn handle_server_status(&self) -> Result<CallToolResult, McpError> {
-        let active_turns = self.state.chat.active_turns.lock().await.len();
+        let active_turns = self.state.turns.active_run_ids().await.len();
         let conversations = self.state.threads.list().await.len();
         let mcp_servers = self.state.mcp.configs.read().await.list().len();
         let mcp_tools = self.state.mcp.mcp.read().await.tools().len();
@@ -230,7 +230,7 @@ impl IntrospectMcpServer {
         let message = require_str(args, "message")?;
 
         use super::message_queue::QueuedMessage;
-        self.state.chat.message_queue.enqueue(&conv_id, QueuedMessage {
+        self.state.turns.message_queue.enqueue(&conv_id, QueuedMessage {
             text: message,
             metadata: serde_json::Value::Null,
         }).await;
@@ -241,12 +241,9 @@ impl IntrospectMcpServer {
     async fn handle_abort_turn(&self, args: &serde_json::Map<String, serde_json::Value>) -> Result<CallToolResult, McpError> {
         let conv_id = require_str(args, "conversation_id")?;
 
-        let mut active = self.state.chat.active_turns.lock().await;
-        if let Some(turn) = active.remove(&conv_id) {
-            turn.cancel.cancel();
-            ok_json(&json!({ "ok": true, "aborted_run": turn.run_id }))
-        } else {
-            ok_json(&json!({ "ok": false, "reason": "no active turn" }))
+        match self.state.turns.cancel_turn(&conv_id).await {
+            Some(run_id) => ok_json(&json!({ "ok": true, "aborted_run": run_id })),
+            None => ok_json(&json!({ "ok": false, "reason": "no active turn" })),
         }
     }
 }

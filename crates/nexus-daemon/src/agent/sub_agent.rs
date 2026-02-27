@@ -7,7 +7,7 @@ use crate::anthropic::types::{ContentBlock, Message, Role, Tool};
 use crate::bg_process::ProcessKind;
 use crate::config::{FetchConfig, FilesystemConfig};
 use crate::provider::InferenceProvider;
-use crate::server::services::{ChatService, McpService};
+use crate::server::services::{TurnManager, McpService};
 
 use super::emitter::TurnEmitter;
 use super::tool_dispatch::{ToolContext, ToolHandler, ToolResult};
@@ -235,7 +235,7 @@ fn extract_text_from_messages(messages: &[Message]) -> String {
 /// Constructed in `spawn_agent_turn` (turn.rs) where Arc<AppState> is available.
 pub struct BgSubAgentDeps {
     pub provider: Arc<dyn InferenceProvider>,
-    pub chat: Arc<ChatService>,
+    pub turns: Arc<TurnManager>,
     pub tasks: Arc<crate::tasks::TaskService>,
     pub mcp: Arc<McpService>,
     pub fetch_config: FetchConfig,
@@ -417,7 +417,7 @@ impl SubAgentHandler<'_> {
             }
         };
 
-        let pm = &bg_deps.chat.process_manager;
+        let pm = &bg_deps.turns.process_manager;
         let label = format!("{} sub-agent: {}", config.agent_type,
             if config.task.len() > 50 { &config.task[..50] } else { &config.task });
 
@@ -461,7 +461,7 @@ impl SubAgentHandler<'_> {
         let conversation_id = ctx.conversation_id.to_string();
 
         tokio::spawn(async move {
-            let bg_tx = bg_deps.chat.event_bridge.agent_tx();
+            let bg_tx = bg_deps.turns.event_bridge.agent_tx();
             let bg_emitter = TurnEmitter::new(
                 bg_tx,
                 conversation_id.clone(),
@@ -490,8 +490,8 @@ impl SubAgentHandler<'_> {
                 fetch_config: &bg_deps.fetch_config,
                 filesystem_config: &bg_deps.filesystem_config,
                 task_store: bg_deps.tasks.store(),
-                pending_questions: &bg_deps.chat.pending_questions,
-                process_manager: Some(bg_deps.chat.process_manager.clone()),
+                pending_questions: &bg_deps.turns.pending_questions,
+                process_manager: Some(bg_deps.turns.process_manager.clone()),
                 bg_sub_agent_deps: None,
             };
 
@@ -520,7 +520,7 @@ impl SubAgentHandler<'_> {
 
             let _ = tokio::fs::write(&output_path, &output).await;
             bg_deps
-                .chat
+                .turns
                 .process_manager
                 .complete(&process_id, None, is_error)
                 .await;

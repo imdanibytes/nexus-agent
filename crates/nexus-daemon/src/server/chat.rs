@@ -45,7 +45,7 @@ pub async fn start_turn(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let conversation_id = body.conversation_id.clone();
 
-    let (cancel, run_id) = cancel_existing_turn(&state, &conversation_id).await;
+    let (cancel, run_id) = state.turns.register_turn(&conversation_id).await;
 
     let (req, user_msg_id) = {
         let mut conv = state.threads.checkout(&conversation_id).await
@@ -109,7 +109,7 @@ pub async fn branch_turn(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let conversation_id = body.conversation_id.clone();
 
-    let (cancel, run_id) = cancel_existing_turn(&state, &conversation_id).await;
+    let (cancel, run_id) = state.turns.register_turn(&conversation_id).await;
 
     let (req, new_msg_id) = {
         let mut conv = state.threads.checkout(&conversation_id).await
@@ -205,7 +205,7 @@ pub async fn regenerate_turn(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let conversation_id = body.conversation_id.clone();
 
-    let (cancel, run_id) = cancel_existing_turn(&state, &conversation_id).await;
+    let (cancel, run_id) = state.turns.register_turn(&conversation_id).await;
 
     let req = {
         let mut conv = state.threads.checkout(&conversation_id).await
@@ -289,7 +289,7 @@ pub async fn tool_invoke(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let (cancel, run_id) = cancel_existing_turn(&state, &conversation_id).await;
+    let (cancel, run_id) = state.turns.register_turn(&conversation_id).await;
 
     let req = {
         let mut conv = state.threads.checkout(&conversation_id).await
@@ -297,7 +297,7 @@ pub async fn tool_invoke(
             .ok_or(StatusCode::NOT_FOUND)?;
 
         // Execute the tool (synthetic emitter — client-initiated, no real run)
-        let tx = state.chat.event_bridge.agent_tx();
+        let tx = state.turns.event_bridge.agent_tx();
         let tool_emitter = crate::agent::emitter::TurnEmitter::new(
             tx,
             conversation_id.clone(),
@@ -369,10 +369,7 @@ pub async fn abort_turn(
     State(state): State<Arc<AppState>>,
     Json(body): Json<AbortRequest>,
 ) -> StatusCode {
-    let mut active = state.chat.active_turns.lock().await;
-    if let Some(turn) = active.remove(&body.conversation_id) {
-        turn.cancel.cancel();
-    }
+    state.turns.cancel_turn(&body.conversation_id).await;
     StatusCode::OK
 }
 
@@ -380,28 +377,6 @@ pub async fn abort_turn(
 pub struct AbortRequest {
     #[serde(rename = "conversationId")]
     pub conversation_id: String,
-}
-
-// ── Helpers ──
-
-async fn cancel_existing_turn(
-    state: &Arc<AppState>,
-    conversation_id: &str,
-) -> (tokio_util::sync::CancellationToken, String) {
-    let run_id = uuid::Uuid::new_v4().to_string();
-    let mut active = state.chat.active_turns.lock().await;
-    if let Some(prev) = active.remove(conversation_id) {
-        prev.cancel.cancel();
-    }
-    let cancel = tokio_util::sync::CancellationToken::new();
-    active.insert(
-        conversation_id.to_string(),
-        super::services::ActiveTurn {
-            run_id: run_id.clone(),
-            cancel: cancel.clone(),
-        },
-    );
-    (cancel, run_id)
 }
 
 // ── Ask-user answer endpoint ──
@@ -424,7 +399,7 @@ pub async fn answer_question(
     Json(body): Json<AnswerRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let question = {
-        let mut store = state.chat.pending_questions.write().await;
+        let mut store = state.turns.pending_questions.write().await;
         store.remove(&body.question_id)
     };
 

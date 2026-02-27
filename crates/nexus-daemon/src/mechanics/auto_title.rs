@@ -228,7 +228,7 @@ async fn persist_and_broadcast(state: &Arc<AppState>, conversation_id: &str, tit
     }
 
     let _ = state
-        .chat
+        .turns
         .event_bridge
         .agent_tx()
         .send(EventEnvelope {
