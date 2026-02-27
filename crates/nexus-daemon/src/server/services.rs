@@ -3,12 +3,10 @@ use std::sync::Arc;
 
 use tokio::sync::{Mutex, RwLock};
 
-use crate::agent_config::AgentStore;
 use crate::ask_user::PendingQuestionStore;
 use crate::bg_process::ProcessManager;
 use crate::mcp::store::McpServerStore;
 use crate::mcp::McpManager;
-use crate::provider::{ProviderFactory, ProviderStore};
 use crate::tasks::store::TaskStateStore;
 use super::message_queue::MessageQueue;
 use super::sse::AgentEventBridge;
@@ -31,16 +29,8 @@ pub struct ChatService {
     pub message_queue: Arc<MessageQueue>,
 }
 
-/// Agent + provider configuration and client creation.
-pub struct AgentService {
-    pub agents: RwLock<AgentStore>,
-    pub providers: RwLock<ProviderStore>,
-    pub factory: Arc<ProviderFactory>,
-}
-
 /// MCP server management.
 pub struct McpService {
     pub mcp: RwLock<McpManager>,
     pub configs: RwLock<McpServerStore>,
 }
-

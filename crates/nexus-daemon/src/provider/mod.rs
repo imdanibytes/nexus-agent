@@ -2,10 +2,12 @@ pub mod anthropic_provider;
 pub mod bedrock_provider;
 pub mod error;
 pub mod factory;
+pub mod service;
 pub mod store;
 pub mod types;
 
 pub use factory::ProviderFactory;
+pub use service::ProviderService;
 pub use store::ProviderStore;
 pub use types::{Provider, ProviderPublic, ProviderType};
 

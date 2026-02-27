@@ -10,8 +10,7 @@ use crate::server::AppState;
 pub async fn list(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let store = state.agents.agents.read().await;
-    let agents = store.list();
+    let agents = state.agents.list().await;
     Ok(Json(serde_json::to_value(agents).unwrap()))
 }
 
@@ -20,15 +19,12 @@ pub async fn create(
     Json(body): Json<CreateAgentRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), StatusCode> {
     // Validate provider exists
-    {
-        let providers = state.agents.providers.read().await;
-        if providers.get(&body.provider_id).is_none() {
-            return Err(StatusCode::BAD_REQUEST);
-        }
+    if !state.providers.exists(&body.provider_id).await {
+        return Err(StatusCode::BAD_REQUEST);
     }
 
-    let mut store = state.agents.agents.write().await;
-    let agent = store
+    let agent = state
+        .agents
         .create_with_mcp(
             body.name,
             body.provider_id,
@@ -38,6 +34,7 @@ pub async fn create(
             body.max_tokens,
             body.mcp_server_ids,
         )
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok((
@@ -50,9 +47,8 @@ pub async fn get(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let store = state.agents.agents.read().await;
-    match store.get(&id) {
-        Some(a) => Ok(Json(serde_json::to_value(a).unwrap())),
+    match state.agents.get(&id).await {
+        Some(a) => Ok(Json(serde_json::to_value(&a).unwrap())),
         None => Err(StatusCode::NOT_FOUND),
     }
 }
@@ -64,13 +60,11 @@ pub async fn update(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     // Validate provider if being changed
     if let Some(ref pid) = body.provider_id {
-        let providers = state.agents.providers.read().await;
-        if providers.get(pid).is_none() {
+        if !state.providers.exists(pid).await {
             return Err(StatusCode::BAD_REQUEST);
         }
     }
 
-    let mut store = state.agents.agents.write().await;
     let updates = AgentUpdate {
         name: body.name,
         provider_id: body.provider_id,
@@ -86,8 +80,10 @@ pub async fn update(
         set_mcp_server_ids: body.set_mcp_server_ids.unwrap_or(false),
     };
 
-    match store
+    match state
+        .agents
         .update(&id, updates)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     {
         Some(a) => Ok(Json(serde_json::to_value(&a).unwrap())),
@@ -99,8 +95,7 @@ pub async fn delete(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> StatusCode {
-    let mut store = state.agents.agents.write().await;
-    match store.delete(&id) {
+    match state.agents.delete(&id).await {
         Ok(true) => StatusCode::NO_CONTENT,
         Ok(false) => StatusCode::NOT_FOUND,
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -110,25 +105,24 @@ pub async fn delete(
 pub async fn get_active(
     State(state): State<Arc<AppState>>,
 ) -> Json<serde_json::Value> {
-    let store = state.agents.agents.read().await;
-    Json(serde_json::json!({ "agent_id": store.active_agent_id() }))
+    Json(serde_json::json!({ "agent_id": state.agents.active_agent_id().await }))
 }
 
 pub async fn set_active(
     State(state): State<Arc<AppState>>,
     Json(body): Json<SetActiveRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let mut store = state.agents.agents.write().await;
-
     // Validate agent exists if setting one
     if let Some(ref id) = body.agent_id {
-        if store.get(id).is_none() {
+        if state.agents.get(id).await.is_none() {
             return Err(StatusCode::BAD_REQUEST);
         }
     }
 
-    store
+    state
+        .agents
         .set_active(body.agent_id.clone())
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(serde_json::json!({ "agent_id": body.agent_id })))

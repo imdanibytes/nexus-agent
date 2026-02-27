@@ -47,6 +47,21 @@ impl EventBus {
         });
     }
 
+    /// Convenience: emit a global data event (not scoped to a thread).
+    ///
+    /// Used by services like AgentService and ProviderService whose events
+    /// aren't tied to a specific conversation.
+    pub fn emit_global(&self, name: &str, value: serde_json::Value) {
+        self.emit(EventEnvelope {
+            thread_id: None,
+            run_id: None,
+            event: AgUiEvent::Custom {
+                name: name.to_string(),
+                value,
+            },
+        });
+    }
+
     /// Get the raw sender (for TurnEmitter, ProcessManager, etc.)
     pub fn sender(&self) -> broadcast::Sender<EventEnvelope> {
         self.tx.clone()

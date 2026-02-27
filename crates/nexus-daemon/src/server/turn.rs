@@ -288,50 +288,29 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
 
 /// Resolve the active agent from AppState, returning provider + config.
 async fn resolve_agent(state: &AppState, emitter: &TurnEmitter) -> Option<ResolvedAgent> {
-    let (provider_record, model, max_tokens, system_prompt, temperature, thinking_budget, meta) = {
-        let agents = state.agents.agents.read().await;
-        let providers = state.agents.providers.read().await;
-
-        let active_id = agents.active_agent_id().map(|s| s.to_string());
-        let agent = active_id.as_deref().and_then(|id| agents.get(id));
-
-        match agent {
-            Some(a) => {
-                let provider = providers.get(&a.provider_id).cloned();
-                match provider {
-                    Some(p) => (
-                        p,
-                        a.model.clone(),
-                        a.max_tokens.unwrap_or(8192),
-                        a.system_prompt.clone(),
-                        a.temperature,
-                        a.thinking_budget,
-                        serde_json::json!({
-                            "agent_id": a.id,
-                            "agent_name": a.name,
-                            "model": a.model,
-                        }),
-                    ),
-                    None => {
-                        emitter.run_error(
-                            format!("Provider '{}' not found for agent '{}'", a.provider_id, a.name),
-                            None,
-                        );
-                        return None;
-                    }
-                }
-            }
-            None => {
-                emitter.run_error(
-                    "No active agent configured. Create one in Settings → Agents.",
-                    None,
-                );
-                return None;
-            }
+    let agent = match state.agents.active_agent().await {
+        Some(a) => a,
+        None => {
+            emitter.run_error(
+                "No active agent configured. Create one in Settings → Agents.",
+                None,
+            );
+            return None;
         }
     };
 
-    let provider = match state.agents.factory.get(&provider_record).await {
+    let provider_record = match state.providers.get(&agent.provider_id).await {
+        Some(p) => p,
+        None => {
+            emitter.run_error(
+                format!("Provider '{}' not found for agent '{}'", agent.provider_id, agent.name),
+                None,
+            );
+            return None;
+        }
+    };
+
+    let provider = match state.providers.get_client(&provider_record).await {
         Ok(p) => p,
         Err(e) => {
             emitter.run_error(format!("Failed to create provider client: {}", e), None);
@@ -341,12 +320,16 @@ async fn resolve_agent(state: &AppState, emitter: &TurnEmitter) -> Option<Resolv
 
     Some(ResolvedAgent {
         provider,
-        model,
-        max_tokens,
-        system_prompt,
-        temperature,
-        thinking_budget,
-        meta,
+        model: agent.model.clone(),
+        max_tokens: agent.max_tokens.unwrap_or(8192),
+        system_prompt: agent.system_prompt.clone(),
+        temperature: agent.temperature,
+        thinking_budget: agent.thinking_budget,
+        meta: serde_json::json!({
+            "agent_id": agent.id,
+            "agent_name": agent.name,
+            "model": agent.model,
+        }),
     })
 }
 

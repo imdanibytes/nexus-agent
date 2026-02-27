@@ -25,16 +25,16 @@ mod workspace;
 use anyhow::Result;
 use std::sync::Arc;
 
-use crate::agent_config::AgentStore;
+use crate::agent_config::{AgentService, AgentStore};
 use crate::anthropic::AnthropicClient;
 use crate::config::NexusConfig;
 use crate::conversation::ConversationStore;
 use crate::event_bus::EventBus;
 use crate::mcp::store::McpServerStore;
 use crate::mcp::{ClientHandlerState, McpManager};
-use crate::provider::{ProviderFactory, ProviderStore, ProviderType};
+use crate::provider::{ProviderService, ProviderStore, ProviderType};
 use crate::server::sse::AgentEventBridge;
-use crate::server::{AppState, AgentService, ChatService, McpService};
+use crate::server::{AppState, ChatService, McpService};
 use crate::thread::ThreadService;
 use crate::workspace::WorkspaceStore;
 
@@ -143,7 +143,6 @@ async fn main() -> Result<()> {
 
     let mcp = McpManager::from_configs(&mcp_servers, &handler_state).await;
     let mcp_configs = McpServerStore::new(mcp_servers);
-    let factory = Arc::new(ProviderFactory::new());
 
     let (message_queue, queue_rx) = server::message_queue::MessageQueue::new();
     let message_queue = Arc::new(message_queue);
@@ -163,11 +162,8 @@ async fn main() -> Result<()> {
         message_queue,
     });
 
-    let agents_svc = Arc::new(AgentService {
-        agents: tokio::sync::RwLock::new(agent_store),
-        providers: tokio::sync::RwLock::new(provider_store),
-        factory,
-    });
+    let agents_svc = Arc::new(AgentService::new(agent_store, event_bus.clone()));
+    let providers_svc = Arc::new(ProviderService::new(provider_store, event_bus.clone()));
 
     let mcp_svc = Arc::new(McpService {
         mcp: tokio::sync::RwLock::new(mcp),
@@ -181,6 +177,7 @@ async fn main() -> Result<()> {
         config: config.clone(),
         chat,
         agents: agents_svc,
+        providers: providers_svc,
         mcp: mcp_svc,
         threads,
         event_bus,

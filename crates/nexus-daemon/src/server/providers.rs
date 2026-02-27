@@ -4,15 +4,15 @@ use axum::Json;
 use serde::Deserialize;
 use std::sync::Arc;
 
-use crate::provider::types::{Provider, ProviderPublic, ProviderType};
 use crate::provider::store::ProviderUpdate;
+use crate::provider::types::{Provider, ProviderPublic, ProviderType};
 use crate::server::AppState;
 
 pub async fn list(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let store = state.agents.providers.read().await;
-    let public: Vec<ProviderPublic> = store.list().iter().map(ProviderPublic::from).collect();
+    let providers = state.providers.list().await;
+    let public: Vec<ProviderPublic> = providers.iter().map(ProviderPublic::from).collect();
     Ok(Json(serde_json::to_value(public).unwrap()))
 }
 
@@ -20,8 +20,8 @@ pub async fn create(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateProviderRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), StatusCode> {
-    let mut store = state.agents.providers.write().await;
-    let provider = store
+    let provider = state
+        .providers
         .create(
             body.name,
             body.provider_type,
@@ -30,8 +30,8 @@ pub async fn create(
             body.aws_region,
             body.aws_profile,
         )
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
 
     let public = ProviderPublic::from(&provider);
     Ok((
@@ -44,10 +44,9 @@ pub async fn get(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let store = state.agents.providers.read().await;
-    match store.get(&id) {
+    match state.providers.get(&id).await {
         Some(p) => {
-            let public = ProviderPublic::from(p);
+            let public = ProviderPublic::from(&p);
             Ok(Json(serde_json::to_value(public).unwrap()))
         }
         None => Err(StatusCode::NOT_FOUND),
@@ -59,7 +58,6 @@ pub async fn update(
     Path(id): Path<String>,
     Json(body): Json<UpdateProviderRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let mut store = state.agents.providers.write().await;
     let updates = ProviderUpdate {
         name: body.name,
         endpoint: body.endpoint,
@@ -68,13 +66,13 @@ pub async fn update(
         aws_profile: body.aws_profile,
     };
 
-    match store
+    match state
+        .providers
         .update(&id, updates)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     {
         Some(p) => {
-            // Invalidate cached client
-            state.agents.factory.invalidate(&id).await;
             let public = ProviderPublic::from(&p);
             Ok(Json(serde_json::to_value(public).unwrap()))
         }
@@ -86,13 +84,8 @@ pub async fn delete(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> StatusCode {
-    let mut store = state.agents.providers.write().await;
-    match store.delete(&id) {
-        Ok(true) => {
-            let state = Arc::clone(&state);
-            tokio::spawn(async move { state.agents.factory.invalidate(&id).await });
-            StatusCode::NO_CONTENT
-        }
+    match state.providers.delete(&id).await {
+        Ok(true) => StatusCode::NO_CONTENT,
         Ok(false) => StatusCode::NOT_FOUND,
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
@@ -102,12 +95,9 @@ pub async fn test_connection(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let provider = {
-        let store = state.agents.providers.read().await;
-        store.get(&id).cloned().ok_or(StatusCode::NOT_FOUND)?
-    };
+    let provider = state.providers.get(&id).await.ok_or(StatusCode::NOT_FOUND)?;
 
-    match state.agents.factory.get(&provider).await {
+    match state.providers.get_client(&provider).await {
         Ok(client) => {
             // Send a minimal request to test the connection
             let messages = vec![crate::anthropic::types::Message {
@@ -159,7 +149,7 @@ pub async fn test_inline(
         ProviderType::Bedrock => "us.anthropic.claude-3-haiku-20240307-v1:0",
     };
 
-    let client = match state.agents.factory.get(&provider).await {
+    let client = match state.providers.get_client(&provider).await {
         Ok(c) => c,
         Err(e) => {
             return Json(serde_json::json!({ "ok": false, "error": e.to_string() }));
@@ -186,10 +176,7 @@ pub async fn list_models(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let provider = {
-        let store = state.agents.providers.read().await;
-        store.get(&id).cloned().ok_or(StatusCode::NOT_FOUND)?
-    };
+    let provider = state.providers.get(&id).await.ok_or(StatusCode::NOT_FOUND)?;
 
     match provider.provider_type {
         ProviderType::Anthropic => {

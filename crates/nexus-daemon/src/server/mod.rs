@@ -21,19 +21,22 @@ use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
+use crate::agent_config::AgentService;
 use crate::anthropic::AnthropicClient;
 use crate::config::{FilesystemConfig, NexusConfig};
 use crate::event_bus::EventBus;
+use crate::provider::ProviderService;
 use crate::thread::ThreadService;
 use crate::workspace::WorkspaceStore;
 use tokio::sync::RwLock;
 
-pub use services::{AgentService, ChatService, McpService};
+pub use services::{ChatService, McpService};
 
 pub struct AppState {
     pub config: NexusConfig,
     pub chat: Arc<ChatService>,
     pub agents: Arc<AgentService>,
+    pub providers: Arc<ProviderService>,
     pub mcp: Arc<McpService>,
     pub threads: Arc<ThreadService>,
     pub event_bus: EventBus,

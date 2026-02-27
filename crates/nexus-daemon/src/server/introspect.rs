@@ -145,15 +145,12 @@ impl IntrospectMcpServer {
     }
 
     async fn handle_list_agents(&self) -> Result<CallToolResult, McpError> {
-        let store = self.state.agents.agents.read().await;
-        ok_json(&store.list())
+        let agents = self.state.agents.list().await;
+        ok_json(&agents)
     }
 
     async fn handle_get_active_agent(&self) -> Result<CallToolResult, McpError> {
-        let store = self.state.agents.agents.read().await;
-        let active = store
-            .active_agent_id()
-            .and_then(|id| store.get(id));
+        let active = self.state.agents.active_agent().await;
         ok_json(&active)
     }
 
@@ -184,8 +181,8 @@ impl IntrospectMcpServer {
         let conversations = self.state.threads.list().await.len();
         let mcp_servers = self.state.mcp.configs.read().await.list().len();
         let mcp_tools = self.state.mcp.mcp.read().await.tools().len();
-        let agents = self.state.agents.agents.read().await.list().len();
-        let providers = self.state.agents.providers.read().await.list().len();
+        let agents = self.state.agents.list().await.len();
+        let providers = self.state.providers.list().await.len();
 
         ok_json(&json!({
             "active_turns": active_turns,
@@ -198,9 +195,9 @@ impl IntrospectMcpServer {
     }
 
     async fn handle_list_providers(&self) -> Result<CallToolResult, McpError> {
-        let store = self.state.agents.providers.read().await;
+        let providers = self.state.providers.list().await;
         let public: Vec<crate::provider::ProviderPublic> =
-            store.list().iter().map(|p| p.into()).collect();
+            providers.iter().map(|p| p.into()).collect();
         ok_json(&public)
     }
 

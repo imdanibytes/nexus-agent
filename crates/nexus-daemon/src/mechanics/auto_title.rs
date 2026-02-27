@@ -84,24 +84,15 @@ pub async fn generate_title(
 async fn resolve_provider(
     state: &Arc<AppState>,
 ) -> Option<(Arc<dyn InferenceProvider>, String)> {
-    let agents = state.agents.agents.read().await;
-    let providers = state.agents.providers.read().await;
+    let agent = state.agents.active_agent().await?;
+    let provider_record = state.providers.get(&agent.provider_id).await?;
 
-    let active_id = agents.active_agent_id()?;
-    let agent = agents.get(active_id)?;
-    let provider_record = providers.get(&agent.provider_id)?.clone();
-
-    // Pick the right title model for the provider type
     let title_model = match provider_record.provider_type {
         crate::provider::types::ProviderType::Anthropic => TITLE_MODEL_ANTHROPIC.to_string(),
         crate::provider::types::ProviderType::Bedrock => TITLE_MODEL_BEDROCK.to_string(),
     };
 
-    // Drop read locks before the potentially-async factory call
-    drop(agents);
-    drop(providers);
-
-    match state.agents.factory.get(&provider_record).await {
+    match state.providers.get_client(&provider_record).await {
         Ok(instance) => Some((instance, title_model)),
         Err(e) => {
             tracing::warn!("auto_title: failed to create provider: {}", e);
