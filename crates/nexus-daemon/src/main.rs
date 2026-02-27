@@ -192,6 +192,15 @@ async fn main() -> Result<()> {
         .filter(|c| c.enabled && lsp_config_store.settings().enabled)
         .cloned()
         .collect();
+    for cfg in &enabled_lsp_configs {
+        tracing::info!(
+            id = %cfg.id,
+            name = %cfg.name,
+            command = %cfg.command,
+            languages = ?cfg.language_ids,
+            "LSP server enabled"
+        );
+    }
     let lsp_timeout = lsp_config_store.settings().diagnostics_timeout_ms;
     let lsp_manager = lsp::manager::LspManager::new(enabled_lsp_configs, lsp_timeout);
     let lsp_svc = lsp::LspService::new(lsp_manager, lsp_config_store);

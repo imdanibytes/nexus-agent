@@ -84,24 +84,28 @@ impl ToolHandler for LspDecoratedFsHandler {
 
         let report = match report {
             Some(r) => r,
-            None => return result,
+            None => {
+                tracing::info!(
+                    tool = %ctx.tool_name,
+                    file = %file_path,
+                    "LSP: no server available for this file type"
+                );
+                return result;
+            }
         };
 
         let decoration = format_report(&report);
-        tracing::debug!(
+        tracing::info!(
             tool = %ctx.tool_name,
             file = %file_path,
             server = %report.server_name,
             "LSP decoration: {}",
             match &report.status {
+                DiagnosticStatus::Ready(d) if d.is_empty() => "clean".to_string(),
                 DiagnosticStatus::Ready(d) => format!("{} diagnostic(s)", d.len()),
                 DiagnosticStatus::Pending => "pending (indexing)".to_string(),
             }
         );
-
-        if decoration.is_empty() {
-            return result;
-        }
 
         ToolResult {
             content: format!("{}\n\n{}", result.content, decoration),
@@ -138,7 +142,19 @@ async fn read_file_content(path: &str) -> String {
 /// Format a diagnostic report for inclusion in tool results.
 fn format_report(report: &DiagnosticReport) -> String {
     match &report.status {
-        DiagnosticStatus::Ready(diagnostics) => format_diagnostics(diagnostics),
+        DiagnosticStatus::Ready(diagnostics) => {
+            let body = format_diagnostics(diagnostics);
+            if body.is_empty() {
+                // Clean file — emit a minimal status tag so the model
+                // (and the user) knows LSP analyzed the file.
+                format!(
+                    "<lsp_diagnostics server=\"{}\" status=\"clean\" />",
+                    report.server_name,
+                )
+            } else {
+                body
+            }
+        }
         DiagnosticStatus::Pending => {
             format!(
                 "<lsp_diagnostics server=\"{}\" status=\"indexing\">\n\
@@ -308,6 +324,7 @@ mod tests {
             server_name: "rust-analyzer".into(),
         };
         let output = format_report(&report);
-        assert!(output.is_empty(), "Clean file should produce no decoration");
+        assert!(output.contains("status=\"clean\""), "Clean file should show clean status");
+        assert!(output.contains("rust-analyzer"));
     }
 }

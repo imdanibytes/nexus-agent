@@ -84,17 +84,25 @@ impl LspServer {
         let init_id = writer.request("initialize", init_params).await
             .context("Failed to send initialize")?;
 
-        // Wait for initialize response
-        loop {
-            let msg = reader.read_message().await
-                .context("Failed reading initialize response")?;
-            match msg {
-                LspMessage::Response { id, .. } if id == init_id => break,
-                LspMessage::Error { id, error } if id == init_id => {
-                    anyhow::bail!("LSP initialize failed: {error}");
+        // Wait for initialize response (with timeout — some servers are slow to init)
+        let init_result = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let msg = reader.read_message().await
+                    .context("Failed reading initialize response")?;
+                match msg {
+                    LspMessage::Response { id, .. } if id == init_id => break Ok::<_, anyhow::Error>(()),
+                    LspMessage::Error { id, error } if id == init_id => {
+                        anyhow::bail!("LSP initialize failed: {error}");
+                    }
+                    _ => continue, // Skip notifications during init
                 }
-                _ => continue, // Skip notifications during init
             }
+        }).await;
+
+        match init_result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return Err(e),
+            Err(_) => anyhow::bail!("LSP initialize timed out after 30s"),
         }
 
         // Send initialized notification

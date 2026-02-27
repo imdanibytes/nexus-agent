@@ -209,11 +209,11 @@ impl LspManager {
                         self.servers.insert(key, server);
                     }
                     Err(e) => {
-                        tracing::debug!(
+                        tracing::warn!(
                             lsp = %config.name,
                             root = %project_path,
                             error = %e,
-                            "Failed to pre-warm LSP server (binary may not be installed)"
+                            "Failed to pre-warm LSP server"
                         );
                     }
                 }
