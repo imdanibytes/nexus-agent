@@ -13,7 +13,7 @@ pub struct TestDaemon {
     child: Child,
     pub port: u16,
     pub base_url: String,
-    _home_dir: TempDir,
+    _home_dir: Option<TempDir>,
     pub home_path: PathBuf,
 }
 
@@ -76,7 +76,7 @@ impl TestDaemon {
             child,
             port,
             base_url: base_url.clone(),
-            _home_dir: home_dir,
+            _home_dir: Some(home_dir),
             home_path,
         };
 
@@ -113,6 +113,61 @@ impl TestDaemon {
 
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+    }
+
+    /// Spawn a daemon using an existing data directory (for persistence tests).
+    /// The caller manages the directory lifetime.
+    pub async fn spawn_at_path(home_path: PathBuf) -> anyhow::Result<Self> {
+        let nexus_dir = home_path.join(".nexus");
+        std::fs::create_dir_all(&nexus_dir)?;
+
+        let port = allocate_free_port()?;
+
+        // Write config if it doesn't exist yet
+        let config_path = nexus_dir.join("nexus.json");
+        if !config_path.exists() {
+            let config = serde_json::json!({
+                "server": { "host": "127.0.0.1", "port": port }
+            });
+            std::fs::write(&config_path, serde_json::to_string_pretty(&config)?)?;
+        } else {
+            // Update port in existing config
+            let raw = std::fs::read_to_string(&config_path)?;
+            let mut config: serde_json::Value = serde_json::from_str(&raw)?;
+            config["server"]["port"] = serde_json::json!(port);
+            std::fs::write(&config_path, serde_json::to_string_pretty(&config)?)?;
+        }
+
+        if !nexus_dir.join("mcp.json").exists() {
+            std::fs::write(nexus_dir.join("mcp.json"), "[]")?;
+        }
+
+        let binary = nexus_binary_path()?;
+        let mut cmd = Command::new(&binary);
+        cmd.env("HOME", &home_path)
+            .current_dir(&home_path)
+            .env(
+                "RUST_LOG",
+                std::env::var("NEXUS_TEST_LOG").unwrap_or_else(|_| "error".into()),
+            )
+            .env_remove("ANTHROPIC_API_KEY")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+
+        let child = cmd.spawn()?;
+        let base_url = format!("http://127.0.0.1:{port}");
+
+        let daemon = Self {
+            child,
+            port,
+            base_url,
+            _home_dir: None,
+            home_path,
+        };
+
+        daemon.wait_ready(Duration::from_secs(10)).await?;
+        Ok(daemon)
     }
 }
 

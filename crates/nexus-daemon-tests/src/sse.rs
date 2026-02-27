@@ -97,4 +97,41 @@ impl SseSubscription {
         .await
         .unwrap_or_else(|| panic!("Expected event type '{event_type}' within {timeout:?}"))
     }
+
+    /// Wait for a CUSTOM event with a specific `name` field.
+    pub async fn expect_custom(&mut self, name: &str, timeout: Duration) -> Value {
+        let n = name.to_string();
+        self.next_matching(
+            move |e| {
+                e.get("type").and_then(|t| t.as_str()) == Some("CUSTOM")
+                    && e.get("name").and_then(|n2| n2.as_str()) == Some(n.as_str())
+            },
+            timeout,
+        )
+        .await
+        .unwrap_or_else(|| panic!("Expected CUSTOM event '{name}' within {timeout:?}"))
+    }
+
+    /// Collect all events matching `predicate` until `timeout` expires.
+    pub async fn collect_matching<F>(&mut self, predicate: F, timeout: Duration) -> Vec<Value>
+    where
+        F: Fn(&Value) -> bool,
+    {
+        let mut results = Vec::new();
+        let deadline = tokio::time::sleep(timeout);
+        tokio::pin!(deadline);
+
+        loop {
+            tokio::select! {
+                Some(event) = self.rx.recv() => {
+                    if predicate(&event) {
+                        results.push(event);
+                    }
+                }
+                _ = &mut deadline => {
+                    return results;
+                }
+            }
+        }
+    }
 }
