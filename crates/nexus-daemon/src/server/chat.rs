@@ -48,10 +48,7 @@ pub async fn start_turn(
     let (cancel, run_id) = cancel_existing_turn(&state, &conversation_id).await;
 
     let (req, user_msg_id) = {
-        let mut store = state.chat.conversations.write().await;
-
-        let mut conv = store
-            .get(&conversation_id)
+        let mut conv = state.threads.checkout(&conversation_id).await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
             .ok_or(StatusCode::NOT_FOUND)?;
 
@@ -75,10 +72,7 @@ pub async fn start_turn(
         conv.messages.push(user_msg);
         conv.updated_at = Utc::now();
 
-        store
-            .save(&conv)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
+        // Build TurnRequest BEFORE commit (commit takes ownership of conv)
         let req = TurnRequest {
             conversation_id,
             api_messages: conv.build_api_messages(),
@@ -91,6 +85,9 @@ pub async fn start_turn(
             title: conv.title.clone(),
             message_count: conv.active_path.len(),
         };
+
+        state.threads.commit(conv).await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         (req, user_msg_id)
     };
@@ -115,10 +112,7 @@ pub async fn branch_turn(
     let (cancel, run_id) = cancel_existing_turn(&state, &conversation_id).await;
 
     let (req, new_msg_id) = {
-        let mut store = state.chat.conversations.write().await;
-
-        let mut conv = store
-            .get(&conversation_id)
+        let mut conv = state.threads.checkout(&conversation_id).await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
             .ok_or(StatusCode::NOT_FOUND)?;
 
@@ -166,10 +160,7 @@ pub async fn branch_turn(
         conv.messages.push(new_user_msg);
         conv.updated_at = Utc::now();
 
-        store
-            .save(&conv)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
+        // Build TurnRequest BEFORE commit (commit takes ownership of conv)
         let req = TurnRequest {
             conversation_id,
             api_messages: conv.build_api_messages(),
@@ -182,6 +173,9 @@ pub async fn branch_turn(
             title: conv.title.clone(),
             message_count: conv.active_path.len(),
         };
+
+        state.threads.commit(conv).await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         (req, new_msg_id)
     };
@@ -214,10 +208,7 @@ pub async fn regenerate_turn(
     let (cancel, run_id) = cancel_existing_turn(&state, &conversation_id).await;
 
     let req = {
-        let mut store = state.chat.conversations.write().await;
-
-        let mut conv = store
-            .get(&conversation_id)
+        let mut conv = state.threads.checkout(&conversation_id).await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
             .ok_or(StatusCode::NOT_FOUND)?;
 
@@ -241,11 +232,8 @@ pub async fn regenerate_turn(
         conv.active_path = user_path;
         conv.updated_at = Utc::now();
 
-        store
-            .save(&conv)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-        TurnRequest {
+        // Build TurnRequest BEFORE commit (commit takes ownership of conv)
+        let req = TurnRequest {
             conversation_id,
             api_messages: conv.build_api_messages(),
             tools: resolve_mcp_tools(&state).await,
@@ -256,7 +244,12 @@ pub async fn regenerate_turn(
             prior_cost: conv.usage.as_ref().map(|u| u.total_cost).unwrap_or(0.0),
             title: conv.title.clone(),
             message_count: conv.active_path.len(),
-        }
+        };
+
+        state.threads.commit(conv).await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        req
     };
 
     spawn_agent_turn(state, req);
@@ -299,10 +292,7 @@ pub async fn tool_invoke(
     let (cancel, run_id) = cancel_existing_turn(&state, &conversation_id).await;
 
     let req = {
-        let mut store = state.chat.conversations.write().await;
-
-        let mut conv = store
-            .get(&conversation_id)
+        let mut conv = state.threads.checkout(&conversation_id).await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
             .ok_or(StatusCode::NOT_FOUND)?;
 
@@ -346,11 +336,8 @@ pub async fn tool_invoke(
         conv.messages.push(synthetic_msg);
         conv.updated_at = chrono::Utc::now();
 
-        store
-            .save(&conv)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-        TurnRequest {
+        // Build TurnRequest BEFORE commit (commit takes ownership of conv)
+        let req = TurnRequest {
             conversation_id,
             api_messages: conv.build_api_messages(),
             tools: resolve_mcp_tools(&state).await,
@@ -361,7 +348,12 @@ pub async fn tool_invoke(
             prior_cost: conv.usage.as_ref().map(|u| u.total_cost).unwrap_or(0.0),
             title: conv.title.clone(),
             message_count: conv.active_path.len(),
-        }
+        };
+
+        state.threads.commit(conv).await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        req
     };
 
     // Start agent turn — model will see the tool result and continue naturally

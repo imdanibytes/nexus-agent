@@ -6,7 +6,6 @@ use tokio::sync::{Mutex, RwLock};
 use crate::agent_config::AgentStore;
 use crate::ask_user::PendingQuestionStore;
 use crate::bg_process::ProcessManager;
-use crate::conversation::ConversationStore;
 use crate::mcp::store::McpServerStore;
 use crate::mcp::McpManager;
 use crate::provider::{ProviderFactory, ProviderStore};
@@ -20,9 +19,10 @@ pub struct ActiveTurn {
     pub cancel: tokio_util::sync::CancellationToken,
 }
 
-/// Chat execution: conversations, cancellation, events, questions, tasks.
+/// Chat execution: cancellation, events, questions, tasks, processes.
+///
+/// Conversation CRUD has moved to `ThreadService` on `AppState`.
 pub struct ChatService {
-    pub conversations: RwLock<ConversationStore>,
     pub active_turns: Mutex<HashMap<String, ActiveTurn>>,
     pub event_bridge: AgentEventBridge,
     pub pending_questions: RwLock<PendingQuestionStore>,

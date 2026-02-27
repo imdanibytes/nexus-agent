@@ -225,41 +225,15 @@ async fn call_title_model(
 
 /// Add the title generation cost to the conversation's running total.
 async fn add_cost_to_conversation(state: &Arc<AppState>, conversation_id: &str, cost: f64) {
-    let mut store = state.chat.conversations.write().await;
-    match store.get(conversation_id) {
-        Ok(Some(mut conv)) => {
-            if let Some(ref mut usage) = conv.usage {
-                usage.total_cost += cost;
-            } else {
-                conv.usage = Some(crate::conversation::types::ConversationUsage {
-                    input_tokens: 0,
-                    output_tokens: 0,
-                    cache_read_input_tokens: 0,
-                    cache_creation_input_tokens: 0,
-                    context_window: 0,
-                    total_cost: cost,
-                });
-            }
-            if let Err(e) = store.save(&conv) {
-                tracing::error!("auto_title: failed to save cost: {}", e);
-            }
-        }
-        Ok(None) => {
-            tracing::warn!("auto_title: conversation {} not found for cost update", conversation_id);
-        }
-        Err(e) => {
-            tracing::error!("auto_title: failed to load conversation for cost update: {}", e);
-        }
+    if let Err(e) = state.threads.add_cost(conversation_id, cost).await {
+        tracing::error!("auto_title: failed to save cost: {}", e);
     }
 }
 
 /// Persist the new title and broadcast via SSE.
 async fn persist_and_broadcast(state: &Arc<AppState>, conversation_id: &str, title: &str) {
-    {
-        let mut store = state.chat.conversations.write().await;
-        if let Err(e) = store.rename(conversation_id, title) {
-            tracing::error!("Failed to save title: {}", e);
-        }
+    if let Err(e) = state.threads.rename(conversation_id, title).await {
+        tracing::error!("Failed to save title: {}", e);
     }
 
     let _ = state

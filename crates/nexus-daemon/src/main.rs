@@ -7,6 +7,7 @@ mod bg_process;
 mod compaction;
 mod config;
 mod conversation;
+mod event_bus;
 mod fetch;
 mod filesystem;
 mod mcp;
@@ -17,6 +18,7 @@ mod retry;
 mod server;
 mod system_prompt;
 mod tasks;
+mod thread;
 mod tool_filter;
 mod workspace;
 
@@ -27,11 +29,13 @@ use crate::agent_config::AgentStore;
 use crate::anthropic::AnthropicClient;
 use crate::config::NexusConfig;
 use crate::conversation::ConversationStore;
+use crate::event_bus::EventBus;
 use crate::mcp::store::McpServerStore;
 use crate::mcp::{ClientHandlerState, McpManager};
 use crate::provider::{ProviderFactory, ProviderStore, ProviderType};
 use crate::server::sse::AgentEventBridge;
 use crate::server::{AppState, AgentService, ChatService, McpService};
+use crate::thread::ThreadService;
 use crate::workspace::WorkspaceStore;
 
 #[tokio::main]
@@ -108,9 +112,13 @@ async fn main() -> Result<()> {
 
     let nexus_dir = NexusConfig::nexus_dir();
     let conversations_dir = nexus_dir.join("conversations");
-    let conversations = ConversationStore::load(conversations_dir)?;
 
     let event_bridge = AgentEventBridge::new();
+    // EventBus shares the same broadcast channel as AgentEventBridge
+    let event_bus = EventBus::from_sender(event_bridge.agent_tx());
+    // ThreadService owns the ConversationStore — all conversation CRUD goes through it
+    let conversations = ConversationStore::load(conversations_dir)?;
+    let threads = Arc::new(ThreadService::new(conversations, event_bus.clone()));
 
     // Workspaces + effective filesystem config
     let workspace_store = WorkspaceStore::new(config.workspaces.clone());
@@ -147,7 +155,6 @@ async fn main() -> Result<()> {
     ));
 
     let chat = Arc::new(ChatService {
-        conversations: tokio::sync::RwLock::new(conversations),
         active_turns: tokio::sync::Mutex::new(std::collections::HashMap::new()),
         event_bridge,
         pending_questions: tokio::sync::RwLock::new(ask_user::PendingQuestionStore::new()),
@@ -175,6 +182,8 @@ async fn main() -> Result<()> {
         chat,
         agents: agents_svc,
         mcp: mcp_svc,
+        threads,
+        event_bus,
         title_client,
     };
 

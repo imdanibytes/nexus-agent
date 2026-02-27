@@ -131,14 +131,13 @@ impl IntrospectMcpServer {
     // -- Read-only tools -----------------------------------------------------
 
     async fn handle_list_conversations(&self) -> Result<CallToolResult, McpError> {
-        let store = self.state.chat.conversations.read().await;
-        ok_json(&store.list())
+        let threads = self.state.threads.list().await;
+        ok_json(&threads)
     }
 
     async fn handle_get_conversation(&self, args: &serde_json::Map<String, serde_json::Value>) -> Result<CallToolResult, McpError> {
         let id = require_str(args, "id")?;
-        let store = self.state.chat.conversations.read().await;
-        match store.get(&id) {
+        match self.state.threads.get(&id).await {
             Ok(Some(conv)) => ok_json(&conv),
             Ok(None) => Err(McpError::invalid_params(format!("conversation '{}' not found", id), None)),
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
@@ -182,7 +181,7 @@ impl IntrospectMcpServer {
 
     async fn handle_server_status(&self) -> Result<CallToolResult, McpError> {
         let active_turns = self.state.chat.active_turns.lock().await.len();
-        let conversations = self.state.chat.conversations.read().await.list().len();
+        let conversations = self.state.threads.list().await.len();
         let mcp_servers = self.state.mcp.configs.read().await.list().len();
         let mcp_tools = self.state.mcp.mcp.read().await.tools().len();
         let agents = self.state.agents.agents.read().await.list().len();

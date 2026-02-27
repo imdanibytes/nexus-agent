@@ -23,6 +23,8 @@ use tower_http::services::ServeDir;
 
 use crate::anthropic::AnthropicClient;
 use crate::config::{FilesystemConfig, NexusConfig};
+use crate::event_bus::EventBus;
+use crate::thread::ThreadService;
 use crate::workspace::WorkspaceStore;
 use tokio::sync::RwLock;
 
@@ -33,6 +35,8 @@ pub struct AppState {
     pub chat: Arc<ChatService>,
     pub agents: Arc<AgentService>,
     pub mcp: Arc<McpService>,
+    pub threads: Arc<ThreadService>,
+    pub event_bus: EventBus,
     pub workspaces: Arc<RwLock<WorkspaceStore>>,
     /// Base filesystem config from nexus.json (without workspace paths merged).
     pub base_filesystem_config: FilesystemConfig,

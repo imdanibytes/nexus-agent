@@ -233,10 +233,7 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
 
                 // 11. Auto-title
                 if turn_error.is_none() {
-                    let title_conv = {
-                        let store = state_clone.chat.conversations.read().await;
-                        store.get(&conversation_id).ok().flatten()
-                    };
+                    let title_conv = state_clone.threads.get(&conversation_id).await.ok().flatten();
                     if let Some(title_conv) = title_conv {
                         let active = title_conv.active_messages();
                         crate::mechanics::auto_title::generate_title(
@@ -439,10 +436,7 @@ async fn compact_context(
         None => return,
     };
 
-    let compact_conv = {
-        let store = state.chat.conversations.read().await;
-        store.get(conversation_id).ok().flatten()
-    };
+    let compact_conv = state.threads.get(conversation_id).await.ok().flatten();
 
     let mut compact_conv = match compact_conv {
         Some(c) => c,
@@ -482,11 +476,8 @@ async fn compact_context(
 
             let sealed_span_count = compact_conv.spans.len();
 
-            {
-                let mut store = state.chat.conversations.write().await;
-                if let Err(e) = store.save(&compact_conv) {
-                    tracing::error!("Failed to save compacted conversation: {}", e);
-                }
+            if let Err(e) = state.threads.commit(compact_conv).await {
+                tracing::error!("Failed to save compacted conversation: {}", e);
             }
 
             emitter.compaction(sealed_span_count - 2, consumed_ids.len());
@@ -599,8 +590,7 @@ async fn persist_turn_results(
     let new_ids: Vec<String> = chat_messages.iter().map(|m| m.id.clone()).collect();
 
     // Reload fresh conversation — no stale in-memory copy.
-    let mut store = state.chat.conversations.write().await;
-    let save_result = match store.get(conversation_id) {
+    let save_result = match state.threads.checkout(conversation_id).await {
         Ok(Some(mut fresh_conv)) => {
             fresh_conv.messages.extend(chat_messages);
             fresh_conv.active_path.extend(new_ids);
@@ -609,7 +599,7 @@ async fn persist_turn_results(
                 .as_str()
                 .map(|s| s.to_string());
             fresh_conv.usage = Some(usage);
-            store.save(&fresh_conv)
+            state.threads.commit(fresh_conv).await
         }
         Ok(None) => {
             tracing::warn!(
@@ -642,18 +632,15 @@ pub async fn drain_queue_and_follow_up(
     messages: Vec<super::message_queue::QueuedMessage>,
 ) {
     // Reload fresh conversation from store
-    let mut conv = {
-        let store = state.chat.conversations.read().await;
-        match store.get(&conversation_id) {
-            Ok(Some(c)) => c,
-            Ok(None) => {
-                tracing::warn!(conversation_id = %conversation_id, "drain_queue_and_follow_up: conversation not found");
-                return;
-            }
-            Err(e) => {
-                tracing::error!(conversation_id = %conversation_id, "drain_queue_and_follow_up: failed to load: {}", e);
-                return;
-            }
+    let mut conv = match state.threads.checkout(&conversation_id).await {
+        Ok(Some(c)) => c,
+        Ok(None) => {
+            tracing::warn!(conversation_id = %conversation_id, "drain_queue_and_follow_up: conversation not found");
+            return;
+        }
+        Err(e) => {
+            tracing::error!(conversation_id = %conversation_id, "drain_queue_and_follow_up: failed to load: {}", e);
+            return;
         }
     };
 
@@ -676,18 +663,15 @@ pub async fn drain_queue_and_follow_up(
         conv.messages.push(chat_msg);
     }
 
-    let mut store = state.chat.conversations.write().await;
-    if let Err(e) = store.save(&conv) {
-        tracing::error!("Failed to save queued messages: {}", e);
-    }
-    drop(store);
-
     let api_messages = conv.build_api_messages();
     let last_active_id = conv.active_path.last().cloned();
     let prior_cost = conv.usage.as_ref().map(|u| u.total_cost).unwrap_or(0.0);
     let title = conv.title.clone();
     let message_count = conv.active_path.len();
-    drop(conv);
+
+    if let Err(e) = state.threads.commit(conv).await {
+        tracing::error!("Failed to save queued messages: {}", e);
+    }
 
     let mcp_guard = state.mcp.mcp.read().await;
     let tools: Vec<crate::anthropic::types::Tool> = mcp_guard.tools();

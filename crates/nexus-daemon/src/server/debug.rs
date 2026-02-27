@@ -28,9 +28,7 @@ pub async fn force_compact(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let keep_recent = body.map(|b| b.keep_recent).unwrap_or(4);
 
-    let mut store = state.chat.conversations.write().await;
-    let mut conv = store
-        .get(&id)
+    let mut conv = state.threads.checkout(&id).await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
@@ -75,12 +73,10 @@ pub async fn force_compact(
     conv.active_path.retain(|id| !consumed_ids.contains(id));
     conv.updated_at = Utc::now();
 
-    store
-        .save(&conv)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    drop(store);
-
     let sealed_index = conv.spans.len() - 2;
+
+    state.threads.commit(conv).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Emit the compaction event
     let _ = state.chat.event_bridge.agent_tx().send(EventEnvelope {
