@@ -139,14 +139,15 @@ async fn read_file_includes_lsp_diagnostics() {
     let tool_result = sse.expect_event_type("TOOL_CALL_RESULT", Duration::from_secs(15)).await;
     let content = tool_result["content"].as_str().unwrap_or("");
 
-    // The mock LSP should have published a diagnostic
+    // Diagnostics are now injected as a separate user message, NOT inside the
+    // tool result content. Verify the tool result is clean file content.
     assert!(
-        content.contains("<diagnostics>"),
-        "Tool result should contain diagnostics block. Got: {content}"
+        !content.contains("<diagnostics>"),
+        "Tool result should NOT contain inline diagnostics (they're a separate message now). Got: {content}"
     );
     assert!(
-        content.contains("mock error: undefined variable"),
-        "Tool result should contain the mock diagnostic message. Got: {content}"
+        content.contains("fn main()"),
+        "Tool result should contain the file content. Got: {content}"
     );
 
     // Wait for turn to finish
@@ -192,13 +193,14 @@ async fn write_file_includes_lsp_diagnostics() {
     let tool_result = sse.expect_event_type("TOOL_CALL_RESULT", Duration::from_secs(15)).await;
     let content = tool_result["content"].as_str().unwrap_or("");
 
+    // Diagnostics are injected as a separate user message, not in the tool result.
     assert!(
-        content.contains("<diagnostics>"),
-        "Write tool result should contain diagnostics. Got: {content}"
+        !content.contains("<diagnostics>"),
+        "Write tool result should NOT contain inline diagnostics. Got: {content}"
     );
     assert!(
-        content.contains("mock error: undefined variable"),
-        "Write tool result should contain mock diagnostic. Got: {content}"
+        content.contains("Successfully wrote"),
+        "Write tool result should confirm the write. Got: {content}"
     );
 
     sse.expect_event_type("RUN_FINISHED", Duration::from_secs(10)).await;

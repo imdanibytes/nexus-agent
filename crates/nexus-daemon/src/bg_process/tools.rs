@@ -127,6 +127,7 @@ impl ToolHandler for BgProcessToolHandler<'_> {
                         return ToolResult {
                             content: "Missing required field: 'process_id'".to_string(),
                             is_error: true,
+                        lsp_diagnostics: None,
                         };
                     }
                 };
@@ -137,10 +138,12 @@ impl ToolHandler for BgProcessToolHandler<'_> {
                     Ok(output) => ToolResult {
                         content: output,
                         is_error: false,
+                    lsp_diagnostics: None,
                     },
                     Err(e) => ToolResult {
                         content: e,
                         is_error: true,
+                    lsp_diagnostics: None,
                     },
                 }
             }
@@ -150,6 +153,7 @@ impl ToolHandler for BgProcessToolHandler<'_> {
                 ToolResult {
                     content,
                     is_error: false,
+                lsp_diagnostics: None,
                 }
             }
             PROCESS_STOP => {
@@ -159,6 +163,7 @@ impl ToolHandler for BgProcessToolHandler<'_> {
                         return ToolResult {
                             content: "Missing required field: 'process_id'".to_string(),
                             is_error: true,
+                        lsp_diagnostics: None,
                         };
                     }
                 };
@@ -166,16 +171,19 @@ impl ToolHandler for BgProcessToolHandler<'_> {
                     Ok(()) => ToolResult {
                         content: format!("Process {} stopped.", process_id),
                         is_error: false,
+                        lsp_diagnostics: None,
                     },
                     Err(e) => ToolResult {
                         content: e,
                         is_error: true,
+                    lsp_diagnostics: None,
                     },
                 }
             }
             _ => ToolResult {
                 content: format!("Unknown bg_process tool: {}", ctx.tool_name),
                 is_error: true,
+                lsp_diagnostics: None,
             },
         }
     }

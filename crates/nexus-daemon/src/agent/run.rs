@@ -362,6 +362,7 @@ pub async fn run_agent_turn(
         match stop_reason {
             Some(StopReason::ToolUse) if !tool_calls.is_empty() => {
                 let mut result_blocks = Vec::new();
+                let mut lsp_diag_blocks: Vec<String> = Vec::new();
                 let tool_exec_start_ms = turn_start.elapsed().as_millis() as u64;
                 let tool_exec_span_id = format!("t-toolexec-{}", round);
                 let tool_exec_start = Instant::now();
@@ -417,6 +418,9 @@ pub async fn run_agent_turn(
                         cancel: &cancel,
                     };
                     let result = tool_dispatch::dispatch_tool_call(&handlers, ctx).await;
+                    if let Some(diag) = result.lsp_diagnostics {
+                        lsp_diag_blocks.push(diag);
+                    }
                     let mut content = result.content;
                     let is_error = result.is_error;
 
@@ -469,6 +473,20 @@ pub async fn run_agent_turn(
                 };
                 messages.push(tool_results_msg.clone());
                 new_messages.push(tool_results_msg);
+
+                // Inject LSP diagnostics as a separate user message so the
+                // model doesn't confuse them with file content.
+                if !lsp_diag_blocks.is_empty() {
+                    let lsp_msg = Message {
+                        role: Role::User,
+                        content: vec![ContentBlock::Text {
+                            text: lsp_diag_blocks.join("\n"),
+                        }],
+                    };
+                    messages.push(lsp_msg);
+                    // Not added to new_messages — diagnostics are ephemeral
+                    // context for the API, not persisted to conversation history.
+                }
             }
             _ => {
                 // end_turn, max_tokens, or no tool calls — we're done

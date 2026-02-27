@@ -108,8 +108,9 @@ impl ToolHandler for LspDecoratedFsHandler {
         );
 
         ToolResult {
-            content: format!("{}\n\n{}", result.content, decoration),
+            content: result.content,
             is_error: false,
+            lsp_diagnostics: Some(decoration),
         }
     }
 }

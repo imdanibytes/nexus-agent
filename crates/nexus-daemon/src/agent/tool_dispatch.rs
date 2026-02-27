@@ -19,6 +19,9 @@ use super::emitter::TurnEmitter;
 pub struct ToolResult {
     pub content: String,
     pub is_error: bool,
+    /// Optional LSP diagnostics to inject as a separate user message
+    /// (not part of the tool result content).
+    pub lsp_diagnostics: Option<String>,
 }
 
 /// Context passed to a tool handler for a single invocation.
@@ -55,6 +58,7 @@ pub async fn dispatch_tool_call(
     ToolResult {
         content: format!("Unknown tool: {}", ctx.tool_name),
         is_error: true,
+        lsp_diagnostics: None,
     }
 }
 
@@ -134,7 +138,7 @@ impl ToolHandler for AskUserHandler<'_> {
             }
         };
 
-        ToolResult { content, is_error }
+        ToolResult { content, is_error, lsp_diagnostics: None }
     }
 }
 
@@ -156,7 +160,7 @@ impl ToolHandler for TaskToolHandler<'_> {
         let (content, is_error) = tasks::tools::handle_builtin(
             ctx.tool_name, &args, ctx.conversation_id, self.task_store, ctx.emitter,
         ).await;
-        ToolResult { content, is_error }
+        ToolResult { content, is_error, lsp_diagnostics: None }
     }
 }
 
@@ -179,6 +183,7 @@ impl ToolHandler for FetchHandler<'_> {
                 return ToolResult {
                     content: format!("Invalid fetch arguments: {e}"),
                     is_error: true,
+                    lsp_diagnostics: None,
                 };
             }
         };
@@ -190,10 +195,12 @@ impl ToolHandler for FetchHandler<'_> {
             Ok(content) => ToolResult {
                 content,
                 is_error: false,
+            lsp_diagnostics: None,
             },
             Err(e) => ToolResult {
                 content: e,
                 is_error: true,
+            lsp_diagnostics: None,
             },
         }
     }
@@ -227,10 +234,12 @@ impl ToolHandler for FilesystemHandler {
             Ok(content) => ToolResult {
                 content,
                 is_error: false,
+            lsp_diagnostics: None,
             },
             Err(e) => ToolResult {
                 content: e,
                 is_error: true,
+            lsp_diagnostics: None,
             },
         }
     }
@@ -259,6 +268,7 @@ impl ToolHandler for BashHandler {
                 return ToolResult {
                     content: "Missing required field: 'command'".to_string(),
                     is_error: true,
+                lsp_diagnostics: None,
                 };
             }
         };
@@ -285,7 +295,7 @@ impl ToolHandler for BashHandler {
         )
         .await;
 
-        ToolResult { content, is_error }
+        ToolResult { content, is_error, lsp_diagnostics: None }
     }
 }
 
@@ -307,7 +317,7 @@ impl BashHandler {
             ProcessKind::Bash,
         ).await {
             Ok(r) => r,
-            Err(e) => return ToolResult { content: e, is_error: true },
+            Err(e) => return ToolResult { content: e, is_error: true, lsp_diagnostics: None },
         };
 
         let process_id = spawn_result.process_id.clone();
@@ -341,6 +351,7 @@ impl BashHandler {
                 "message": "Process started in background. You will be notified when it completes. Use process_output to read output."
             }).to_string(),
             is_error: false,
+            lsp_diagnostics: None,
         }
     }
 }
@@ -365,7 +376,7 @@ impl ToolHandler for ResourceToolHandler<'_> {
             self.mcp,
         )
         .await;
-        ToolResult { content, is_error }
+        ToolResult { content, is_error, lsp_diagnostics: None }
     }
 }
 
@@ -390,7 +401,7 @@ impl ToolHandler for ControlPlaneHandler {
             &self.deps,
         )
         .await;
-        ToolResult { content, is_error }
+        ToolResult { content, is_error, lsp_diagnostics: None }
     }
 }
 
@@ -408,6 +419,6 @@ impl ToolHandler for McpToolHandler<'_> {
 
     async fn handle(&self, ctx: &ToolContext<'_>) -> ToolResult {
         let (content, is_error) = self.mcp.call_tool(ctx.tool_name, ctx.args_json).await;
-        ToolResult { content, is_error }
+        ToolResult { content, is_error, lsp_diagnostics: None }
     }
 }

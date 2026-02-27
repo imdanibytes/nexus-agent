@@ -260,6 +260,7 @@ impl ToolHandler for SubAgentHandler<'_> {
                 return ToolResult {
                     content: serde_json::json!({ "error": e }).to_string(),
                     is_error: true,
+                    lsp_diagnostics: None,
                 };
             }
         };
@@ -389,7 +390,7 @@ impl ToolHandler for SubAgentHandler<'_> {
             }
         };
 
-        ToolResult { content, is_error }
+        ToolResult { content, is_error, lsp_diagnostics: None }
     }
 }
 
@@ -406,6 +407,7 @@ impl SubAgentHandler<'_> {
                     content: "Background sub-agent dispatch is not available at this depth."
                         .to_string(),
                     is_error: true,
+                lsp_diagnostics: None,
                 };
             }
         };
@@ -419,7 +421,7 @@ impl SubAgentHandler<'_> {
             .await
         {
             Ok(r) => r,
-            Err(e) => return ToolResult { content: e, is_error: true },
+            Err(e) => return ToolResult { content: e, is_error: true, lsp_diagnostics: None },
         };
 
         // Build messages for the background sub-agent
@@ -530,6 +532,7 @@ impl SubAgentHandler<'_> {
             })
             .to_string(),
             is_error: false,
+            lsp_diagnostics: None,
         }
     }
 }
