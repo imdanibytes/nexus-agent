@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 nexus-provider = { path = "../nexus-provider" }
-tokio = { version = "1", features = ["process", "time", "macros", "rt"] }
+tokio = { version = "1", features = ["process", "time", "macros", "rt", "sync"] }
 reqwest = { version = "0.13", features = ["stream"] }
 url = "2"
 futures = "0.3"

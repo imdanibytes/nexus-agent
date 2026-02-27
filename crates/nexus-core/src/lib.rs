@@ -1,3 +1,6 @@
+pub mod bg_process;
+pub mod tasks;
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
