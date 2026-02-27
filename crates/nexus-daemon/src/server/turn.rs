@@ -91,6 +91,8 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
         tools.extend(crate::control_plane::tool_definitions());
         let effective_fs = state_clone.effective_fs_config.read().await.clone();
         tools.extend(crate::filesystem::tool_definitions(&effective_fs));
+        // HOOK: ToolRegister — collect tools from modules.
+        tools.extend(state_clone.modules.collect_tools());
         crate::anthropic::types::inject_tool_description_field(&mut tools);
 
         // 3. Derive agent mode + plan context from task state
@@ -172,6 +174,7 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
             mcp: state_clone.mcp.clone(),
             fetch_config: state_clone.config.fetch.clone(),
             filesystem_config: effective_fs.clone(),
+            modules: Arc::clone(&state_clone.modules),
         });
 
         let setup_duration_ms = setup_start.elapsed().as_millis() as u64;
@@ -213,6 +216,7 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
             })),
             lsp: Some(Arc::clone(&state_clone.lsp)),
             workspace_project_paths,
+            modules: Arc::clone(&state_clone.modules),
         };
 
         // 8. Run agent loop
@@ -284,6 +288,15 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
                         .await;
                     }
                 }
+
+                // HOOK: TurnEnd — notify modules the turn is done.
+                state_clone.modules.fire_turn_end(&crate::module::TurnEndEvent {
+                    conversation_id: &conversation_id,
+                    run_id: &run_id,
+                    round_count: new_messages.len(),
+                    turn_cost,
+                    error: turn_error.as_deref(),
+                }).await;
 
                 // 12. Cleanup + follow-up
                 let is_mine = state_clone.turns.finish_turn(&conversation_id, &run_id).await;

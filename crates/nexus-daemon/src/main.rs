@@ -11,10 +11,13 @@ mod conversation;
 mod event_bus;
 mod fetch;
 mod filesystem;
+#[cfg(debug_assertions)]
+mod hook_probe;
 mod lsp;
 mod mcp;
 mod mcp_resources;
 mod mechanics;
+pub mod module;
 mod pricing;
 mod provider;
 mod retry;
@@ -37,6 +40,7 @@ use crate::conversation::ConversationStore;
 use crate::event_bus::EventBus;
 use crate::mcp::store::McpServerStore;
 use crate::mcp::{ClientHandlerState, McpManager};
+use crate::module::ModuleRegistry;
 use crate::provider::{ProviderService, ProviderStore, ProviderType};
 use crate::provider::store::CreateProviderParams;
 use crate::server::sse::AgentEventBridge;
@@ -180,6 +184,17 @@ async fn main() -> Result<()> {
         configs: tokio::sync::RwLock::new(mcp_configs),
     });
 
+    // Module registry
+    #[allow(unused_mut)]
+    let mut module_registry = ModuleRegistry::new();
+
+    #[cfg(debug_assertions)]
+    let hook_probe = {
+        let probe = std::sync::Arc::new(hook_probe::HookProbe::new());
+        module_registry.register(std::sync::Arc::clone(&probe) as std::sync::Arc<dyn crate::module::DaemonModule>);
+        Some(probe)
+    };
+
     // LSP integration: detect installed servers, merge with persisted config
     let lsp_settings = NexusConfig::load_lsp_settings().unwrap_or_default();
     let detected_lsps = lsp::detect::detect_installed_servers();
@@ -234,8 +249,17 @@ async fn main() -> Result<()> {
         event_bus,
         title_client,
         lsp: lsp_svc,
+        modules: Arc::new(module_registry),
+        #[cfg(debug_assertions)]
+        hook_probe,
     };
 
+    // HOOK: Startup — let modules initialize
+    if let Err(e) = state.modules.startup().await {
+        tracing::error!("Module startup failed: {}", e);
+    }
+
+    let modules_for_shutdown = Arc::clone(&state.modules);
     let router = server::build_router(state, queue_rx, "ui/dist");
 
     let addr = format!("{}:{}", config.server.host, config.server.port);
@@ -247,11 +271,15 @@ async fn main() -> Result<()> {
     let port_file = nexus_dir.join("port");
     let _ = std::fs::write(&port_file, actual_addr.port().to_string());
 
-    // Spawn a shutdown handler that cleans up LSP servers then force-exits.
+    // Spawn a shutdown handler that cleans up modules + LSP then force-exits.
     // axum's graceful shutdown waits for ALL connections to drain, but SSE
     // streams are long-lived and never close on their own, so we'd hang forever.
     tokio::spawn(async move {
         shutdown_signal().await;
+
+        // HOOK: Shutdown — let modules clean up
+        tracing::info!("Shutting down modules...");
+        modules_for_shutdown.shutdown().await;
 
         tracing::info!("Shutting down LSP servers...");
         if tokio::time::timeout(std::time::Duration::from_secs(3), async {

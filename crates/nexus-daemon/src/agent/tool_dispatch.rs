@@ -11,18 +11,13 @@ use crate::config::{FetchConfig, FilesystemConfig};
 use crate::fetch;
 use crate::filesystem;
 use crate::mcp::McpManager;
+use crate::module;
 use crate::tasks;
 use crate::tasks::store::TaskStateStore;
 use super::emitter::TurnEmitter;
 
-/// Result of dispatching a single tool call.
-pub struct ToolResult {
-    pub content: String,
-    pub is_error: bool,
-    /// Optional LSP diagnostics to inject as a separate user message
-    /// (not part of the tool result content).
-    pub lsp_diagnostics: Option<String>,
-}
+// Re-export ToolResult from module so existing imports still work.
+pub use module::ToolResult;
 
 /// Context passed to a tool handler for a single invocation.
 pub struct ToolContext<'a> {
@@ -55,11 +50,7 @@ pub async fn dispatch_tool_call(
             return handler.handle(&ctx).await;
         }
     }
-    ToolResult {
-        content: format!("Unknown tool: {}", ctx.tool_name),
-        is_error: true,
-        lsp_diagnostics: None,
-    }
+    ToolResult::error(format!("Unknown tool: {}", ctx.tool_name))
 }
 
 // ── AskUserHandler ──
@@ -138,7 +129,7 @@ impl ToolHandler for AskUserHandler<'_> {
             }
         };
 
-        ToolResult { content, is_error, lsp_diagnostics: None }
+        ToolResult { content, is_error, injected_messages: Vec::new() }
     }
 }
 
@@ -160,7 +151,7 @@ impl ToolHandler for TaskToolHandler<'_> {
         let (content, is_error) = tasks::tools::handle_builtin(
             ctx.tool_name, &args, ctx.conversation_id, self.task_store, ctx.emitter,
         ).await;
-        ToolResult { content, is_error, lsp_diagnostics: None }
+        ToolResult { content, is_error, injected_messages: Vec::new() }
     }
 }
 
@@ -183,7 +174,7 @@ impl ToolHandler for FetchHandler<'_> {
                 return ToolResult {
                     content: format!("Invalid fetch arguments: {e}"),
                     is_error: true,
-                    lsp_diagnostics: None,
+                    injected_messages: Vec::new(),
                 };
             }
         };
@@ -195,12 +186,12 @@ impl ToolHandler for FetchHandler<'_> {
             Ok(content) => ToolResult {
                 content,
                 is_error: false,
-            lsp_diagnostics: None,
+            injected_messages: Vec::new(),
             },
             Err(e) => ToolResult {
                 content: e,
                 is_error: true,
-            lsp_diagnostics: None,
+            injected_messages: Vec::new(),
             },
         }
     }
@@ -234,12 +225,12 @@ impl ToolHandler for FilesystemHandler {
             Ok(content) => ToolResult {
                 content,
                 is_error: false,
-            lsp_diagnostics: None,
+            injected_messages: Vec::new(),
             },
             Err(e) => ToolResult {
                 content: e,
                 is_error: true,
-            lsp_diagnostics: None,
+            injected_messages: Vec::new(),
             },
         }
     }
@@ -268,7 +259,7 @@ impl ToolHandler for BashHandler {
                 return ToolResult {
                     content: "Missing required field: 'command'".to_string(),
                     is_error: true,
-                lsp_diagnostics: None,
+                injected_messages: Vec::new(),
                 };
             }
         };
@@ -295,7 +286,7 @@ impl ToolHandler for BashHandler {
         )
         .await;
 
-        ToolResult { content, is_error, lsp_diagnostics: None }
+        ToolResult { content, is_error, injected_messages: Vec::new() }
     }
 }
 
@@ -317,7 +308,7 @@ impl BashHandler {
             ProcessKind::Bash,
         ).await {
             Ok(r) => r,
-            Err(e) => return ToolResult { content: e, is_error: true, lsp_diagnostics: None },
+            Err(e) => return ToolResult::error(e),
         };
 
         let process_id = spawn_result.process_id.clone();
@@ -351,7 +342,7 @@ impl BashHandler {
                 "message": "Process started in background. You will be notified when it completes. Use process_output to read output."
             }).to_string(),
             is_error: false,
-            lsp_diagnostics: None,
+            injected_messages: Vec::new(),
         }
     }
 }
@@ -376,7 +367,7 @@ impl ToolHandler for ResourceToolHandler<'_> {
             self.mcp,
         )
         .await;
-        ToolResult { content, is_error, lsp_diagnostics: None }
+        ToolResult { content, is_error, injected_messages: Vec::new() }
     }
 }
 
@@ -401,7 +392,7 @@ impl ToolHandler for ControlPlaneHandler {
             &self.deps,
         )
         .await;
-        ToolResult { content, is_error, lsp_diagnostics: None }
+        ToolResult { content, is_error, injected_messages: Vec::new() }
     }
 }
 
@@ -419,6 +410,6 @@ impl ToolHandler for McpToolHandler<'_> {
 
     async fn handle(&self, ctx: &ToolContext<'_>) -> ToolResult {
         let (content, is_error) = self.mcp.call_tool(ctx.tool_name, ctx.args_json).await;
-        ToolResult { content, is_error, lsp_diagnostics: None }
+        ToolResult { content, is_error, injected_messages: Vec::new() }
     }
 }

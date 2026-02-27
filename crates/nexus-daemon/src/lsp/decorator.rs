@@ -3,6 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::agent::tool_dispatch::{ToolContext, ToolHandler, ToolResult};
+use crate::module::InjectedMessage;
 
 use super::diagnostics::DiagnosticStatus;
 use super::manager::DiagnosticReport;
@@ -110,7 +111,7 @@ impl ToolHandler for LspDecoratedFsHandler {
         ToolResult {
             content: result.content,
             is_error: false,
-            lsp_diagnostics: Some(decoration),
+            injected_messages: vec![InjectedMessage { text: decoration }],
         }
     }
 }

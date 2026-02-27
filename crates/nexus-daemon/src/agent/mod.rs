@@ -10,6 +10,7 @@ use crate::ask_user::PendingQuestionStore;
 use crate::bg_process::ProcessManager;
 use crate::config::{FetchConfig, FilesystemConfig};
 use crate::mcp::McpManager;
+use crate::module::ModuleRegistry;
 use crate::provider::InferenceProvider;
 use crate::tasks::store::TaskStateStore;
 
@@ -83,6 +84,8 @@ pub struct TurnServices<'a> {
     pub lsp: Option<Arc<crate::lsp::LspService>>,
     /// Project paths from the conversation's active workspace (for LSP scoping).
     pub workspace_project_paths: Vec<String>,
+    /// Module registry for hook dispatch.
+    pub modules: Arc<ModuleRegistry>,
 }
 
 pub fn context_window_for_model(model: &str) -> u32 {

@@ -27,6 +27,7 @@ use crate::agent_config::AgentService;
 use crate::anthropic::AnthropicClient;
 use crate::config::{FilesystemConfig, NexusConfig};
 use crate::event_bus::EventBus;
+use crate::module::ModuleRegistry;
 use crate::provider::ProviderService;
 use crate::tasks::TaskService;
 use crate::thread::ThreadService;
@@ -55,6 +56,11 @@ pub struct AppState {
     pub title_client: Option<AnthropicClient>,
     /// LSP integration — manages language servers and diagnostics
     pub lsp: Arc<crate::lsp::LspService>,
+    /// Module registry — hook system for extending daemon behavior.
+    pub modules: Arc<ModuleRegistry>,
+    /// Hook probe for debug/test introspection (debug builds only).
+    #[cfg(debug_assertions)]
+    pub hook_probe: Option<Arc<crate::hook_probe::HookProbe>>,
 }
 
 pub fn build_router(state: AppState, queue_rx: tokio::sync::mpsc::UnboundedReceiver<String>, ui_dist_path: &str) -> Router {
@@ -221,7 +227,11 @@ pub fn build_router(state: AppState, queue_rx: tokio::sync::mpsc::UnboundedRecei
                 "/api/debug/task-state/{id}",
                 post(debug::set_task_state),
             )
-            .route("/api/debug/emit", post(debug::emit_event));
+            .route("/api/debug/emit", post(debug::emit_event))
+            .route("/api/debug/hooks", get(debug::get_hook_records))
+            .route("/api/debug/hooks/clear", post(debug::clear_hooks))
+            .route("/api/debug/hooks/deny-tool", post(debug::deny_tool))
+            .route("/api/debug/hooks/force-continue", post(debug::force_continue));
     }
 
     // Introspection MCP server — exposes daemon state to MCP clients

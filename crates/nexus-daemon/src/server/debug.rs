@@ -369,3 +369,57 @@ pub struct EmitEventRequest {
     #[serde(default)]
     pub value: serde_json::Value,
 }
+
+// ── Hook probe endpoints ──
+
+/// GET /api/debug/hooks — return all recorded hook invocations.
+pub async fn get_hook_records(
+    State(state): State<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    match &state.hook_probe {
+        Some(probe) => Json(serde_json::to_value(probe.get_records()).unwrap_or_default()),
+        None => Json(serde_json::json!([])),
+    }
+}
+
+/// POST /api/debug/hooks/clear — clear all records and reset config.
+pub async fn clear_hooks(
+    State(state): State<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    if let Some(probe) = &state.hook_probe {
+        probe.clear();
+    }
+    Json(serde_json::json!({ "ok": true }))
+}
+
+/// POST /api/debug/hooks/deny-tool — add a tool name to the deny set.
+pub async fn deny_tool(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<DenyToolRequest>,
+) -> Json<serde_json::Value> {
+    if let Some(probe) = &state.hook_probe {
+        probe.deny_tool(body.tool_name);
+    }
+    Json(serde_json::json!({ "ok": true }))
+}
+
+/// POST /api/debug/hooks/force-continue — set force-continue count.
+pub async fn force_continue(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<ForceContinueRequest>,
+) -> Json<serde_json::Value> {
+    if let Some(probe) = &state.hook_probe {
+        probe.set_force_continue(body.count);
+    }
+    Json(serde_json::json!({ "ok": true }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DenyToolRequest {
+    pub tool_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ForceContinueRequest {
+    pub count: u32,
+}

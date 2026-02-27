@@ -230,6 +230,7 @@ pub struct BgSubAgentDeps {
     pub mcp: Arc<McpService>,
     pub fetch_config: FetchConfig,
     pub filesystem_config: FilesystemConfig,
+    pub modules: Arc<crate::module::ModuleRegistry>,
 }
 
 // ── Handler ──
@@ -260,7 +261,7 @@ impl ToolHandler for SubAgentHandler<'_> {
                 return ToolResult {
                     content: serde_json::json!({ "error": e }).to_string(),
                     is_error: true,
-                    lsp_diagnostics: None,
+                    injected_messages: Vec::new(),
                 };
             }
         };
@@ -339,6 +340,7 @@ impl ToolHandler for SubAgentHandler<'_> {
             control_plane: self.services.control_plane.clone(),
             lsp: self.services.lsp.clone(),
             workspace_project_paths: self.services.workspace_project_paths.clone(),
+            modules: Arc::clone(&self.services.modules),
         };
         // Sub-agent gets its own emitter with a fresh run_id
         let sub_emitter = TurnEmitter::new(
@@ -390,7 +392,7 @@ impl ToolHandler for SubAgentHandler<'_> {
             }
         };
 
-        ToolResult { content, is_error, lsp_diagnostics: None }
+        ToolResult { content, is_error, injected_messages: Vec::new() }
     }
 }
 
@@ -407,7 +409,7 @@ impl SubAgentHandler<'_> {
                     content: "Background sub-agent dispatch is not available at this depth."
                         .to_string(),
                     is_error: true,
-                lsp_diagnostics: None,
+                injected_messages: Vec::new(),
                 };
             }
         };
@@ -421,7 +423,7 @@ impl SubAgentHandler<'_> {
             .await
         {
             Ok(r) => r,
-            Err(e) => return ToolResult { content: e, is_error: true, lsp_diagnostics: None },
+            Err(e) => return ToolResult::error(e),
         };
 
         // Build messages for the background sub-agent
@@ -491,6 +493,7 @@ impl SubAgentHandler<'_> {
                 control_plane: None,
                 lsp: None,
                 workspace_project_paths: Vec::new(),
+                modules: Arc::clone(&bg_deps.modules),
             };
 
             let result = tokio::select! {
@@ -532,7 +535,7 @@ impl SubAgentHandler<'_> {
             })
             .to_string(),
             is_error: false,
-            lsp_diagnostics: None,
+            injected_messages: Vec::new(),
         }
     }
 }

@@ -92,6 +92,16 @@ pub async fn start_turn(
         (req, user_msg_id)
     };
 
+    // HOOK: UserPromptSubmit — modules can observe or inject additional context.
+    {
+        let mut additional_context = Vec::new();
+        state.modules.fire_user_prompt_submit(&mut crate::module::UserPromptSubmitEvent {
+            prompt: &body.message,
+            conversation_id: &body.conversation_id,
+            additional_context: &mut additional_context,
+        }).await;
+    }
+
     spawn_agent_turn(state, req);
 
     Ok(Json(

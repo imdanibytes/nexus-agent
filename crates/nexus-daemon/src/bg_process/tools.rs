@@ -127,7 +127,7 @@ impl ToolHandler for BgProcessToolHandler<'_> {
                         return ToolResult {
                             content: "Missing required field: 'process_id'".to_string(),
                             is_error: true,
-                        lsp_diagnostics: None,
+                        injected_messages: Vec::new(),
                         };
                     }
                 };
@@ -138,12 +138,12 @@ impl ToolHandler for BgProcessToolHandler<'_> {
                     Ok(output) => ToolResult {
                         content: output,
                         is_error: false,
-                    lsp_diagnostics: None,
+                    injected_messages: Vec::new(),
                     },
                     Err(e) => ToolResult {
                         content: e,
                         is_error: true,
-                    lsp_diagnostics: None,
+                    injected_messages: Vec::new(),
                     },
                 }
             }
@@ -153,7 +153,7 @@ impl ToolHandler for BgProcessToolHandler<'_> {
                 ToolResult {
                     content,
                     is_error: false,
-                lsp_diagnostics: None,
+                injected_messages: Vec::new(),
                 }
             }
             PROCESS_STOP => {
@@ -163,7 +163,7 @@ impl ToolHandler for BgProcessToolHandler<'_> {
                         return ToolResult {
                             content: "Missing required field: 'process_id'".to_string(),
                             is_error: true,
-                        lsp_diagnostics: None,
+                        injected_messages: Vec::new(),
                         };
                     }
                 };
@@ -171,19 +171,19 @@ impl ToolHandler for BgProcessToolHandler<'_> {
                     Ok(()) => ToolResult {
                         content: format!("Process {} stopped.", process_id),
                         is_error: false,
-                        lsp_diagnostics: None,
+                        injected_messages: Vec::new(),
                     },
                     Err(e) => ToolResult {
                         content: e,
                         is_error: true,
-                    lsp_diagnostics: None,
+                    injected_messages: Vec::new(),
                     },
                 }
             }
             _ => ToolResult {
                 content: format!("Unknown bg_process tool: {}", ctx.tool_name),
                 is_error: true,
-                lsp_diagnostics: None,
+                injected_messages: Vec::new(),
             },
         }
     }

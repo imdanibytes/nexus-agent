@@ -25,4 +25,5 @@ mod tests {
     mod workspace_projects;
     mod workspaces;
     mod lsp;
+    mod hooks;
 }

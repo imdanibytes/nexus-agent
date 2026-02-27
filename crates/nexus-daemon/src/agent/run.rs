@@ -15,6 +15,10 @@ use super::tool_dispatch::{
     self, AskUserHandler, BashHandler, ControlPlaneHandler, FetchHandler, FilesystemHandler,
     McpToolHandler, ResourceToolHandler, TaskToolHandler, ToolContext,
 };
+use crate::module::{
+    PreToolUseEvent, PreToolUseDecision, PostToolUseEvent, PostToolUseFailureEvent,
+    StopEvent, StopDecision, TurnStartEvent, PreCompactEvent, CompactionLayer,
+};
 use crate::provider::InferenceRequest;
 use super::{AgentTurnResult, InferenceConfig, TimingSpan, TurnContext, TurnServices};
 
@@ -136,6 +140,13 @@ pub async fn run_agent_turn(
                 sp.hash(&mut hasher);
                 tracing::info!(system_prompt_hash = hasher.finish(), "System prompt hash");
             }
+
+            // HOOK: TurnStart — notify modules the turn is beginning.
+            services.modules.fire_turn_start(&TurnStartEvent {
+                conversation_id,
+                run_id: emitter.run_id(),
+                depth,
+            }).await;
         }
 
         // Mid-turn context compaction: prune tool results before they overflow.
@@ -150,6 +161,14 @@ pub async fn run_agent_turn(
             let aggressive_threshold = (context_window as f64 * 0.85) as u32;
 
             if estimated > aggressive_threshold {
+                // HOOK: PreCompact — let modules save state before pruning.
+                services.modules.fire_pre_compact(&PreCompactEvent {
+                    conversation_id,
+                    estimated_tokens: estimated,
+                    context_window,
+                    layer: CompactionLayer::Prune,
+                }).await;
+
                 tracing::warn!(
                     round,
                     estimated,
@@ -158,6 +177,14 @@ pub async fn run_agent_turn(
                 );
                 crate::compaction::prune_tool_results(&mut messages, 1);
             } else if estimated > prune_threshold {
+                // HOOK: PreCompact
+                services.modules.fire_pre_compact(&PreCompactEvent {
+                    conversation_id,
+                    estimated_tokens: estimated,
+                    context_window,
+                    layer: CompactionLayer::Prune,
+                }).await;
+
                 tracing::info!(
                     round,
                     estimated,
@@ -362,7 +389,7 @@ pub async fn run_agent_turn(
         match stop_reason {
             Some(StopReason::ToolUse) if !tool_calls.is_empty() => {
                 let mut result_blocks = Vec::new();
-                let mut lsp_diag_blocks: Vec<String> = Vec::new();
+                let mut injected_blocks: Vec<String> = Vec::new();
                 let tool_exec_start_ms = turn_start.elapsed().as_millis() as u64;
                 let tool_exec_span_id = format!("t-toolexec-{}", round);
                 let tool_exec_start = Instant::now();
@@ -409,17 +436,64 @@ pub async fn run_agent_turn(
                         emitter.activity(desc);
                     }
 
+                    // Parse tool input for hook events
+                    let tool_input: serde_json::Value = serde_json::from_str(&tc.args_json)
+                        .unwrap_or_else(|_| serde_json::json!({}));
+
+                    // HOOK: PreToolUse — modules can deny or modify args.
+                    let pre_decision = services.modules.fire_pre_tool_use(&PreToolUseEvent {
+                        tool_name: &tc.name,
+                        tool_input: &tool_input,
+                        conversation_id,
+                    }).await;
+
+                    let effective_args = match pre_decision {
+                        PreToolUseDecision::Allow => tc.args_json.clone(),
+                        PreToolUseDecision::Deny(reason) => {
+                            // Feed denial reason back as a tool error
+                            let content = format!("Tool call denied: {}", reason);
+                            emitter.tool_result(&tc.id, &content, true);
+                            result_blocks.push(ContentBlock::ToolResult {
+                                tool_use_id: tc.id.clone(),
+                                content: fence_tool_result(&content),
+                                is_error: Some(true),
+                            });
+                            continue;
+                        }
+                        PreToolUseDecision::ModifyArgs(new_args) => {
+                            serde_json::to_string(&new_args).unwrap_or_else(|_| tc.args_json.clone())
+                        }
+                    };
+
                     let ctx = ToolContext {
                         tool_call_id: &tc.id,
                         tool_name: &tc.name,
-                        args_json: &tc.args_json,
+                        args_json: &effective_args,
                         conversation_id,
                         emitter,
                         cancel: &cancel,
                     };
-                    let result = tool_dispatch::dispatch_tool_call(&handlers, ctx).await;
-                    if let Some(diag) = result.lsp_diagnostics {
-                        lsp_diag_blocks.push(diag);
+                    let mut result = tool_dispatch::dispatch_tool_call(&handlers, ctx).await;
+
+                    // HOOK: PostToolUse / PostToolUseFailure
+                    if result.is_error {
+                        services.modules.fire_post_tool_use_failure(&PostToolUseFailureEvent {
+                            tool_name: &tc.name,
+                            tool_input: &tool_input,
+                            error: &result.content,
+                            conversation_id,
+                        }).await;
+                    } else {
+                        services.modules.fire_post_tool_use(&mut PostToolUseEvent {
+                            tool_name: &tc.name,
+                            tool_input: &tool_input,
+                            result: &mut result,
+                            conversation_id,
+                        }).await;
+                    }
+
+                    for msg in &result.injected_messages {
+                        injected_blocks.push(msg.text.clone());
                     }
                     let mut content = result.content;
                     let is_error = result.is_error;
@@ -474,22 +548,52 @@ pub async fn run_agent_turn(
                 messages.push(tool_results_msg.clone());
                 new_messages.push(tool_results_msg);
 
-                // Inject LSP diagnostics as a separate user message so the
-                // model doesn't confuse them with file content.
-                if !lsp_diag_blocks.is_empty() {
-                    let lsp_msg = Message {
+                // HOOK: Inject ephemeral messages from modules (e.g. LSP diagnostics).
+                // These are separate user messages so the model doesn't confuse
+                // them with tool result content.
+                if !injected_blocks.is_empty() {
+                    let injected_msg = Message {
                         role: Role::User,
                         content: vec![ContentBlock::Text {
-                            text: lsp_diag_blocks.join("\n"),
+                            text: injected_blocks.join("\n"),
                         }],
                     };
-                    messages.push(lsp_msg);
-                    // Not added to new_messages — diagnostics are ephemeral
-                    // context for the API, not persisted to conversation history.
+                    messages.push(injected_msg);
+                    // Not added to new_messages — injected context is ephemeral,
+                    // not persisted to conversation history.
                 }
             }
             _ => {
-                // end_turn, max_tokens, or no tool calls — we're done
+                // end_turn, max_tokens, or no tool calls
+
+                // HOOK: Stop — modules can force continuation.
+                if let Some(ref sr) = stop_reason {
+                    let stop_decision = services.modules.fire_stop(&StopEvent {
+                        conversation_id,
+                        round_count: round + 1,
+                        stop_reason: sr,
+                    }).await;
+                    if let StopDecision::Continue(reason) = stop_decision {
+                        tracing::info!(reason = %reason, "Module requested continuation");
+                        // Inject continuation reason as user message
+                        messages.push(Message {
+                            role: Role::User,
+                            content: vec![ContentBlock::Text { text: reason }],
+                        });
+                        let round_duration = round_start.elapsed().as_millis() as u64;
+                        timing_spans.push(TimingSpan {
+                            id: round_span_id,
+                            name: format!("round:{}", round + 1),
+                            parent_id: Some(turn_span_id.clone()),
+                            start_ms: round_start_ms,
+                            end_ms: round_start_ms + round_duration,
+                            duration_ms: round_duration,
+                            metadata: None,
+                        });
+                        continue;
+                    }
+                }
+
                 let round_duration = round_start.elapsed().as_millis() as u64;
                 timing_spans.push(TimingSpan {
                     id: round_span_id,
