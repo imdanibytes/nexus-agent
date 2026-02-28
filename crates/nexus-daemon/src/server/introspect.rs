@@ -195,7 +195,7 @@ impl IntrospectMcpServer {
 
     async fn handle_list_providers(&self) -> Result<CallToolResult, McpError> {
         let providers = self.state.providers.list().await;
-        let public: Vec<crate::provider::ProviderPublic> =
+        let public: Vec<nexus_provider::provider_config::ProviderPublic> =
             providers.iter().map(|p| p.into()).collect();
         ok_json(&public)
     }

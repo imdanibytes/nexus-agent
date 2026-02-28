@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use tokio::sync::{Mutex, RwLock};
 
-use crate::ask_user::PendingQuestionStore;
+use nexus_tools::ask_user::PendingQuestionStore;
 use crate::bg_process::ProcessManager;
 use crate::mcp::store::McpServerStore;
 use crate::mcp::McpManager;

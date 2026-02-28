@@ -1927,9 +1927,11 @@ dependencies = [
 name = "nexus-tools"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "dirs",
  "futures",
+ "nexus-core",
  "nexus-provider",
  "reqwest",
  "serde",
@@ -1937,6 +1939,7 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]

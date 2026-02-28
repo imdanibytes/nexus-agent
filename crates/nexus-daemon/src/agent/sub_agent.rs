@@ -4,9 +4,9 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use nexus_provider::types::{ContentBlock, Message, Role, Tool};
-use crate::bg_process::ProcessKind;
+use nexus_core::bg_process::ProcessKind;
 use crate::config::{FetchConfig, FilesystemConfig};
-use crate::provider::InferenceProvider;
+use nexus_provider::InferenceProvider;
 use crate::server::services::{TurnManager, McpService};
 
 use super::emitter::TurnEmitter;

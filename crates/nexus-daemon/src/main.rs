@@ -1,6 +1,5 @@
 mod agent;
 mod agent_config;
-mod ask_user;
 mod auto_title;
 mod bg_process;
 mod compaction;
@@ -38,8 +37,9 @@ use crate::event_bus::EventBus;
 use crate::mcp::store::McpServerStore;
 use crate::mcp::{ClientHandlerState, McpManager};
 use crate::module::ModuleRegistry;
-use crate::provider::{ProviderService, ProviderStore, ProviderType};
+use crate::provider::{ProviderService, ProviderStore};
 use crate::provider::store::CreateProviderParams;
+use nexus_provider::provider_config::ProviderType;
 use crate::server::sse::AgentEventBridge;
 use crate::server::{AppState, McpService, TurnManager};
 use crate::thread::ThreadService;
@@ -163,7 +163,7 @@ async fn main() -> Result<()> {
 
     let turns = Arc::new(TurnManager::new(
         event_bridge,
-        ask_user::PendingQuestionStore::new(),
+        nexus_tools::ask_user::PendingQuestionStore::new(),
         process_manager,
         message_queue,
     ));
@@ -190,8 +190,8 @@ async fn main() -> Result<()> {
 
     // LSP integration: detect installed servers, merge with persisted config
     let lsp_settings = NexusConfig::load_lsp_settings().unwrap_or_default();
-    let detected_lsps = lsp::detect::detect_installed_servers();
-    let mut lsp_config_store = lsp::config::LspConfigStore::new(lsp_settings)
+    let detected_lsps = nexus_lsp::detect::detect_installed_servers();
+    let mut lsp_config_store = nexus_lsp::config::LspConfigStore::new(lsp_settings)
         .with_save(Box::new(NexusConfig::save_lsp_settings));
     lsp_config_store.upsert_detected(detected_lsps).ok();
 
@@ -211,8 +211,8 @@ async fn main() -> Result<()> {
         );
     }
     let lsp_timeout = lsp_config_store.settings().diagnostics_timeout_ms;
-    let lsp_manager = lsp::manager::LspManager::new(enabled_lsp_configs, lsp_timeout);
-    let lsp_svc = lsp::LspService::new(lsp_manager, lsp_config_store);
+    let lsp_manager = nexus_lsp::manager::LspManager::new(enabled_lsp_configs, lsp_timeout);
+    let lsp_svc = nexus_lsp::LspService::new(lsp_manager, lsp_config_store);
 
     // Register LSP as a DaemonModule — handles warm-up (on_startup),
     // shutdown (on_shutdown), and diagnostic decoration (post_tool_use).

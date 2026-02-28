@@ -14,7 +14,8 @@ use crate::agent_config::AgentService;
 use crate::config::{ModelTier, ModelTierConfig};
 use crate::conversation::types::{ChatMessage, MessagePart, MessageRole};
 use crate::module::{DaemonModule, DoctorCheck, DoctorReport, DoctorStatus, TurnEndEvent};
-use crate::provider::{InferenceProvider, InferenceRequest, ProviderService};
+use nexus_provider::{InferenceProvider, InferenceRequest};
+use crate::provider::ProviderService;
 use crate::thread::ThreadService;
 
 const TITLE_PROMPT: &str = "\

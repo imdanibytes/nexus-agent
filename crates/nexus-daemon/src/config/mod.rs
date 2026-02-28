@@ -7,7 +7,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::agent_config::types::AgentEntry;
-use crate::provider::types::{Provider, ProviderType};
+use nexus_provider::provider_config::{Provider, ProviderType};
 
 /// A project — a single codebase root the agent can access.
 ///
@@ -327,7 +327,7 @@ impl NexusConfig {
         Self::nexus_dir().join("lsp.json")
     }
 
-    pub fn load_lsp_settings() -> Result<crate::lsp::config::LspSettings> {
+    pub fn load_lsp_settings() -> Result<nexus_lsp::config::LspSettings> {
         let path = Self::lsp_path();
         if path.exists() {
             let content = fs::read_to_string(&path)
@@ -336,13 +336,13 @@ impl NexusConfig {
                 .with_context(|| format!("Failed to parse LSP config at {}", path.display()))?;
             Ok(settings)
         } else {
-            let settings = crate::lsp::config::LspSettings::default();
+            let settings = nexus_lsp::config::LspSettings::default();
             Self::save_lsp_settings(&settings)?;
             Ok(settings)
         }
     }
 
-    pub fn save_lsp_settings(settings: &crate::lsp::config::LspSettings) -> Result<()> {
+    pub fn save_lsp_settings(settings: &nexus_lsp::config::LspSettings) -> Result<()> {
         let path = Self::lsp_path();
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;

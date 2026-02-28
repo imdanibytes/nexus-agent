@@ -11,11 +11,11 @@ use crate::conversation::types::{
     ChatMessage, ConversationUsage, MessagePart, MessageRole, MessageSource, Span,
 };
 use crate::config::{ModelTier, ModelTierConfig};
-use crate::provider::InferenceProvider;
-use crate::provider::types::ProviderType;
+use nexus_provider::InferenceProvider;
+use nexus_provider::provider_config::ProviderType;
 use crate::server::AppState;
 use crate::system_prompt::{SystemPromptBuilder, SystemPromptContext};
-use crate::tasks::types::AgentMode;
+use nexus_core::tasks::AgentMode;
 
 /// Everything needed to launch an agent turn. Assembled by the caller,
 /// consumed by `spawn_agent_turn`.
@@ -79,7 +79,7 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
         // 2. Assemble tools (MCP + built-in + ask_user + sub_agent + fetch + bash + bg + fs)
         let mut tools = tools;
         tools.extend(crate::tasks::tools::definitions());
-        tools.push(crate::ask_user::tool_definition());
+        tools.push(nexus_tools::ask_user::tool_definition());
         tools.push(crate::agent::sub_agent::tool_definition());
         if state_clone.config.fetch.enabled {
             tools.push(nexus_tools::fetch::tool_definition());

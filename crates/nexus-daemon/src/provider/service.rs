@@ -4,8 +4,8 @@ use tokio::sync::RwLock;
 
 use super::factory::ProviderFactory;
 use super::store::{CreateProviderParams, ProviderStore, ProviderUpdate};
-use super::types::Provider;
-use super::InferenceProvider;
+use nexus_provider::provider_config::Provider;
+use nexus_provider::InferenceProvider;
 use crate::event_bus::EventBus;
 
 /// Encapsulated provider management service.

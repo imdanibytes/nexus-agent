@@ -10,9 +10,9 @@ use crate::project::ProjectStore;
 use crate::thread::ThreadService;
 use crate::workspace::WorkspaceStore;
 
-use super::diagnostics::DiagnosticStatus;
-use super::manager::DiagnosticReport;
-use super::LspService;
+use nexus_lsp::diagnostics::DiagnosticStatus;
+use nexus_lsp::manager::DiagnosticReport;
+use nexus_lsp::LspService;
 
 /// Tools whose results should be decorated with cached diagnostics.
 const READ_TOOLS: &[&str] = &["read_text_file", "read_file"];

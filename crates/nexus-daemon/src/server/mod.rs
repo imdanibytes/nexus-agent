@@ -53,7 +53,7 @@ pub struct AppState {
     /// Effective filesystem config (projects + base). Updated on project CRUD.
     pub effective_fs_config: Arc<RwLock<FilesystemConfig>>,
     /// LSP integration — manages language servers and diagnostics
-    pub lsp: Arc<crate::lsp::LspService>,
+    pub lsp: Arc<nexus_lsp::LspService>,
     /// Module registry — hook system for extending daemon behavior.
     pub modules: Arc<ModuleRegistry>,
     /// Hook probe for debug/test introspection (debug builds only).

@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::agent::events::{AgUiEvent, EventEnvelope};
 use crate::conversation::types::Span;
 use crate::server::AppState;
-use crate::tasks::types::{AgentMode, Plan, Task, TaskState, TaskStatus};
+use nexus_core::tasks::{AgentMode, Plan, Task, TaskState, TaskStatus};
 
 /// Force-compact a conversation by moving old messages out of active_path
 /// and inserting a synthetic summary. No LLM call needed.

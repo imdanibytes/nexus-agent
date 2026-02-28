@@ -4,9 +4,9 @@ use axum::Json;
 use serde::Deserialize;
 use std::sync::Arc;
 
-use crate::provider::InferenceRequest;
+use nexus_provider::InferenceRequest;
 use crate::provider::store::{CreateProviderParams, ProviderUpdate};
-use crate::provider::types::{Provider, ProviderPublic, ProviderType};
+use nexus_provider::provider_config::{Provider, ProviderPublic, ProviderType};
 use crate::server::AppState;
 
 pub async fn list(

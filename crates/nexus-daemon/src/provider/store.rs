@@ -2,7 +2,7 @@ use anyhow::Result;
 use chrono::Utc;
 use uuid::Uuid;
 
-use super::types::{Provider, ProviderType};
+use nexus_provider::provider_config::{Provider, ProviderType};
 use crate::config::NexusConfig;
 
 /// Parameters for creating a new provider.

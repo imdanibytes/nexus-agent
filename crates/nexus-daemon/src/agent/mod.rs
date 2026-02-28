@@ -6,13 +6,13 @@ pub mod tool_dispatch;
 
 use std::sync::Arc;
 
-use crate::ask_user::PendingQuestionStore;
+use nexus_tools::ask_user::PendingQuestionStore;
 use crate::bg_process::ProcessManager;
 use crate::config::{FetchConfig, FilesystemConfig};
 use crate::mcp::McpManager;
 use crate::module::ModuleRegistry;
-use crate::provider::InferenceProvider;
-use crate::tasks::store::TaskStateStore;
+use nexus_provider::InferenceProvider;
+use nexus_core::tasks::TaskStateStore;
 
 pub use run::run_agent_turn;
 

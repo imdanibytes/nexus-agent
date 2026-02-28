@@ -6,7 +6,8 @@ use tokio::sync::RwLock;
 
 use nexus_anthropic::AnthropicProvider;
 use nexus_aws_bedrock::BedrockProvider;
-use super::{InferenceProvider, Provider, ProviderType};
+use nexus_provider::provider_config::{Provider, ProviderType};
+use nexus_provider::InferenceProvider;
 
 type ProviderCache = HashMap<String, (DateTime<Utc>, Arc<dyn InferenceProvider>)>;
 

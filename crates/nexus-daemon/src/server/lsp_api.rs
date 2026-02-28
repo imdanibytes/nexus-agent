@@ -80,7 +80,7 @@ pub async fn update_settings(
 pub async fn detect(
     State(state): State<Arc<AppState>>,
 ) -> Json<serde_json::Value> {
-    let detected = crate::lsp::detect::detect_installed_servers();
+    let detected = nexus_lsp::detect::detect_installed_servers();
     let count = detected.len();
 
     {

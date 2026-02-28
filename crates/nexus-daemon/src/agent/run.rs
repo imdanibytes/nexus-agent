@@ -19,7 +19,7 @@ use crate::module::{
     PreToolUseEvent, PreToolUseDecision, PostToolUseEvent, PostToolUseFailureEvent,
     StopEvent, StopDecision, PreCompactEvent, CompactionLayer,
 };
-use crate::provider::InferenceRequest;
+use nexus_provider::InferenceRequest;
 use super::{AgentTurnResult, InferenceConfig, TimingSpan, TurnContext, TurnServices};
 
 const MAX_ROUNDS: usize = 50;
@@ -200,8 +200,8 @@ pub async fn run_agent_turn(
             Err(e) => {
                 // Retry once on ContextLength with aggressive pruning
                 if !retried_after_prune {
-                    if let Some(pe) = e.downcast_ref::<crate::provider::error::ProviderError>() {
-                        if matches!(pe.kind, crate::provider::error::ProviderErrorKind::ContextLength) {
+                    if let Some(pe) = e.downcast_ref::<nexus_provider::error::ProviderError>() {
+                        if matches!(pe.kind, nexus_provider::error::ProviderErrorKind::ContextLength) {
                             retried_after_prune = true;
                             tracing::warn!("Context length exceeded, aggressive pruning and retrying");
                             nexus_compaction::prune_tool_results(&mut messages, 1);
@@ -211,7 +211,7 @@ pub async fn run_agent_turn(
                 }
 
                 // Retry transient errors with exponential backoff
-                if let Some(pe) = e.downcast_ref::<crate::provider::error::ProviderError>() {
+                if let Some(pe) = e.downcast_ref::<nexus_provider::error::ProviderError>() {
                     if pe.retryable && retry_count < crate::retry::MAX_RETRIES {
                         retry_count += 1;
                         let delay = crate::retry::backoff_delay(retry_count);
@@ -234,7 +234,7 @@ pub async fn run_agent_turn(
                 }
 
                 let details = e
-                    .downcast_ref::<crate::provider::error::ProviderError>()
+                    .downcast_ref::<nexus_provider::error::ProviderError>()
                     .and_then(|pe| serde_json::to_value(pe).ok());
                 emitter.run_error(e.to_string(), details.clone());
                 turn_error = Some(e.to_string());
@@ -253,7 +253,7 @@ pub async fn run_agent_turn(
                 }
                 Err(e) => {
                     // Retry transient SSE errors by restarting the round
-                    if let Some(pe) = e.downcast_ref::<crate::provider::error::ProviderError>() {
+                    if let Some(pe) = e.downcast_ref::<nexus_provider::error::ProviderError>() {
                         if pe.retryable && retry_count < crate::retry::MAX_RETRIES {
                             retry_count += 1;
                             let delay = crate::retry::backoff_delay(retry_count);
@@ -276,7 +276,7 @@ pub async fn run_agent_turn(
                     }
 
                     let details = e
-                        .downcast_ref::<crate::provider::error::ProviderError>()
+                        .downcast_ref::<nexus_provider::error::ProviderError>()
                         .and_then(|pe| serde_json::to_value(pe).ok());
                     emitter.run_error(e.to_string(), details.clone());
                     turn_error = Some(e.to_string());
@@ -766,7 +766,7 @@ async fn consume_stream(
             }
             StreamEvent::MessageStop => break,
             StreamEvent::Error { error_type, message } => {
-                let err = crate::provider::error::ProviderError::from_anthropic_stream(
+                let err = nexus_provider::error::ProviderError::from_anthropic_stream(
                     error_type.as_deref(),
                     &message,
                 );

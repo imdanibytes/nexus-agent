@@ -1,5 +1,5 @@
 use nexus_provider::types::Tool;
-use crate::tasks::types::AgentMode;
+use nexus_core::tasks::AgentMode;
 
 /// Snapshot of plan state for filter decisions.
 #[allow(dead_code)] // fields read by filter implementations as plan-gating is wired up

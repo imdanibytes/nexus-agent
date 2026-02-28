@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::agent::events::{AgUiEvent, EventEnvelope};
 use crate::server::message_queue::{MessageQueue, QueuedMessage};
-use super::types::*;
+use nexus_core::bg_process::*;
 
 const MAX_CONCURRENT_PER_CONVERSATION: usize = 5;
 const PREVIEW_CHARS: usize = 500;

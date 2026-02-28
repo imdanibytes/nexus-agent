@@ -4,16 +4,17 @@ use uuid::Uuid;
 
 use std::sync::Arc;
 
-use crate::ask_user::{self, AskUserArgs, PendingQuestion, PendingQuestionStore, UserAnswer};
+use nexus_tools::ask_user::{self, AskUserArgs, PendingQuestion, PendingQuestionStore, UserAnswer};
 use nexus_tools::bash;
-use crate::bg_process::{ProcessKind, ProcessManager};
+use crate::bg_process::ProcessManager;
+use nexus_core::bg_process::ProcessKind;
 use crate::config::{FetchConfig, FilesystemConfig};
 use nexus_tools::fetch;
 use nexus_tools::filesystem;
 use crate::mcp::McpManager;
 use crate::module;
 use crate::tasks;
-use crate::tasks::store::TaskStateStore;
+use nexus_core::tasks::TaskStateStore;
 use super::emitter::TurnEmitter;
 
 // Re-export ToolResult from module so existing imports still work.

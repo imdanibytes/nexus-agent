@@ -411,7 +411,7 @@ pub async fn answer_question(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let answer = crate::ask_user::UserAnswer {
+    let answer = nexus_tools::ask_user::UserAnswer {
         value: body.value.clone(),
         dismissed: false,
     };

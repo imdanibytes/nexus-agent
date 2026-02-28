@@ -2,8 +2,7 @@ use std::path::PathBuf;
 
 use tokio::sync::RwLock;
 
-use super::store::TaskStateStore;
-use super::types::TaskState;
+use nexus_core::tasks::{TaskState, TaskStateStore};
 use crate::event_bus::EventBus;
 
 /// Encapsulated task state service.

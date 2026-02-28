@@ -4,13 +4,16 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+nexus-core = { path = "../nexus-core" }
 nexus-provider = { path = "../nexus-provider" }
+uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["process", "time", "macros", "rt", "sync"] }
 reqwest = { version = "0.13", features = ["stream"] }
 url = "2"
 futures = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+async-trait = "0.1"
 tracing = "0.1"
 chrono = "0.4"
 dirs = "6"
