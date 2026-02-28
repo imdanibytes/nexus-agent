@@ -44,12 +44,11 @@ impl ToolResult {
 
 // ── Module-owned types (decoupled from provider-specific types) ──
 
-/// Tool definition provided by a module.
+/// A named section contributed by a module to the system prompt or status message.
 #[derive(Debug, Clone)]
-pub struct ToolDefinition {
+pub struct PromptSection {
     pub name: String,
-    pub description: String,
-    pub input_schema: serde_json::Value,
+    pub content: String,
 }
 
 /// Why the agent stopped responding.
@@ -94,6 +93,7 @@ pub enum PreToolUseDecision {
 /// PostToolUse — fires after successful tool execution.
 pub struct PostToolUseEvent<'a> {
     pub tool_name: &'a str,
+    pub tool_call_id: &'a str,
     pub tool_input: &'a serde_json::Value,
     pub result: &'a mut ToolResult,
     pub conversation_id: &'a str,
@@ -115,11 +115,19 @@ pub struct UserPromptSubmitEvent<'a> {
     pub additional_context: &'a mut Vec<String>,
 }
 
-/// TurnStart — fires when a turn begins (round 0).
+/// TurnStart — fires during turn setup, before inference.
+///
+/// Modules can push sections into `system_prompt_sections` (cacheable, appended
+/// to the static system prompt) or `status_sections` (ephemeral, appended to
+/// the `<state_update>` message injected each turn).
 pub struct TurnStartEvent<'a> {
     pub conversation_id: &'a str,
     pub run_id: &'a str,
     pub depth: u32,
+    /// Modules push cacheable prompt sections here.
+    pub system_prompt_sections: &'a mut Vec<PromptSection>,
+    /// Modules push dynamic status sections here.
+    pub status_sections: &'a mut Vec<PromptSection>,
 }
 
 /// Stop — fires when the agent finishes responding.
@@ -242,11 +250,6 @@ pub trait DaemonModule: Send + Sync {
 
     // ── Tool lifecycle ──
 
-    /// Provide tool definitions for the agent. Called each turn.
-    fn tool_definitions(&self) -> Vec<ToolDefinition> {
-        vec![]
-    }
-
     /// Before a tool call executes. Can deny, modify args, or allow.
     async fn pre_tool_use(&self, _event: &PreToolUseEvent<'_>) -> PreToolUseDecision {
         PreToolUseDecision::Allow
@@ -265,8 +268,10 @@ pub trait DaemonModule: Send + Sync {
 
     // ── Turn lifecycle ──
 
-    /// Turn begins (first round about to start).
-    async fn turn_start(&self, _event: &TurnStartEvent<'_>) {}
+    /// Turn begins (setup phase, before inference).
+    /// Push into `event.system_prompt_sections` or `event.status_sections`
+    /// to contribute prompt/status content.
+    async fn turn_start(&self, _event: &mut TurnStartEvent<'_>) {}
 
     /// Agent finished responding. Return Continue to force another round.
     async fn stop(&self, _event: &StopEvent<'_>) -> StopDecision {
@@ -345,14 +350,6 @@ impl ModuleRegistry {
 
     // ── Tool lifecycle ──
 
-    /// Collect tool definitions from all modules.
-    pub fn collect_tools(&self) -> Vec<ToolDefinition> {
-        self.modules
-            .iter()
-            .flat_map(|m| m.tool_definitions())
-            .collect()
-    }
-
     /// Fire PreToolUse across modules. First non-Allow wins.
     pub async fn fire_pre_tool_use(&self, event: &PreToolUseEvent<'_>) -> PreToolUseDecision {
         for module in &self.modules {
@@ -389,7 +386,7 @@ impl ModuleRegistry {
 
     // ── Turn lifecycle ──
 
-    pub async fn fire_turn_start(&self, event: &TurnStartEvent<'_>) {
+    pub async fn fire_turn_start(&self, event: &mut TurnStartEvent<'_>) {
         for module in &self.modules {
             module.turn_start(event).await;
         }

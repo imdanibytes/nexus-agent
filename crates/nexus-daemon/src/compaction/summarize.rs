@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use nexus_anthropic::AnthropicClient;
+use nexus_provider::InferenceProvider;
 use crate::conversation::types::{ChatMessage, MessagePart, MessageRole};
 
 /// Find a safe split point that doesn't separate tool calls from their results.
@@ -78,14 +78,14 @@ fn build_conversation_text(messages: &[&ChatMessage]) -> String {
 /// Summarize old messages into a compact structured reference.
 ///
 /// Keeps the last `keep_recent` messages intact. Everything before is fed
-/// to Sonnet for summarization. Returns the summary text and the list of
-/// consumed message IDs. The caller is responsible for creating spans
-/// and updating `active_path`.
+/// to the provider for summarization. Returns the summary text, list of
+/// consumed message IDs, and token counts (input, output) for cost tracking.
 pub async fn summarize_messages(
-    client: &AnthropicClient,
+    provider: &dyn InferenceProvider,
+    model: &str,
     messages: &[&ChatMessage],
     keep_recent: usize,
-) -> Result<(String, Vec<String>)> {
+) -> Result<(String, Vec<String>, u32, u32)> {
     if messages.len() <= keep_recent {
         anyhow::bail!("Not enough messages to summarize");
     }
@@ -100,19 +100,21 @@ pub async fn summarize_messages(
     let to_summarize = &messages[..split_at];
     let conversation_text = build_conversation_text(to_summarize);
 
-    let summary_text =
-        nexus_compaction::summarize_conversation(client, &conversation_text).await?;
+    let result =
+        nexus_compaction::summarize_conversation(provider, model, &conversation_text).await?;
 
     let consumed_ids: Vec<String> = to_summarize.iter().map(|m| m.id.clone()).collect();
 
     tracing::info!(
         consumed = consumed_ids.len(),
         kept = keep_recent,
-        summary_chars = summary_text.len(),
+        summary_chars = result.text.len(),
+        input_tokens = result.input_tokens,
+        output_tokens = result.output_tokens,
         "Conversation compacted"
     );
 
-    Ok((summary_text, consumed_ids))
+    Ok((result.text, consumed_ids, result.input_tokens, result.output_tokens))
 }
 
 #[cfg(test)]

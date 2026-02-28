@@ -234,72 +234,7 @@ impl SystemPromptProvider for StateProtocolProvider {
     }
 }
 
-// ── 8. Plan Context ──
-
-pub struct TaskContextProvider;
-
-impl SystemPromptProvider for TaskContextProvider {
-    fn name(&self) -> &str {
-        "task_context"
-    }
-
-    fn cacheable(&self) -> bool {
-        false
-    }
-
-    fn provide(&self, ctx: &SystemPromptContext) -> Option<String> {
-        let plan = ctx.plan_context.as_ref()?;
-        let mut lines = Vec::new();
-
-        lines.push(format!(
-            "Plan: \"{}\" ({} mode)",
-            plan.plan_title, plan.mode,
-        ));
-
-        if let Some(ref summary) = plan.plan_summary {
-            lines.push(format!("Summary: {}", summary));
-        }
-
-        if !plan.tasks.is_empty() {
-            lines.push(String::new());
-            lines.push("Tasks:".to_string());
-
-            let completed = plan.tasks.iter().filter(|t| t.status == "completed").count();
-            let total = plan.tasks.len();
-
-            for (i, task) in plan.tasks.iter().enumerate() {
-                let is_current = plan.current_task_id.as_deref() == Some(&task.id);
-                let marker = if is_current { " ← CURRENT" } else { "" };
-                let deps = if task.depends_on.is_empty() {
-                    String::new()
-                } else {
-                    format!(" (depends on: {})", task.depends_on.join(", "))
-                };
-                lines.push(format!(
-                    "  [{}] {}. {}{}{}",
-                    task.status, i + 1, task.title, deps, marker,
-                ));
-                if is_current {
-                    if let Some(ref desc) = task.description {
-                        lines.push(format!("    Description: {}", desc));
-                    }
-                }
-            }
-
-            lines.push(String::new());
-            lines.push(format!("Progress: {}/{} completed", completed, total));
-
-            if let Some(ref current_id) = plan.current_task_id {
-                if let Some(current) = plan.tasks.iter().find(|t| t.id == *current_id) {
-                    lines.push(format!("Current task: {}", current.title));
-                    lines.push("Update this task's status with task_update as you work.".to_string());
-                }
-            }
-        }
-
-        Some(format!("<plan_context>\n{}\n</plan_context>", lines.join("\n")))
-    }
-}
+// TaskContextProvider — moved to task_context::TaskContextModule (DaemonModule)
 
 // ── 9. Datetime ──
 
@@ -321,56 +256,7 @@ impl SystemPromptProvider for DatetimeProvider {
     }
 }
 
-// ── 6. Conversation Context ──
-
-pub struct ConversationContextProvider;
-
-impl SystemPromptProvider for ConversationContextProvider {
-    fn name(&self) -> &str {
-        "conversation_context"
-    }
-
-    fn cacheable(&self) -> bool {
-        false
-    }
-
-    fn provide(&self, ctx: &SystemPromptContext) -> Option<String> {
-        let mut lines = Vec::new();
-
-        // Workspace context (if active)
-        if let Some(ref name) = ctx.workspace_name {
-            lines.push(format!("Workspace: \"{}\"", name));
-            if let Some(ref desc) = ctx.workspace_description {
-                lines.push(format!("Description: {}", desc));
-            }
-            if !ctx.workspace_projects.is_empty() {
-                lines.push(String::new());
-                lines.push("Projects:".to_string());
-                for (proj_name, proj_path) in &ctx.workspace_projects {
-                    lines.push(format!("- {} ({})", proj_name, proj_path));
-                }
-                lines.push(String::new());
-            }
-        }
-
-        if let Some(ref dir) = ctx.working_directory {
-            lines.push(format!("Working directory: {}", dir));
-        }
-
-        if ctx.total_cost > 0.0 {
-            lines.push(format!("Conversation cost: ${:.3}", ctx.total_cost));
-        }
-
-        if lines.is_empty() {
-            return None;
-        }
-
-        Some(format!(
-            "<conversation_context>\n{}\n</conversation_context>",
-            lines.join("\n"),
-        ))
-    }
-}
+// ConversationContextProvider — moved to conversation_context::ConversationContextModule (DaemonModule)
 
 // ── 10. System Info ──
 

@@ -1,26 +1,29 @@
 mod agent;
 mod agent_config;
 mod ask_user;
+mod auto_title;
 mod bg_process;
 mod compaction;
 mod config;
 mod control_plane;
 mod conversation;
+mod conversation_context;
 mod event_bus;
 #[cfg(debug_assertions)]
 mod hook_probe;
 mod lsp;
 mod mcp;
 mod mcp_resources;
-mod mechanics;
 pub mod module;
 mod provider;
 mod retry;
 mod server;
 mod system_prompt;
+mod task_context;
 mod tasks;
 mod thread;
 mod tool_filter;
+mod tool_spill;
 mod project;
 mod workspace;
 
@@ -29,7 +32,6 @@ use std::sync::Arc;
 
 use crate::agent_config::{AgentService, AgentStore};
 use crate::agent_config::store::CreateAgentParams;
-use nexus_anthropic::AnthropicClient;
 use crate::config::NexusConfig;
 use crate::conversation::ConversationStore;
 use crate::event_bus::EventBus;
@@ -77,11 +79,6 @@ async fn main() -> Result<()> {
         config.agents.clone(),
         config.active_agent_id.clone(),
     );
-
-    // Title generation client (optional — from env var)
-    let title_client = std::env::var("ANTHROPIC_API_KEY")
-        .ok()
-        .map(AnthropicClient::new);
 
     // Backward compat: seed default provider + agent from ANTHROPIC_API_KEY if none exist
     if provider_store.list().is_empty() {
@@ -131,6 +128,7 @@ async fn main() -> Result<()> {
     let project_store = ProjectStore::new(config.projects.clone());
     let workspace_store = WorkspaceStore::new(config.workspaces.clone());
     let effective_fs = config.effective_filesystem_config();
+    let effective_fs_lock = Arc::new(tokio::sync::RwLock::new(effective_fs.clone()));
 
     tracing::info!(
         providers = provider_store.list().len(),
@@ -226,9 +224,36 @@ async fn main() -> Result<()> {
     });
     module_registry.register(lsp_module as Arc<dyn crate::module::DaemonModule>);
 
+    // Tool result spilling — saves oversized outputs to temp files
+    module_registry.register(Arc::new(tool_spill::ToolSpillModule) as Arc<dyn crate::module::DaemonModule>);
+
+    // Auto-title — generates conversation titles after each turn
+    let auto_title_module = Arc::new(auto_title::AutoTitleModule {
+        threads: Arc::clone(&threads),
+        agents: Arc::clone(&agents_svc),
+        providers: Arc::clone(&providers_svc),
+        model_tiers: config.model_tiers.clone(),
+    });
+    module_registry.register(auto_title_module as Arc<dyn crate::module::DaemonModule>);
+
+    // Conversation context — injects workspace/project/cost into status message
+    let conversation_context_module = Arc::new(conversation_context::ConversationContextModule {
+        workspaces: Arc::clone(&workspaces_lock),
+        projects: Arc::clone(&projects_lock),
+        threads: Arc::clone(&threads),
+        effective_fs: Arc::clone(&effective_fs_lock),
+    });
+    module_registry.register(conversation_context_module as Arc<dyn crate::module::DaemonModule>);
+
+    // Task context — injects plan/task progress into status message
+    let task_context_module = Arc::new(task_context::TaskContextModule {
+        tasks: Arc::clone(&task_svc),
+    });
+    module_registry.register(task_context_module as Arc<dyn crate::module::DaemonModule>);
+
     let state = AppState {
         base_filesystem_config: config.filesystem.clone(),
-        effective_fs_config: tokio::sync::RwLock::new(effective_fs),
+        effective_fs_config: effective_fs_lock,
         projects: projects_lock,
         workspaces: workspaces_lock,
         config: config.clone(),
@@ -239,7 +264,6 @@ async fn main() -> Result<()> {
         tasks: task_svc,
         threads,
         event_bus,
-        title_client,
         lsp: lsp_svc,
         modules: Arc::new(module_registry),
         #[cfg(debug_assertions)]

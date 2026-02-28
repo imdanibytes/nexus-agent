@@ -1815,7 +1815,7 @@ name = "nexus-compaction"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "nexus-anthropic",
+ "futures",
  "nexus-provider",
  "serde_json",
  "tracing",

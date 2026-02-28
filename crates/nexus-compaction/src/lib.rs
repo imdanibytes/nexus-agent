@@ -13,7 +13,7 @@ mod pruning;
 mod summarize;
 
 pub use pruning::prune_tool_results;
-pub use summarize::summarize_conversation;
+pub use summarize::{summarize_conversation, SummarizeResult};
 
 use nexus_provider::types::{ContentBlock, Message, Tool};
 

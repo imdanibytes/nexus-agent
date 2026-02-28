@@ -7,7 +7,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::agent_config::types::AgentEntry;
-use crate::provider::types::Provider;
+use crate::provider::types::{Provider, ProviderType};
 
 /// A project — a single codebase root the agent can access.
 ///
@@ -48,6 +48,56 @@ fn chrono_now() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
+// ── Model Tiers ─────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelTier {
+    Fast,
+    Balanced,
+    Smart,
+}
+
+/// Per-tier model overrides. When a tier is `None`, the system uses a
+/// hardcoded default for the active provider type.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ModelTierConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub balanced: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smart: Option<String>,
+}
+
+impl ModelTierConfig {
+    /// Resolve a model ID for the given tier and provider type.
+    ///
+    /// Priority: config override → hardcoded default per provider type.
+    pub fn resolve(&self, provider_type: &ProviderType, tier: ModelTier) -> String {
+        let override_model = match tier {
+            ModelTier::Fast => &self.fast,
+            ModelTier::Balanced => &self.balanced,
+            ModelTier::Smart => &self.smart,
+        };
+        if let Some(model) = override_model {
+            return model.clone();
+        }
+        default_tier_model(provider_type, tier).to_string()
+    }
+}
+
+fn default_tier_model(provider_type: &ProviderType, tier: ModelTier) -> &'static str {
+    match (provider_type, tier) {
+        (ProviderType::Anthropic, ModelTier::Fast) => "claude-haiku-4-5-20251001",
+        (ProviderType::Anthropic, ModelTier::Balanced) => "claude-sonnet-4-6",
+        (ProviderType::Anthropic, ModelTier::Smart) => "claude-opus-4-6",
+        (ProviderType::Bedrock, ModelTier::Fast) => "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        (ProviderType::Bedrock, ModelTier::Balanced) => "us.anthropic.claude-sonnet-4-6-v1:0",
+        (ProviderType::Bedrock, ModelTier::Smart) => "us.anthropic.claude-opus-4-6-v1:0",
+    }
+}
+
 /// Main nexus configuration — persisted to ~/.nexus/nexus.json
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NexusConfig {
@@ -71,6 +121,8 @@ pub struct NexusConfig {
     pub agents: Vec<AgentEntry>,
     #[serde(default)]
     pub active_agent_id: Option<String>,
+    #[serde(default)]
+    pub model_tiers: ModelTierConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

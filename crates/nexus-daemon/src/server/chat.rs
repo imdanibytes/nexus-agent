@@ -82,8 +82,6 @@ pub async fn start_turn(
             assistant_message_id: body.assistant_message_id,
             last_active_id: conv.active_path.last().cloned(),
             prior_cost: conv.usage.as_ref().map(|u| u.total_cost).unwrap_or(0.0),
-            title: conv.title.clone(),
-            message_count: conv.active_path.len(),
         };
 
         state.threads.commit(conv).await
@@ -180,8 +178,6 @@ pub async fn branch_turn(
             assistant_message_id: body.assistant_message_id,
             last_active_id: conv.active_path.last().cloned(),
             prior_cost: conv.usage.as_ref().map(|u| u.total_cost).unwrap_or(0.0),
-            title: conv.title.clone(),
-            message_count: conv.active_path.len(),
         };
 
         state.threads.commit(conv).await
@@ -252,8 +248,6 @@ pub async fn regenerate_turn(
             assistant_message_id: body.assistant_message_id,
             last_active_id: conv.active_path.last().cloned(),
             prior_cost: conv.usage.as_ref().map(|u| u.total_cost).unwrap_or(0.0),
-            title: conv.title.clone(),
-            message_count: conv.active_path.len(),
         };
 
         state.threads.commit(conv).await
@@ -356,8 +350,6 @@ pub async fn tool_invoke(
             assistant_message_id: body.assistant_message_id,
             last_active_id: conv.active_path.last().cloned(),
             prior_cost: conv.usage.as_ref().map(|u| u.total_cost).unwrap_or(0.0),
-            title: conv.title.clone(),
-            message_count: conv.active_path.len(),
         };
 
         state.threads.commit(conv).await

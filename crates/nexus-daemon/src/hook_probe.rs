@@ -81,7 +81,7 @@ impl DaemonModule for HookProbe {
         "hook_probe"
     }
 
-    async fn turn_start(&self, event: &TurnStartEvent<'_>) {
+    async fn turn_start(&self, event: &mut TurnStartEvent<'_>) {
         self.record("turn_start", event.conversation_id, serde_json::json!({
             "run_id": event.run_id,
             "depth": event.depth,

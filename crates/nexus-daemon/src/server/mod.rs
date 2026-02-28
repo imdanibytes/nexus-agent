@@ -13,6 +13,7 @@ pub mod services;
 pub mod sse;
 pub mod turn;
 pub mod project_api;
+pub mod settings_api;
 pub mod workspace_api;
 
 use axum::extract::{Path, State};
@@ -24,7 +25,6 @@ use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
 use crate::agent_config::AgentService;
-use nexus_anthropic::AnthropicClient;
 use crate::config::{FilesystemConfig, NexusConfig};
 use crate::event_bus::EventBus;
 use crate::module::ModuleRegistry;
@@ -51,9 +51,7 @@ pub struct AppState {
     /// Base filesystem config from nexus.json (without project paths merged).
     pub base_filesystem_config: FilesystemConfig,
     /// Effective filesystem config (projects + base). Updated on project CRUD.
-    pub effective_fs_config: RwLock<FilesystemConfig>,
-    /// Anthropic client used only for title generation (from ANTHROPIC_API_KEY env)
-    pub title_client: Option<AnthropicClient>,
+    pub effective_fs_config: Arc<RwLock<FilesystemConfig>>,
     /// LSP integration — manages language servers and diagnostics
     pub lsp: Arc<crate::lsp::LspService>,
     /// Module registry — hook system for extending daemon behavior.
@@ -194,6 +192,15 @@ pub fn build_router(state: AppState, queue_rx: tokio::sync::mpsc::UnboundedRecei
         .route(
             "/api/lsp-settings",
             patch(lsp_api::update_settings),
+        )
+        // Settings
+        .route(
+            "/api/settings",
+            get(settings_api::get_settings),
+        )
+        .route(
+            "/api/settings/model-tiers",
+            patch(settings_api::update_model_tiers),
         )
         // Background processes
         .route(

@@ -4,48 +4,12 @@ mod providers;
 pub use fence::*;
 pub use providers::*;
 
-/// Snapshot of a single task for plan context injection.
-pub struct PlanTaskSnapshot {
-    pub id: String,
-    pub title: String,
-    pub description: Option<String>,
-    pub status: String,
-    pub depends_on: Vec<String>,
-}
-
-/// Full plan context injected into the system prompt state_update.
-///
-/// Survives compaction because the system prompt is rebuilt every turn
-/// from `TaskStateStore`, not from conversation history.
-pub struct PlanContext {
-    pub plan_title: String,
-    pub plan_summary: Option<String>,
-    pub tasks: Vec<PlanTaskSnapshot>,
-    pub current_task_id: Option<String>,
-    pub mode: String,
-}
-
 /// Context passed to each provider so it can decide what to emit.
-#[allow(dead_code)] // fields consumed by various SystemPromptProvider implementations
 pub struct SystemPromptContext {
-    pub conversation_title: String,
-    pub message_count: usize,
     pub tool_names: Vec<String>,
     pub agent_name: String,
     pub custom_system_prompt: Option<String>,
-    pub context_window: u32,
     pub mode: String,
-    pub plan_context: Option<PlanContext>,
-    /// Primary working directory (first allowed_directory).
-    pub working_directory: Option<String>,
-    /// Cumulative cost of the conversation so far (USD).
-    pub total_cost: f64,
-    /// Active workspace name (if any).
-    pub workspace_name: Option<String>,
-    /// Active workspace description (if any).
-    pub workspace_description: Option<String>,
-    /// Project names + paths in the active workspace.
-    pub workspace_projects: Vec<(String, String)>,
 }
 
 /// A composable section of the system prompt.
@@ -147,7 +111,7 @@ impl SystemPromptBuilder {
             .register(StateProtocolProvider)
             // Dynamic (not cacheable) providers — injected as <state_update>
             .register(DatetimeProvider)
-            .register(TaskContextProvider)
-            .register(ConversationContextProvider)
+            // Note: TaskContextProvider and ConversationContextProvider are now
+            // DaemonModules that contribute via the turn_start hook.
     }
 }

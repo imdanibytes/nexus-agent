@@ -10,7 +10,9 @@ use nexus_provider::types::{ContentBlock, Message, Role};
 use crate::conversation::types::{
     ChatMessage, ConversationUsage, MessagePart, MessageRole, MessageSource, Span,
 };
+use crate::config::{ModelTier, ModelTierConfig};
 use crate::provider::InferenceProvider;
+use crate::provider::types::ProviderType;
 use crate::server::AppState;
 use crate::system_prompt::{SystemPromptBuilder, SystemPromptContext};
 use crate::tasks::types::AgentMode;
@@ -26,13 +28,12 @@ pub struct TurnRequest {
     pub assistant_message_id: Option<String>,
     pub last_active_id: Option<String>,
     pub prior_cost: f64,
-    pub title: String,
-    pub message_count: usize,
 }
 
 /// Resolved agent configuration from AppState.
 struct ResolvedAgent {
     provider: Arc<dyn InferenceProvider>,
+    provider_type: ProviderType,
     model: String,
     max_tokens: u32,
     system_prompt: Option<String>,
@@ -58,8 +59,6 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
         assistant_message_id,
         last_active_id,
         prior_cost,
-        title,
-        message_count,
     } = req;
 
     tokio::spawn(async move {
@@ -91,26 +90,20 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
         tools.extend(crate::control_plane::tool_definitions());
         let effective_fs = state_clone.effective_fs_config.read().await.clone();
         tools.extend(nexus_tools::filesystem::tool_definitions(&effective_fs));
-        // HOOK: ToolRegister — collect tools from modules.
-        tools.extend(
-            state_clone.modules.collect_tools()
-                .into_iter()
-                .map(crate::module::tool_from_definition)
-        );
         nexus_provider::types::inject_tool_description_field(&mut tools);
 
-        // 3. Derive agent mode + plan context from task state
-        let (mode, mode_enum, plan_context) = resolve_task_mode(&state_clone, &conversation_id).await;
+        // 3. Derive agent mode + task counts from task state
+        let (mode, mode_enum, task_counts) = resolve_task_mode(&state_clone, &conversation_id).await;
 
         // 4. Apply composable tool filter chain
-        let plan_snapshot = plan_context.as_ref().map(|pc| {
+        let plan_snapshot = task_counts.map(|(task_count, completed_count)| {
             crate::tool_filter::PlanSnapshot {
                 approved: match mode_enum {
                     AgentMode::Execution | AgentMode::Validation => Some(true),
                     _ => Some(false),
                 },
-                task_count: pc.tasks.len(),
-                completed_count: pc.tasks.iter().filter(|t| t.status == "completed").count(),
+                task_count,
+                completed_count,
             }
         });
         let filter_ctx = crate::tool_filter::ToolFilterContext {
@@ -120,30 +113,44 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
         let tools = crate::tool_filter::ToolFilterChain::default_chain().apply(&filter_ctx, tools);
         tracing::debug!(mode = %mode, tool_count = tools.len(), "Tool filter applied");
 
-        // 5. Resolve workspace context for system prompt
-        let (ws_name, ws_desc, ws_projects) = resolve_workspace_context(&state_clone, &conversation_id).await;
+        // 5. HOOK: TurnStart — modules contribute prompt/status sections.
+        let mut prompt_sections = Vec::new();
+        let mut status_sections = Vec::new();
+        state_clone.modules.fire_turn_start(&mut crate::module::TurnStartEvent {
+            conversation_id: &conversation_id,
+            run_id: &run_id,
+            depth: 0,
+            system_prompt_sections: &mut prompt_sections,
+            status_sections: &mut status_sections,
+        }).await;
 
         // 6. Build system prompt
         let context_window = crate::agent::context_window_for_model(&resolved.model);
         let builder = SystemPromptBuilder::default_builder();
-        let prompt_parts = builder.build_parts(&SystemPromptContext {
-            conversation_title: title.clone(),
-            message_count,
+        let mut prompt_parts = builder.build_parts(&SystemPromptContext {
             tool_names: tools.iter().map(|t| t.name.clone()).collect(),
             agent_name: resolved.meta["agent_name"]
                 .as_str()
                 .unwrap_or("Assistant")
                 .to_string(),
             custom_system_prompt: resolved.system_prompt.clone(),
-            context_window,
             mode,
-            plan_context,
-            working_directory: effective_fs.allowed_directories.first().cloned(),
-            total_cost: prior_cost,
-            workspace_name: ws_name,
-            workspace_description: ws_desc,
-            workspace_projects: ws_projects,
         });
+
+        // Merge module-contributed sections into prompt output
+        for section in &prompt_sections {
+            prompt_parts.system.push_str("\n\n");
+            prompt_parts.system.push_str(&section.content);
+        }
+        for section in &status_sections {
+            let state = prompt_parts.state.get_or_insert_with(|| "<state_update>\n</state_update>".to_string());
+            // Insert before closing tag
+            if let Some(pos) = state.rfind("</state_update>") {
+                state.insert_str(pos, &format!("{}\n", section.content));
+            } else {
+                state.push_str(&format!("\n{}", section.content));
+            }
+        }
 
         let mcp_guard = state_clone.mcp.mcp.read().await;
 
@@ -155,7 +162,10 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
             &tools,
             context_window,
             mode_enum,
-            &state_clone,
+            resolved.provider.as_ref(),
+            &resolved.provider_type,
+            &state_clone.config.model_tiers,
+            &state_clone.threads,
             &conversation_id,
             &emitter,
         )
@@ -267,21 +277,6 @@ pub fn spawn_agent_turn(state: Arc<AppState>, req: TurnRequest) {
                     .await;
                 }
 
-                // 11. Auto-title
-                if turn_error.is_none() {
-                    let title_conv = state_clone.threads.get(&conversation_id).await.ok().flatten();
-                    if let Some(title_conv) = title_conv {
-                        let active = title_conv.active_messages();
-                        crate::mechanics::auto_title::generate_title(
-                            &state_clone,
-                            &conversation_id,
-                            &title_conv.title,
-                            &active,
-                        )
-                        .await;
-                    }
-                }
-
                 // HOOK: TurnEnd — notify modules the turn is done.
                 state_clone.modules.fire_turn_end(&crate::module::TurnEndEvent {
                     conversation_id: &conversation_id,
@@ -382,6 +377,7 @@ async fn resolve_agent(state: &AppState, conversation_id: &str, emitter: &TurnEm
 
     Some(ResolvedAgent {
         provider,
+        provider_type: provider_record.provider_type.clone(),
         model: agent.model.clone(),
         max_tokens: agent.max_tokens.unwrap_or(8192),
         system_prompt: agent.system_prompt.clone(),
@@ -395,44 +391,28 @@ async fn resolve_agent(state: &AppState, conversation_id: &str, emitter: &TurnEm
     })
 }
 
-/// Derive agent mode and plan context from the task store.
+/// Derive agent mode and task counts from the task store.
+///
+/// Returns (mode_string, mode_enum, Option<(task_count, completed_count)>).
+/// Full plan/task context is now injected by TaskContextModule via turn_start.
 async fn resolve_task_mode(
     state: &AppState,
     conversation_id: &str,
-) -> (String, AgentMode, Option<crate::system_prompt::PlanContext>) {
-    use crate::system_prompt::{PlanContext, PlanTaskSnapshot};
-
+) -> (String, AgentMode, Option<(usize, usize)>) {
     match state.tasks.get(conversation_id).await {
         Some(task_state) => {
             let mode_enum = task_state.mode;
             let mode = task_state.mode.to_string();
-            let plan_ctx = task_state.plan.as_ref().map(|plan| {
-                let tasks: Vec<PlanTaskSnapshot> = plan
+            let counts = task_state.plan.as_ref().map(|plan| {
+                let tasks: Vec<_> = plan
                     .task_ids
                     .iter()
                     .filter_map(|id| task_state.tasks.get(id))
-                    .map(|t| PlanTaskSnapshot {
-                        id: t.id.clone(),
-                        title: t.title.clone(),
-                        description: t.description.clone(),
-                        status: t.status.to_string(),
-                        depends_on: t.depends_on.clone(),
-                    })
                     .collect();
-                let current_id = tasks
-                    .iter()
-                    .find(|t| t.status == "in_progress")
-                    .or_else(|| tasks.iter().find(|t| t.status == "pending"))
-                    .map(|t| t.id.clone());
-                PlanContext {
-                    plan_title: plan.title.clone(),
-                    plan_summary: plan.summary.clone(),
-                    tasks,
-                    current_task_id: current_id,
-                    mode: mode.clone(),
-                }
+                let completed = tasks.iter().filter(|t| t.status.to_string() == "completed").count();
+                (tasks.len(), completed)
             });
-            (mode, mode_enum, plan_ctx)
+            (mode, mode_enum, counts)
         }
         None => ("general".to_string(), AgentMode::General, None),
     }
@@ -449,7 +429,10 @@ async fn compact_context(
     tools: &[nexus_provider::types::Tool],
     context_window: u32,
     mode_enum: AgentMode,
-    state: &AppState,
+    provider: &dyn InferenceProvider,
+    provider_type: &ProviderType,
+    model_tiers: &ModelTierConfig,
+    threads: &crate::thread::ThreadService,
     conversation_id: &str,
     emitter: &TurnEmitter,
 ) {
@@ -476,12 +459,9 @@ async fn compact_context(
         return;
     }
 
-    let title_client = match state.title_client {
-        Some(ref c) => c,
-        None => return,
-    };
+    let compact_model = model_tiers.resolve(provider_type, ModelTier::Balanced);
 
-    let compact_conv = state.threads.get(conversation_id).await.ok().flatten();
+    let compact_conv = threads.get(conversation_id).await.ok().flatten();
 
     let mut compact_conv = match compact_conv {
         Some(c) => c,
@@ -489,13 +469,22 @@ async fn compact_context(
     };
 
     match crate::compaction::summarize_messages(
-        title_client,
+        provider,
+        &compact_model,
         &compact_conv.active_messages(),
         10,
     )
     .await
     {
-        Ok((summary_text, consumed_ids)) => {
+        Ok((summary_text, consumed_ids, input_tokens, output_tokens)) => {
+            // Track compaction cost
+            let cost = nexus_pricing::calculate_cost(&compact_model, input_tokens, output_tokens);
+            if cost > 0.0 {
+                if let Err(e) = threads.add_cost(conversation_id, cost).await {
+                    tracing::error!("Failed to save compaction cost: {}", e);
+                }
+            }
+
             if compact_conv.spans.is_empty() {
                 compact_conv.spans.push(Span {
                     index: 0,
@@ -521,7 +510,7 @@ async fn compact_context(
 
             let sealed_span_count = compact_conv.spans.len();
 
-            if let Err(e) = state.threads.commit(compact_conv).await {
+            if let Err(e) = threads.commit(compact_conv).await {
                 tracing::error!("Failed to save compacted conversation: {}", e);
             }
 
@@ -712,8 +701,6 @@ pub async fn drain_queue_and_follow_up(
     let api_messages = conv.build_api_messages();
     let last_active_id = conv.active_path.last().cloned();
     let prior_cost = conv.usage.as_ref().map(|u| u.total_cost).unwrap_or(0.0);
-    let title = conv.title.clone();
-    let message_count = conv.active_path.len();
 
     if let Err(e) = state.threads.commit(conv).await {
         tracing::error!("Failed to save queued messages: {}", e);
@@ -737,8 +724,6 @@ pub async fn drain_queue_and_follow_up(
             assistant_message_id: None,
             last_active_id,
             prior_cost,
-            title,
-            message_count,
         },
     );
 }
@@ -830,41 +815,4 @@ fn api_messages_to_chat(
         .collect()
 }
 
-/// Look up workspace context for a conversation's workspace_id.
-/// Returns (workspace_name, workspace_description, project (name, path) pairs).
-async fn resolve_workspace_context(
-    state: &Arc<AppState>,
-    conversation_id: &str,
-) -> (Option<String>, Option<String>, Vec<(String, String)>) {
-    // Get the conversation's workspace_id
-    let workspace_id = match state.threads.get(conversation_id).await {
-        Ok(Some(conv)) => conv.workspace_id,
-        _ => None,
-    };
-
-    let workspace_id = match workspace_id {
-        Some(id) => id,
-        None => return (None, None, Vec::new()),
-    };
-
-    let ws_store = state.workspaces.read().await;
-    let ws = match ws_store.get(&workspace_id) {
-        Some(ws) => ws.clone(),
-        None => return (None, None, Vec::new()),
-    };
-    drop(ws_store);
-
-    // Resolve project names + paths
-    let proj_store = state.projects.read().await;
-    let projects: Vec<(String, String)> = ws
-        .project_ids
-        .iter()
-        .filter_map(|pid| {
-            proj_store
-                .get(pid)
-                .map(|p| (p.name.clone(), p.path.clone()))
-        })
-        .collect();
-
-    (Some(ws.name), ws.description, projects)
-}
+// Workspace context resolution moved to ConversationContextModule (turn_start hook).

@@ -17,7 +17,7 @@ use super::tool_dispatch::{
 };
 use crate::module::{
     PreToolUseEvent, PreToolUseDecision, PostToolUseEvent, PostToolUseFailureEvent,
-    StopEvent, StopDecision, TurnStartEvent, PreCompactEvent, CompactionLayer,
+    StopEvent, StopDecision, PreCompactEvent, CompactionLayer,
 };
 use crate::provider::InferenceRequest;
 use super::{AgentTurnResult, InferenceConfig, TimingSpan, TurnContext, TurnServices};
@@ -120,12 +120,8 @@ pub async fn run_agent_turn(
                 tracing::info!(system_prompt_hash = hasher.finish(), "System prompt hash");
             }
 
-            // HOOK: TurnStart — notify modules the turn is beginning.
-            services.modules.fire_turn_start(&TurnStartEvent {
-                conversation_id,
-                run_id: emitter.run_id(),
-                depth,
-            }).await;
+            // Note: turn_start hook now fires in turn.rs during setup (before
+            // the agent loop), where modules can contribute prompt/status sections.
         }
 
         // Mid-turn context compaction: prune tool results before they overflow.
@@ -459,6 +455,7 @@ pub async fn run_agent_turn(
                     } else {
                         services.modules.fire_post_tool_use(&mut PostToolUseEvent {
                             tool_name: &tc.name,
+                            tool_call_id: &tc.id,
                             tool_input: &tool_input,
                             result: &mut result,
                             conversation_id,
@@ -468,19 +465,8 @@ pub async fn run_agent_turn(
                     for msg in &result.injected_messages {
                         injected_blocks.push(msg.text.clone());
                     }
-                    let mut content = result.content;
+                    let content = result.content;
                     let is_error = result.is_error;
-
-                    // Guard: if tool output exceeds ~10k tokens, save to temp file
-                    // to avoid blowing the context window.
-                    const TOOL_RESULT_MAX_CHARS: usize = 30_000;
-                    if content.len() > TOOL_RESULT_MAX_CHARS && !is_error {
-                        content = spill_tool_result_to_file(
-                            &tc.name,
-                            &tc.id,
-                            &content,
-                        );
-                    }
 
                     let tool_duration = tool_start.elapsed().as_millis() as u64;
 
@@ -799,63 +785,6 @@ async fn consume_stream(
         cache_creation_input_tokens,
         cache_read_input_tokens,
     })
-}
-
-/// Save a large tool result to a temp file and return a compact stub.
-///
-/// The stub tells the model the file path, size, and a truncated preview,
-/// so it can read the full output via bash if needed.
-fn spill_tool_result_to_file(tool_name: &str, tool_call_id: &str, content: &str) -> String {
-    let dir = std::path::PathBuf::from("/tmp/nexus-tool-output");
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        tracing::warn!("Failed to create tool output dir: {}", e);
-        // Fall back to truncation if we can't write the file
-        let preview: String = content.chars().take(2000).collect();
-        return format!(
-            "[Output too large: {} chars (~{} tokens), truncated]\n\n{}…",
-            content.len(),
-            content.len() / 3,
-            preview,
-        );
-    }
-
-    let filename = format!("{}_{}.txt", tool_name, &tool_call_id[..8.min(tool_call_id.len())]);
-    let path = dir.join(&filename);
-
-    match std::fs::write(&path, content) {
-        Ok(_) => {
-            let preview: String = content.chars().take(500).collect();
-            let suffix = if content.chars().count() > 500 { "…" } else { "" };
-            tracing::info!(
-                tool = tool_name,
-                chars = content.len(),
-                path = %path.display(),
-                "Tool result spilled to file"
-            );
-            format!(
-                "[Output saved to file: {} chars (~{} tokens)]\n\
-                 Path: {}\n\
-                 Use `bash cat {}` to read the full output if needed.\n\n\
-                 Preview:\n{}{}",
-                content.len(),
-                content.len() / 3,
-                path.display(),
-                path.display(),
-                preview,
-                suffix,
-            )
-        }
-        Err(e) => {
-            tracing::warn!("Failed to write tool output file: {}", e);
-            let preview: String = content.chars().take(2000).collect();
-            format!(
-                "[Output too large: {} chars (~{} tokens), truncated]\n\n{}…",
-                content.len(),
-                content.len() / 3,
-                preview,
-            )
-        }
-    }
 }
 
 /// Inject a `<state_update>` user message into the API messages.
