@@ -26,4 +26,6 @@ mod tests {
     mod workspaces;
     mod lsp;
     mod hooks;
+    mod processes;
+    mod settings;
 }
