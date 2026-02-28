@@ -4,6 +4,20 @@ use reqwest::StatusCode;
 use serde_json::json;
 
 #[tokio::test]
+async fn tool_metadata_empty_when_no_servers() {
+    let d = TestDaemon::spawn().await.unwrap();
+    let c = d.client();
+
+    let (status, body) = c.get("/api/mcp/tool-metadata").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.is_object(), "should return object: {body}");
+    assert!(
+        body.as_object().unwrap().is_empty(),
+        "should be empty with no MCP servers: {body}"
+    );
+}
+
+#[tokio::test]
 async fn list_initially_empty() {
     let d = TestDaemon::spawn().await.unwrap();
     let c = d.client();

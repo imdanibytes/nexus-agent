@@ -129,6 +129,10 @@ pub fn build_router(state: AppState, queue_rx: tokio::sync::mpsc::UnboundedRecei
         )
         // MCP Servers
         .route(
+            "/api/mcp/tool-metadata",
+            get(mcp_api::tool_ui_metadata),
+        )
+        .route(
             "/api/mcp-servers/test",
             post(mcp_api::test_inline),
         )

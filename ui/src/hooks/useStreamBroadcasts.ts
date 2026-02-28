@@ -7,12 +7,20 @@ import { useAgentStore } from "../stores/agentStore";
 import { useProviderStore } from "../stores/providerStore";
 import { useProjectStore } from "../stores/projectStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
+import { useUIStore } from "../stores/uiStore";
 import { eventBus } from "../runtime/event-bus";
 import { consumeStream } from "../lib/stream-consumer";
 import { snowflake } from "../lib/snowflake";
+import { mcpAppService } from "../lib/mcp-app-service";
 
 /** Register broadcast event handlers (title_update, usage_update). */
 export function useStreamBroadcasts(): void {
+  // Sync MCP app iframes when theme changes
+  const theme = useUIStore((s) => s.theme);
+  useEffect(() => {
+    mcpAppService.broadcastContextChange();
+  }, [theme]);
+
   useEffect(() => {
     const unsubTitle = eventBus.on("title_update", (event) => {
       const val = event.value as { title?: string };

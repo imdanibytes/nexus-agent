@@ -5,10 +5,19 @@ pub mod store;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use serde::Serialize;
 use nexus_provider::types::Tool as AnthropicTool;
 use crate::config::McpServerConfig;
 pub use handler::ClientHandlerState;
 use server::McpServer;
+
+/// Metadata for an MCP tool that has an associated UI resource.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolUiMeta {
+    pub server_id: String,
+    pub resource_uri: String,
+}
 
 /// Manages all MCP server connections, routes tool calls.
 pub struct McpManager {
@@ -246,6 +255,36 @@ impl McpManager {
             }
         }
         results
+    }
+
+    /// Returns metadata for tools that have UI resources (`_meta.ui.resourceUri`).
+    pub fn tool_ui_metadata(&self) -> HashMap<String, ToolUiMeta> {
+        let mut result = HashMap::new();
+
+        for (namespaced_name, (server_idx, original_name)) in &self.tool_routing {
+            let server = &self.servers[*server_idx];
+
+            if let Some(tool) = server.tools().iter().find(|t| t.name == *original_name) {
+                let resource_uri = tool
+                    .meta
+                    .as_ref()
+                    .and_then(|m| m.0.get("ui"))
+                    .and_then(|v| v.get("resourceUri"))
+                    .and_then(|v| v.as_str());
+
+                if let Some(uri) = resource_uri {
+                    result.insert(
+                        namespaced_name.clone(),
+                        ToolUiMeta {
+                            server_id: server.id.clone(),
+                            resource_uri: uri.to_string(),
+                        },
+                    );
+                }
+            }
+        }
+
+        result
     }
 
     /// Shut down all MCP servers.

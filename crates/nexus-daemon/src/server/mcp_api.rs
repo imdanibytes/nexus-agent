@@ -154,6 +154,15 @@ pub async fn test_inline(
     }
 }
 
+/// Returns UI metadata for MCP tools that have `_meta.ui.resourceUri`.
+pub async fn tool_ui_metadata(
+    State(state): State<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let mcp = state.mcp.mcp.read().await;
+    let meta = mcp.tool_ui_metadata();
+    Json(serde_json::to_value(&meta).unwrap())
+}
+
 pub async fn list_resources(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,

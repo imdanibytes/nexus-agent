@@ -511,6 +511,19 @@ export async function testMcpServerInline(
   return res.json();
 }
 
+// ── MCP Tool UI Metadata ──
+
+export interface McpToolUiMeta {
+  serverId: string;
+  resourceUri: string;
+}
+
+export async function fetchMcpToolMetadata(): Promise<Record<string, McpToolUiMeta>> {
+  const res = await fetch("/api/mcp/tool-metadata");
+  if (!res.ok) return {};
+  return res.json();
+}
+
 // ── LSP Servers ──
 
 export interface LspServerConfig {

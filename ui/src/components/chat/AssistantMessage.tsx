@@ -35,6 +35,8 @@ import { ToolFallback } from "../ui/ToolFallback";
 import { TooltipIconButton } from "../ui/TooltipIconButton";
 import { TimingWaterfall } from "../ui/TimingWaterfall";
 import { AskUserCard } from "./AskUserCard";
+import { McpAppToolResult } from "./McpAppToolResult";
+import { useMcpToolMetadata } from "../../hooks/useMcpToolMetadata";
 
 // ── Error Alert ──
 
@@ -282,6 +284,7 @@ const AssistantMessageImpl: FC<{
     () => regenId && onRegenerate(regenId),
     [regenId, onRegenerate],
   );
+  const mcpToolMeta = useMcpToolMetadata();
 
   const timingSpans = message.metadata?.timingSpans;
 
@@ -334,6 +337,19 @@ const AssistantMessageImpl: FC<{
                   key={tc.toolCallId}
                   toolCall={tc}
                   conversationId={activeConvId ?? ""}
+                />
+              );
+            }
+            // MCP app-enabled tools render an iframe instead of plain text
+            const appMeta = mcpToolMeta.get(tc.toolName);
+            if (appMeta && tc.result !== undefined) {
+              return (
+                <McpAppToolResult
+                  key={tc.toolCallId}
+                  serverId={appMeta.serverId}
+                  resourceUri={appMeta.resourceUri}
+                  conversationId={activeConvId ?? ""}
+                  toolCallData={tc.args}
                 />
               );
             }
